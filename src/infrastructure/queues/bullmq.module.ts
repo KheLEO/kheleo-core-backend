@@ -6,6 +6,7 @@ import {
   QUEUE_MATCHMAKING,
   QUEUE_SCOUT_ALERTS,
 } from '../../common/constants/queue.constants';
+import { QueueProducerService } from './queue-producer.service';
 
 @Global()
 @Module({
@@ -26,6 +27,7 @@ import {
       { name: QUEUE_SCOUT_ALERTS },
     ),
   ],
-  exports: [BullModule],
+  providers: [QueueProducerService],
+  exports: [BullModule, QueueProducerService],
 })
 export class BullmqModule {}

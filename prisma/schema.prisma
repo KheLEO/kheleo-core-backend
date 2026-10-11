@@ -79,8 +79,10 @@ enum MatchStatus {
 
 enum FreeAgentStatus {
   QUEUED
-  EVALUATING
+  MATCHING
   MATCHED
+  CANCELLED
+  EVALUATING
   EXPIRED
   WITHDRAWN
 }
@@ -116,15 +118,17 @@ model User {
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
   updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz
 
-  athleteProfile    AthleteProfile?
-  identityRecord    IdentityVerification?
-  scoutDossiers     ScoutDossier[]        @relation("ScoutAuthor")
-  organizedTours    Tournament[]          @relation("OrganizerTournaments")
-  officiatedMatches Match[]               @relation("UmpireMatches")
-  createdTeams      Team[]                @relation("TeamCaptain")
-  idempotencyKeys   IdempotencyRecord[]
-  refreshTokens     RefreshToken[]
-  registrations     Registration[]
+  athleteProfile         AthleteProfile?
+  identityRecord         IdentityVerification?
+  scoutDossiers          ScoutDossier[]          @relation("ScoutAuthor")
+  organizedTours         Tournament[]            @relation("OrganizerTournaments")
+  officiatedMatches      Match[]                 @relation("UmpireMatches")
+  createdTeams           Team[]                  @relation("TeamCaptain")
+  idempotencyKeys        IdempotencyRecord[]
+  refreshTokens          RefreshToken[]
+  registrations          Registration[]
+  freeAgentRegistrations FreeAgentRegistration[]
+  teamMembers            TeamMember[]
 
   @@index([role, isActive])
   @@map("users")
@@ -259,10 +263,11 @@ model Tournament {
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
   updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz
 
-  organizer      User            @relation("OrganizerTournaments", fields: [organizerId], references: [id])
-  brackets       Bracket[]
-  teams          Team[]
-  freeAgentQueue FreeAgentPool[]
+  organizer              User                    @relation("OrganizerTournaments", fields: [organizerId], references: [id])
+  brackets               Bracket[]
+  teams                  Team[]
+  freeAgentQueue         FreeAgentPool[]
+  freeAgentRegistrations FreeAgentRegistration[]
 
   @@index([sport, status])
   @@index([minGti, maxGti])
@@ -283,9 +288,11 @@ model Bracket {
   roundOrder   Int         @default(1) @map("round_order")
   config       Json        @default("{}") @db.JsonB
 
-  tournament    Tournament     @relation(fields: [tournamentId], references: [id], onDelete: Cascade)
-  matches       Match[]
-  registrations Registration[]
+  tournament             Tournament              @relation(fields: [tournamentId], references: [id], onDelete: Cascade)
+  matches                Match[]
+  registrations          Registration[]
+  teams                  Team[]
+  freeAgentRegistrations FreeAgentRegistration[]
 
   @@index([tournamentId, roundOrder])
   @@map("brackets")
@@ -312,40 +319,74 @@ model Registration {
 }
 
 model Team {
-  id               String   @id @default(uuid()) @db.Uuid
-  tournamentId     String   @map("tournament_id") @db.Uuid
-  name             String   @db.VarChar(100)
-  captainId        String?  @map("captain_id") @db.Uuid
-  isFreeAgentTeam  Boolean  @default(false) @map("is_free_agent_team")
-  compositeGti     Decimal  @default(0.00) @map("composite_gti") @db.Decimal(5, 2)
-  registrationDate DateTime @default(now()) @map("registration_date") @db.Timestamptz
+  id                String   @id @default(uuid()) @db.Uuid
+  tournamentId      String   @map("tournament_id") @db.Uuid
+  bracketId         String?  @map("bracket_id") @db.Uuid
+  name              String   @db.VarChar(100)
+  captainId         String?  @map("captain_id") @db.Uuid
+  isFreeAgentTeam   Boolean  @default(false) @map("is_free_agent_team")
+  isFreeAgentFormed Boolean  @default(false) @map("is_free_agent_formed")
+  compositeGti      Decimal  @default(0.00) @map("composite_gti") @db.Decimal(5, 2)
+  averageGti        Float    @default(0.00) @map("average_gti")
+  registrationDate  DateTime @default(now()) @map("registration_date") @db.Timestamptz
+  createdAt         DateTime @default(now()) @map("created_at") @db.Timestamptz
 
-  tournament       Tournament      @relation(fields: [tournamentId], references: [id], onDelete: Cascade)
-  captain          User?           @relation("TeamCaptain", fields: [captainId], references: [id], onDelete: SetNull)
-  members          TeamMember[]
-  matchesAsTeamA   Match[]         @relation("MatchTeamA")
-  matchesAsTeamB   Match[]         @relation("MatchTeamB")
-  wonMatches       Match[]         @relation("MatchWinner")
-  formedFromAgents FreeAgentPool[]
-  registrations    Registration[]
+  tournament             Tournament              @relation(fields: [tournamentId], references: [id], onDelete: Cascade)
+  bracket                Bracket?                @relation(fields: [bracketId], references: [id], onDelete: SetNull)
+  captain                User?                   @relation("TeamCaptain", fields: [captainId], references: [id], onDelete: SetNull)
+  members                TeamMember[]
+  matchesAsTeamA         Match[]                 @relation("MatchTeamA")
+  matchesAsTeamB         Match[]                 @relation("MatchTeamB")
+  wonMatches             Match[]                 @relation("MatchWinner")
+  formedFromAgents       FreeAgentPool[]
+  freeAgentRegistrations FreeAgentRegistration[]
+  registrations          Registration[]
 
   @@index([tournamentId, isFreeAgentTeam])
+  @@index([bracketId])
   @@map("teams")
 }
 
 model TeamMember {
-  id        String   @id @default(uuid()) @db.Uuid
-  teamId    String   @map("team_id") @db.Uuid
-  athleteId String   @map("athlete_id") @db.Uuid
-  role      String   @db.VarChar(50)
-  joinedAt  DateTime @default(now()) @map("joined_at") @db.Timestamptz
+  id           String   @id @default(uuid()) @db.Uuid
+  teamId       String   @map("team_id") @db.Uuid
+  athleteId    String?  @map("athlete_id") @db.Uuid
+  userId       String?  @map("user_id") @db.Uuid
+  role         String?  @db.VarChar(50)
+  assignedRole String   @default("MEMBER") @map("assigned_role") @db.VarChar(50)
+  isCaptain    Boolean  @default(false) @map("is_captain")
+  joinedAt     DateTime @default(now()) @map("joined_at") @db.Timestamptz
 
-  team    Team           @relation(fields: [teamId], references: [id], onDelete: Cascade)
-  athlete AthleteProfile @relation(fields: [athleteId], references: [id], onDelete: Cascade)
+  team    Team            @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  athlete AthleteProfile? @relation(fields: [athleteId], references: [id], onDelete: Cascade)
+  user    User?           @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  @@unique([teamId, athleteId])
   @@index([athleteId])
+  @@index([userId])
   @@map("team_members")
+}
+
+model FreeAgentRegistration {
+  id            String          @id @default(uuid()) @db.Uuid
+  userId        String          @map("user_id") @db.Uuid
+  tournamentId  String          @map("tournament_id") @db.Uuid
+  bracketId     String          @map("bracket_id") @db.Uuid
+  sport         String          @db.VarChar(50)
+  primaryRole   String          @map("primary_role") @db.VarChar(50)
+  secondaryRole String?         @map("secondary_role") @db.VarChar(50)
+  status        FreeAgentStatus @default(QUEUED)
+  matchedTeamId String?         @map("matched_team_id") @db.Uuid
+  joinedAt      DateTime        @default(now()) @map("joined_at") @db.Timestamptz
+
+  user        User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tournament  Tournament @relation(fields: [tournamentId], references: [id], onDelete: Cascade)
+  bracket     Bracket    @relation(fields: [bracketId], references: [id], onDelete: Cascade)
+  matchedTeam Team?      @relation(fields: [matchedTeamId], references: [id], onDelete: SetNull)
+
+  @@index([bracketId, status, primaryRole])
+  @@index([tournamentId, status])
+  @@index([userId, status])
+  @@map("free_agent_registrations")
 }
 
 model FreeAgentPool {

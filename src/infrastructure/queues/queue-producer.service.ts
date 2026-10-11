@@ -14,6 +14,7 @@ export interface GtiRecalculationPayload {
 
 export interface MatchmakingPayload {
   readonly tournamentId: string;
+  readonly bracketId?: string;
 }
 
 export interface ScoutAlertPayload {
@@ -54,6 +55,16 @@ export class QueueProducerService {
       backoff: { type: 'exponential', delay: 3000 },
       removeOnComplete: 50,
       removeOnFail: 200,
+    });
+    return job.id ?? '';
+  }
+
+  async enqueueBracketMatchmaking(payload: MatchmakingPayload): Promise<string> {
+    const job = await this.matchmakingQueue.add('process-bracket-pool', payload, {
+      attempts: 3,
+      backoff: { type: 'exponential', delay: 2000 },
+      removeOnComplete: 100,
+      removeOnFail: 500,
     });
     return job.id ?? '';
   }
