@@ -28,7 +28,7 @@ export class RedisIoAdapter extends IoAdapter {
         origin: '*',
         methods: ['GET', 'POST'],
       },
-    }) as ReturnType<typeof super.createIOServer> & {
+    }) as ReturnType<IoAdapter['createIOServer']> & {
       adapter: (adapter: unknown) => void;
     };
 

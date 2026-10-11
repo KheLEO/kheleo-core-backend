@@ -1,0 +1,41 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgis/postgis:16-3.4
+    container_name: kheleo-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: kheleo
+      POSTGRES_PASSWORD: kheleo_secret
+      POSTGRES_DB: kheleo_core
+    ports:
+      - '5432:5432'
+    volumes:
+      - kheleo_pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U kheleo -d kheleo_core']
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: kheleo-redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes
+    ports:
+      - '6379:6379'
+    volumes:
+      - kheleo_redis_data:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  kheleo_pg_data:
+    driver: local
+  kheleo_redis_data:
+    driver: local

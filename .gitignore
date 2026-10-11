@@ -1,0 +1,26 @@
+# Compiled output
+dist/
+build/
+
+# Node dependencies
+node_modules/
+.pnpm-debug.log*
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Keys & Certificates
+keys/
+
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# Prisma generated
+*.log

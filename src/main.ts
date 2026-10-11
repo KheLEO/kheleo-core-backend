@@ -20,7 +20,10 @@ async function bootstrap(): Promise<void> {
   );
 
   // ─── Compression ────────────────────────────────────
-  await app.register(compression, { encodings: ['gzip', 'br'] });
+  await app.register(
+    compression as unknown as Parameters<NestFastifyApplication['register']>[0],
+    { encodings: ['gzip', 'br'] },
+  );
 
   // ─── CORS ───────────────────────────────────────────
   app.enableCors({
