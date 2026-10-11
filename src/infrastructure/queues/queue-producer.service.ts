@@ -3,6 +3,7 @@ import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
 import {
   QUEUE_GTI_RECALCULATION,
+  QUEUE_GTI_CALCULATION,
   QUEUE_MATCHMAKING,
   QUEUE_SCOUT_ALERTS,
 } from '../../common/constants/queue.constants';
@@ -31,6 +32,8 @@ export class QueueProducerService {
   constructor(
     @InjectQueue(QUEUE_GTI_RECALCULATION)
     private readonly gtiQueue: Queue,
+    @InjectQueue(QUEUE_GTI_CALCULATION)
+    private readonly gtiCalcQueue: Queue,
     @InjectQueue(QUEUE_MATCHMAKING)
     private readonly matchmakingQueue: Queue,
     @InjectQueue(QUEUE_SCOUT_ALERTS)
@@ -46,7 +49,21 @@ export class QueueProducerService {
       removeOnComplete: 100,
       removeOnFail: 500,
     });
+    // Also push to gtiCalcQueue for any processor listening on gti-calculation
+    await this.gtiCalcQueue.add('recalculate', payload, {
+      attempts: 3,
+      backoff: { type: 'exponential', delay: 2000 },
+      removeOnComplete: 100,
+      removeOnFail: 500,
+    }).catch(() => null);
+
     return job.id ?? '';
+  }
+
+  async enqueueGtiCalculation(
+    payload: GtiRecalculationPayload,
+  ): Promise<string> {
+    return this.enqueueGtiRecalculation(payload);
   }
 
   async enqueueMatchmaking(payload: MatchmakingPayload): Promise<string> {

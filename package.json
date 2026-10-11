@@ -15,7 +15,7 @@
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
     "prisma:deploy": "prisma migrate deploy",
-    "test": "ts-node test/phase2-auth-passport.spec.ts && ts-node test/phase3-tournaments-sandbagging.spec.ts && ts-node test/phase4-matchmaking-pool.spec.ts"
+    "test": "ts-node test/phase2-auth-passport.spec.ts && ts-node test/phase3-tournaments-sandbagging.spec.ts && ts-node test/phase4-matchmaking-pool.spec.ts && ts-node test/phase5-drills-iot-gti.spec.ts"
   },
   "dependencies": {
     "@fastify/compress": "^8.0.1",

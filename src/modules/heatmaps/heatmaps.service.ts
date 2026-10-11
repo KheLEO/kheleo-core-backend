@@ -1,0 +1,165 @@
+import { Injectable, Logger } from '@nestjs/common';
+import { PrismaService } from '../../infrastructure/database/prisma.service';
+
+export interface DistrictHeatmapRecord {
+  readonly district: string;
+  readonly total_athletes: number;
+  readonly average_gti: number;
+  readonly female_participation_pct: number;
+  readonly centroid: Record<string, unknown> | null;
+}
+
+export interface RegionalHeatmapResponse {
+  readonly success: boolean;
+  readonly count: number;
+  readonly data: DistrictHeatmapRecord[];
+}
+
+@Injectable()
+export class HeatmapsService {
+  private readonly logger = new Logger(HeatmapsService.name);
+
+  constructor(private readonly prisma: PrismaService) {}
+
+  async getRegionalHeatmap(): Promise<RegionalHeatmapResponse> {
+    try {
+      // 1. Attempt High-Performance PostGIS Spatial Aggregation
+      const rawResults = await this.prisma.$queryRaw<
+        Array<{
+          district: string;
+          total_athletes: number | bigint;
+          average_gti: number | string | null;
+          female_participation_pct: number | string | null;
+          centroid: string | null;
+        }>
+      >`
+        SELECT 
+          district,
+          COUNT(id)::int AS total_athletes,
+          ROUND(AVG(COALESCE(gti, current_gti, 0))::numeric, 2)::float AS average_gti,
+          ROUND((COUNT(CASE WHEN UPPER(gender) = 'FEMALE' THEN 1 END)::numeric / NULLIF(COUNT(id), 0)::numeric) * 100, 2)::float AS female_participation_pct,
+          CASE 
+            WHEN COUNT(location_geom) > 0 THEN ST_AsGeoJSON(ST_Centroid(ST_Collect(location_geom)))
+            WHEN COUNT(location_lat) > 0 THEN ST_AsGeoJSON(ST_MakePoint(AVG(location_lng), AVG(location_lat)))
+            ELSE NULL
+          END AS centroid
+        FROM athlete_profiles
+        WHERE district IS NOT NULL AND district <> ''
+        GROUP BY district
+        ORDER BY total_athletes DESC;
+      `;
+
+      const formatted: DistrictHeatmapRecord[] = rawResults.map((r) => {
+        let parsedCentroid: Record<string, unknown> | null = null;
+        if (r.centroid) {
+          try {
+            parsedCentroid = JSON.parse(r.centroid) as Record<string, unknown>;
+          } catch {
+            parsedCentroid = null;
+          }
+        }
+
+        return {
+          district: r.district,
+          total_athletes: Number(r.total_athletes),
+          average_gti: Number(r.average_gti ?? 0),
+          female_participation_pct: Number(r.female_participation_pct ?? 0),
+          centroid: parsedCentroid,
+        };
+      });
+
+      return {
+        success: true,
+        count: formatted.length,
+        data: formatted,
+      };
+    } catch (sqlError) {
+      this.logger.warn(
+        `PostGIS query failed or spatial columns not populated, falling back to Prisma aggregation: ${String(sqlError)}`,
+      );
+
+      // 2. Defensive Fallback using standard Prisma queries
+      const profiles = await this.prisma.athleteProfile.findMany({
+        where: { district: { not: '' } },
+        select: {
+          district: true,
+          gender: true,
+          gti: true,
+          currentGti: true,
+          locationLat: true,
+          locationLng: true,
+        },
+      });
+
+      const districtMap = new Map<
+        string,
+        {
+          total: number;
+          femaleCount: number;
+          gtiSum: number;
+          lats: number[];
+          lngs: number[];
+        }
+      >();
+
+      for (const p of profiles) {
+        const d = p.district || 'UNKNOWN';
+        if (!districtMap.has(d)) {
+          districtMap.set(d, {
+            total: 0,
+            femaleCount: 0,
+            gtiSum: 0,
+            lats: [],
+            lngs: [],
+          });
+        }
+
+        const entry = districtMap.get(d)!;
+        entry.total += 1;
+        if (p.gender?.toUpperCase() === 'FEMALE') {
+          entry.femaleCount += 1;
+        }
+        const gtiVal = p.gti > 0 ? p.gti : Number(p.currentGti) || 0;
+        entry.gtiSum += gtiVal;
+        if (p.locationLat != null && p.locationLng != null) {
+          entry.lats.push(p.locationLat);
+          entry.lngs.push(p.locationLng);
+        }
+      }
+
+      const formatted: DistrictHeatmapRecord[] = Array.from(
+        districtMap.entries(),
+      ).map(([district, stats]) => {
+        const avgGti = stats.total > 0 ? Number((stats.gtiSum / stats.total).toFixed(2)) : 0;
+        const femalePct =
+          stats.total > 0
+            ? Number(((stats.femaleCount / stats.total) * 100).toFixed(2))
+            : 0;
+
+        let centroid: Record<string, unknown> | null = null;
+        if (stats.lats.length > 0 && stats.lngs.length > 0) {
+          const avgLat = stats.lats.reduce((a, b) => a + b, 0) / stats.lats.length;
+          const avgLng = stats.lngs.reduce((a, b) => a + b, 0) / stats.lngs.length;
+          centroid = {
+            type: 'Point',
+            coordinates: [Number(avgLng.toFixed(6)), Number(avgLat.toFixed(6))],
+          };
+        }
+
+        return {
+          district,
+          total_athletes: stats.total,
+          average_gti: avgGti,
+          female_participation_pct: femalePct,
+          centroid,
+        };
+      });
+
+      return {
+        success: true,
+        count: formatted.length,
+        data: formatted,
+      };
+    }
+  }
+}

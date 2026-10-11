@@ -20,6 +20,21 @@ export interface MatchPauseAlertPayload {
   readonly timestamp: string;
 }
 
+export interface AutonomousMatchPausePayload {
+  readonly event: 'MATCH_PAUSE_ALERT';
+  readonly severity: 'CRITICAL';
+  readonly athlete_id: string;
+  readonly athlete_name: string;
+  readonly vitals: {
+    readonly heart_rate: number;
+    readonly spo2: number;
+    readonly skin_temperature: number;
+  };
+  readonly directive: string;
+  readonly tournament_id?: string;
+  readonly bracket_id?: string;
+}
+
 export interface FreeAgentMatchedPayload {
   readonly athleteId: string;
   readonly tournamentId: string;
@@ -79,9 +94,56 @@ export class WsEventGateway
     this.logger.debug(`${client.id} joined room ${room}`);
   }
 
+  @SubscribeMessage('join:tournament')
+  handleJoinTournament(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() data: { tournamentId: string },
+  ): void {
+    const room = `tournament:${data.tournamentId}`;
+    void client.join(room);
+    this.logger.debug(`${client.id} joined room ${room}`);
+  }
+
   // ─── Server-side Broadcast Methods ──────────────────
 
+  broadcastAutonomousMatchPause(payload: AutonomousMatchPausePayload): void {
+    if (!this.server) {
+      this.logger.warn('Socket server not ready during broadcastAutonomousMatchPause');
+      return;
+    }
+
+    if (payload.tournament_id) {
+      this.server
+        .to(`tournament:${payload.tournament_id}`)
+        .emit('MATCH_PAUSE_ALERT', payload);
+      this.server
+        .to(`organizer:${payload.tournament_id}`)
+        .emit('MATCH_PAUSE_ALERT', payload);
+      this.server
+        .to(`umpire:${payload.tournament_id}`)
+        .emit('MATCH_PAUSE_ALERT', payload);
+    }
+
+    if (payload.bracket_id) {
+      this.server
+        .to(`bracket:${payload.bracket_id}`)
+        .emit('MATCH_PAUSE_ALERT', payload);
+    }
+
+    // Broadcast across umpire and organizer rooms
+    this.server.to('umpires').emit('MATCH_PAUSE_ALERT', payload);
+    this.server.to('organizers').emit('MATCH_PAUSE_ALERT', payload);
+
+    // Also global broadcast
+    this.server.emit('MATCH_PAUSE_ALERT', payload);
+
+    this.logger.warn(
+      `CRITICAL MATCH_PAUSE_ALERT autonomously broadcast for athlete ${payload.athlete_id}`,
+    );
+  }
+
   broadcastMatchPause(payload: MatchPauseAlertPayload): void {
+    if (!this.server) return;
     this.server
       .to(`match:${payload.matchId}`)
       .emit('MATCH_PAUSE_ALERT', payload);
@@ -89,12 +151,14 @@ export class WsEventGateway
   }
 
   broadcastFreeAgentMatched(payload: FreeAgentMatchedPayload): void {
+    if (!this.server) return;
     this.server
       .to(`athlete:${payload.athleteId}`)
       .emit('FREE_AGENT_MATCHED', payload);
   }
 
   broadcastGtiUpdated(payload: GtiUpdatedPayload): void {
+    if (!this.server) return;
     this.server
       .to(`athlete:${payload.athleteId}`)
       .emit('GTI_UPDATED', payload);
