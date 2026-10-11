@@ -1,4 +1,4 @@
-import { IsOptional, IsString, IsNumber, Min } from 'class-validator';
+import { IsOptional, IsString, IsNumber, Min, Max, IsUUID, IsInt } from 'class-validator';
 import { Type } from 'class-transformer';
 
 export class ScoutFeedQueryDto {
@@ -17,14 +17,13 @@ export class ScoutFeedQueryDto {
   min_gti?: number;
 
   @IsOptional()
-  @Type(() => Number)
-  @IsNumber()
-  @Min(1)
-  page?: number;
+  @IsUUID()
+  cursor_id?: string;
 
   @IsOptional()
   @Type(() => Number)
-  @IsNumber()
+  @IsInt()
   @Min(1)
+  @Max(100)
   limit?: number;
 }

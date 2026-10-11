@@ -9,12 +9,10 @@ import { PrismaService } from '../../infrastructure/database/prisma.service';
 import { RegisterBracketDto } from './dto/register-bracket.dto';
 import { CreateBracketDto } from './dto/create-bracket.dto';
 import { BracketRegistrationResponseDto } from './dto/bracket-registration-response.dto';
-import {
-  Bracket,
-  Registration,
-  RegistrationStatus,
-  TournamentStatus,
-} from '@prisma/client';
+import { Bracket, Registration, RegistrationStatus, TournamentStatus } from '@prisma/client';
+import { runSerializableTransaction } from '../../common/database/serializable-transaction';
+import { CursorPaginationQueryDto } from '../../common/dto/cursor-pagination-query.dto';
+import { PaginatedResponseDto } from '../../common/dto/paginated-response.dto';
 
 @Injectable()
 export class BracketsService {
@@ -52,9 +50,16 @@ export class BracketsService {
     // 2. Retrieve bracket and verify tournament affiliation
     const bracket = await this.prisma.bracket.findUnique({
       where: { id: bracketId },
-      include: {
+      select: {
+        id: true,
+        tournamentId: true,
+        tierName: true,
+        minGti: true,
+        maxGti: true,
+        maxTeams: true,
+        entryFee: true,
         tournament: {
-          select: { id: true, status: true, title: true, name: true },
+          select: { status: true },
         },
       },
     });
@@ -66,9 +71,7 @@ export class BracketsService {
     }
 
     if (bracket.tournament.status !== TournamentStatus.REGISTRATION_OPEN) {
-      throw new BadRequestException(
-        'Tournament is not currently open for registration.',
-      );
+      throw new BadRequestException('Tournament is not currently open for registration.');
     }
 
     const maxGti = Number(bracket.maxGti);
@@ -88,6 +91,8 @@ export class BracketsService {
           maxGti: { gte: athleteProfile.currentGti },
         },
         orderBy: { minGti: 'asc' },
+        take: 1,
+        select: { id: true, tierName: true },
       });
 
       const suggestedBracket = higherBrackets[0] ?? null;
@@ -116,7 +121,7 @@ export class BracketsService {
     }
 
     // 4. Strict atomic transaction for registration insert & capacity verification
-    return this.prisma.$transaction(async (tx) => {
+    return runSerializableTransaction(this.prisma, async (tx) => {
       // Check if athlete is already registered in this bracket
       const existing = await tx.registration.findUnique({
         where: {
@@ -174,20 +179,24 @@ export class BracketsService {
   /**
    * Retrieves all brackets for a tournament.
    */
-  async findByTournament(tournamentId: string): Promise<Bracket[]> {
-    return this.prisma.bracket.findMany({
+  async findByTournament(
+    tournamentId: string,
+    query: CursorPaginationQueryDto,
+  ): Promise<PaginatedResponseDto<Bracket>> {
+    const limit = query.limit;
+    const brackets = await this.prisma.bracket.findMany({
       where: { tournamentId },
-      orderBy: { minGti: 'asc' },
+      orderBy: { id: 'asc' },
+      take: limit + 1,
+      ...(query.cursor_id ? { cursor: { id: query.cursor_id }, skip: 1 } : {}),
     });
+    return PaginatedResponseDto.create(brackets, limit, (bracket) => bracket.id);
   }
 
   /**
    * Creates a new bracket in a tournament.
    */
-  async createBracket(
-    tournamentId: string,
-    dto: CreateBracketDto,
-  ): Promise<Bracket> {
+  async createBracket(tournamentId: string, dto: CreateBracketDto): Promise<Bracket> {
     const tournament = await this.prisma.tournament.findUnique({
       where: { id: tournamentId },
     });

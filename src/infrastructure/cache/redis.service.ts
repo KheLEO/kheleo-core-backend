@@ -1,9 +1,9 @@
-import { Injectable, Logger, OnModuleDestroy } from '@nestjs/common';
+import { Injectable, Logger, OnApplicationShutdown } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import Redis from 'ioredis';
 
 @Injectable()
-export class RedisService implements OnModuleDestroy {
+export class RedisService implements OnApplicationShutdown {
   private readonly logger = new Logger(RedisService.name);
   public readonly client: Redis;
 
@@ -32,11 +32,7 @@ export class RedisService implements OnModuleDestroy {
     }
   }
 
-  async setnx(
-    key: string,
-    value: string,
-    ttlSeconds: number,
-  ): Promise<boolean> {
+  async setnx(key: string, value: string, ttlSeconds: number): Promise<boolean> {
     const result = await this.client.set(key, value, 'EX', ttlSeconds, 'NX');
     return result === 'OK';
   }
@@ -57,8 +53,17 @@ export class RedisService implements OnModuleDestroy {
     return this.client.ttl(key);
   }
 
-  onModuleDestroy(): void {
-    this.client.disconnect();
+  async onApplicationShutdown(): Promise<void> {
+    if (this.client.status === 'end') {
+      return;
+    }
+
+    try {
+      await this.client.quit();
+    } catch (error: unknown) {
+      this.logger.warn(`Redis graceful shutdown failed: ${String(error)}`);
+      this.client.disconnect();
+    }
     this.logger.log('Redis disconnected');
   }
 }

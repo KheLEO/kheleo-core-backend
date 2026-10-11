@@ -1,11 +1,4 @@
-import {
-  IsString,
-  IsNumber,
-  IsInt,
-  IsOptional,
-  Min,
-  Max,
-} from 'class-validator';
+import { IsString, IsNumber, IsInt, IsOptional, Min, Max } from 'class-validator';
 
 export class SubmitDrillDto {
   @IsOptional()

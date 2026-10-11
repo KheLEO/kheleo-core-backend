@@ -28,7 +28,10 @@ export class TournamentLocationDto {
   @ApiProperty({ example: 82.9739 })
   readonly venueLng!: number;
 
-  @ApiProperty({ example: 12.4, description: 'Distance in kilometers from searching GPS coordinates' })
+  @ApiProperty({
+    example: 12.4,
+    description: 'Distance in kilometers from searching GPS coordinates',
+  })
   readonly distanceKm!: number;
 
   @ApiProperty({ example: '2026-11-01T09:00:00.000Z' })

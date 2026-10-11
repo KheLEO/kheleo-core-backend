@@ -1,12 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import {
-  IsArray,
-  IsEnum,
-  IsNotEmpty,
-  IsObject,
-  IsOptional,
-  IsString,
-} from 'class-validator';
+import { IsArray, IsEnum, IsNotEmpty, IsObject, IsOptional, IsString } from 'class-validator';
 import { SportType } from '@prisma/client';
 
 export class AddSportRecordDto {
@@ -35,9 +28,7 @@ export class AddSportRecordDto {
   readonly verifiedMetrics?: Record<string, unknown>;
 
   @ApiPropertyOptional({
-    example: [
-      { id: 'centurion', title: 'Centurion', dateEarned: '2026-09-01' },
-    ],
+    example: [{ id: 'centurion', title: 'Centurion', dateEarned: '2026-09-01' }],
   })
   @IsOptional()
   @IsArray()

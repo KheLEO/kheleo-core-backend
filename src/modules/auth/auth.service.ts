@@ -2,8 +2,8 @@ import {
   Injectable,
   ConflictException,
   UnauthorizedException,
-  NotFoundException,
   Logger,
+  ForbiddenException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../../infrastructure/database/prisma.service';
@@ -16,6 +16,7 @@ import { UserRole, VerificationStatus } from '@prisma/client';
 import * as jwt from 'jsonwebtoken';
 import * as crypto from 'node:crypto';
 import * as fs from 'node:fs';
+import { runSerializableTransaction } from '../../common/database/serializable-transaction';
 
 @Injectable()
 export class AuthService {
@@ -34,10 +35,19 @@ export class AuthService {
       'auth.jwtPrivateKeyPath',
       './keys/private.pem',
     );
+    const publicKeyPath = this.configService.get<string>(
+      'auth.jwtPublicKeyPath',
+      './keys/public.pem',
+    );
 
     let key = '';
+    const privateKeyExists = fs.existsSync(privateKeyPath);
+    const publicKeyExists = fs.existsSync(publicKeyPath);
+    if (privateKeyExists !== publicKeyExists) {
+      throw new Error('Both JWT_PRIVATE_KEY_PATH and JWT_PUBLIC_KEY_PATH must exist.');
+    }
     try {
-      if (fs.existsSync(privateKeyPath)) {
+      if (privateKeyExists) {
         key = fs.readFileSync(privateKeyPath, 'utf-8');
       }
     } catch {
@@ -48,9 +58,13 @@ export class AuthService {
       this.privateKey = key;
       this.algorithm = 'RS256';
     } else {
-      this.privateKey =
-        this.configService.get<string>('auth.identityPepper') ||
-        'kheleo_prod_identity_pepper_secure_seed_2026';
+      const symmetricSecret = this.configService.get<string>('auth.identityPepper');
+      const isProduction =
+        this.configService.get<string>('app.nodeEnv', 'development') === 'production';
+      if (!symmetricSecret && isProduction) {
+        throw new Error('JWT key pair or IDENTITY_PEPPER must be configured in production.');
+      }
+      this.privateKey = symmetricSecret ?? 'local-development-jwt-secret';
       this.algorithm = 'HS256';
     }
   }
@@ -64,30 +78,10 @@ export class AuthService {
       throw new ConflictException('Either phone number or email address is required.');
     }
 
-    // Check if phone or email is already registered
-    if (dto.phone) {
-      const existingPhone = await this.prisma.user.findUnique({
-        where: { phone: dto.phone },
-      });
-      if (existingPhone) {
-        throw new ConflictException(
-          'A user account with this phone number already exists.',
-        );
-      }
+    if (dto.role && dto.role !== UserRole.ATHLETE) {
+      throw new ForbiddenException('Public registration can only create ATHLETE accounts.');
     }
 
-    if (dto.email) {
-      const existingEmail = await this.prisma.user.findUnique({
-        where: { email: dto.email },
-      });
-      if (existingEmail) {
-        throw new ConflictException(
-          'A user account with this email address already exists.',
-        );
-      }
-    }
-
-    // If Gov ID is supplied, check hash BEFORE creating the account (Anti-Account Reset)
     let precomputedIdHash: string | null = null;
     if (dto.governmentId) {
       precomputedIdHash = this.identityService.hashGovernmentId(
@@ -97,12 +91,71 @@ export class AuthService {
 
       const existingRecord = await this.identityService.findByIdHash(precomputedIdHash);
       if (existingRecord) {
+        const existingUser = existingRecord.user;
+        const contactMatches =
+          (dto.phone !== undefined && dto.phone === existingUser.phone) ||
+          (dto.email !== undefined && dto.email === existingUser.email);
+
+        if (contactMatches) {
+          const restoredUser = await runSerializableTransaction(
+            this.prisma,
+            async (transaction) => {
+              const user = await transaction.user.update({
+                where: { id: existingUser.id },
+                data: {
+                  isActive: true,
+                  phone: dto.phone ?? existingUser.phone,
+                  email: dto.email ?? existingUser.email,
+                },
+                include: { athleteProfile: { select: { id: true } } },
+              });
+              await transaction.identityVerification.update({
+                where: { id: existingRecord.id },
+                data: { reLinkedCount: { increment: 1 } },
+              });
+              return user;
+            },
+          );
+
+          this.logger.log(
+            `Permanent athlete profile ${restoredUser.id} re-attached after Government ID verification.`,
+          );
+          return this.generateAuthResponse(
+            restoredUser.id,
+            restoredUser.role,
+            restoredUser.phone,
+            restoredUser.email,
+            existingRecord.status === VerificationStatus.VERIFIED,
+            restoredUser.athleteProfile?.id ?? null,
+          );
+        }
+
         this.logger.warn(
           `Anti-Reset Loophole Blocked on Registration: Gov ID hash match for existing user ${existingRecord.userId}`,
         );
         throw new ConflictException(
           `A verified Kheleo sports profile is already linked to this Government ID (Hash: ${precomputedIdHash.substring(0, 8)}...). Duplicate account creation is strictly forbidden to preserve GTI integrity. Please log in using your existing historical profile.`,
         );
+      }
+    }
+
+    if (dto.phone) {
+      const existingPhone = await this.prisma.user.findUnique({
+        where: { phone: dto.phone },
+        select: { id: true },
+      });
+      if (existingPhone) {
+        throw new ConflictException('A user account with this phone number already exists.');
+      }
+    }
+
+    if (dto.email) {
+      const existingEmail = await this.prisma.user.findUnique({
+        where: { email: dto.email },
+        select: { id: true },
+      });
+      if (existingEmail) {
+        throw new ConflictException('A user account with this email address already exists.');
       }
     }
 
@@ -186,7 +239,7 @@ export class AuthService {
       },
       include: {
         athleteProfile: { select: { id: true } },
-        identityRecord: { select: { id: true, status: true } },
+        identityRecord: { select: { idHash: true, status: true } },
       },
     });
 
@@ -198,6 +251,22 @@ export class AuthService {
 
     if (!user.isActive) {
       throw new UnauthorizedException('This account has been deactivated.');
+    }
+
+    if (!user.identityRecord) {
+      throw new UnauthorizedException('Government ID verification is required before login.');
+    }
+
+    const suppliedIdHash = this.identityService.hashGovernmentId(
+      dto.governmentId.idNumber,
+      dto.governmentId.idType,
+    );
+    const identityMatches = crypto.timingSafeEqual(
+      Buffer.from(suppliedIdHash, 'hex'),
+      Buffer.from(user.identityRecord.idHash, 'hex'),
+    );
+    if (!identityMatches) {
+      throw new UnauthorizedException('Invalid login credentials.');
     }
 
     const isVerified = user.identityRecord?.status === VerificationStatus.VERIFIED;
@@ -237,10 +306,7 @@ export class AuthService {
    * Rotates and refreshes lightweight JWT tokens.
    */
   async refreshTokens(refreshTokenStr: string): Promise<AuthResponseDto> {
-    const tokenHash = crypto
-      .createHash('sha256')
-      .update(refreshTokenStr)
-      .digest('hex');
+    const tokenHash = crypto.createHash('sha256').update(refreshTokenStr).digest('hex');
 
     const storedToken = await this.prisma.refreshToken.findUnique({
       where: { tokenHash },
@@ -267,11 +333,17 @@ export class AuthService {
       throw new UnauthorizedException('Refresh token expired or compromised.');
     }
 
-    // Revoke current token
-    await this.prisma.refreshToken.update({
-      where: { id: storedToken.id },
+    const revokeResult = await this.prisma.refreshToken.updateMany({
+      where: { id: storedToken.id, revoked: false },
       data: { revoked: true },
     });
+    if (revokeResult.count !== 1) {
+      await this.prisma.refreshToken.updateMany({
+        where: { family: storedToken.family },
+        data: { revoked: true },
+      });
+      throw new UnauthorizedException('Refresh token replay detected.');
+    }
 
     const user = storedToken.user;
     const isVerified = user.identityRecord?.status === VerificationStatus.VERIFIED;
@@ -314,10 +386,7 @@ export class AuthService {
 
     // Generate random refresh token
     const rawRefreshToken = crypto.randomBytes(32).toString('hex');
-    const tokenHash = crypto
-      .createHash('sha256')
-      .update(rawRefreshToken)
-      .digest('hex');
+    const tokenHash = crypto.createHash('sha256').update(rawRefreshToken).digest('hex');
 
     const family = existingFamily ?? crypto.randomBytes(16).toString('hex');
     const expiresAt = new Date();

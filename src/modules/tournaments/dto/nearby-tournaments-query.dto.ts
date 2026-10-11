@@ -6,7 +6,7 @@ import {
   IsLongitude,
   IsNotEmpty,
   IsOptional,
-  IsString,
+  IsUUID,
   Max,
   Min,
 } from 'class-validator';
@@ -14,13 +14,19 @@ import { Type } from 'class-transformer';
 import { SportType } from '@prisma/client';
 
 export class NearbyTournamentsQueryDto {
-  @ApiProperty({ description: 'Latitude coordinate of searching location', example: 25.3176 })
+  @ApiProperty({
+    description: 'Latitude coordinate of searching location',
+    example: 25.3176,
+  })
   @IsNotEmpty()
   @IsLatitude()
   @Type(() => Number)
   readonly lat!: number;
 
-  @ApiProperty({ description: 'Longitude coordinate of searching location', example: 82.9739 })
+  @ApiProperty({
+    description: 'Longitude coordinate of searching location',
+    example: 82.9739,
+  })
   @IsNotEmpty()
   @IsLongitude()
   @Type(() => Number)
@@ -51,7 +57,7 @@ export class NearbyTournamentsQueryDto {
     description: 'Cursor ID for next page of tournaments',
   })
   @IsOptional()
-  @IsString()
+  @IsUUID()
   readonly cursor?: string;
 
   @ApiPropertyOptional({

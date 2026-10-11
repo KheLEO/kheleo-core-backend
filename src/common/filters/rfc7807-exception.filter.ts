@@ -76,9 +76,6 @@ export class Rfc7807ExceptionFilter implements ExceptionFilter {
       ...extraDetails,
     };
 
-    void response
-      .status(status)
-      .header('Content-Type', 'application/problem+json')
-      .send(problem);
+    void response.status(status).header('Content-Type', 'application/problem+json').send(problem);
   }
 }

@@ -454,7 +454,7 @@ model DrillSubmission {
   framesAnalyzed     Int      @map("frames_analyzed")
   flawFlags          Json     @map("flaw_flags") @db.JsonB
   jointAnglesSummary Json     @map("joint_angles_summary") @db.JsonB
-  signatureHash      String   @map("signature_hash") @db.VarChar(256)
+  signatureHash      String   @unique @map("signature_hash") @db.VarChar(64)
   createdAt          DateTime @default(now()) @map("created_at") @db.Timestamptz
 
   athlete User @relation(fields: [athleteId], references: [id], onDelete: Cascade)

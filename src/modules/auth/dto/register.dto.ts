@@ -55,7 +55,10 @@ export class InitialAthleteProfileDto {
   @IsNotEmpty()
   readonly state!: string;
 
-  @ApiPropertyOptional({ enum: TierClassification, default: TierClassification.RURAL })
+  @ApiPropertyOptional({
+    enum: TierClassification,
+    default: TierClassification.RURAL,
+  })
   @IsOptional()
   @IsEnum(TierClassification)
   readonly tierClassification?: TierClassification;

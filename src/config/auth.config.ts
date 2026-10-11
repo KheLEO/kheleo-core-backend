@@ -7,8 +7,6 @@ export const authConfig = registerAs('auth', () => ({
   jwtRefreshExpiry: process.env.JWT_REFRESH_EXPIRY ?? '7d',
   identityPepper: process.env.IDENTITY_PEPPER ?? '',
   identitySaltVersion: parseInt(process.env.IDENTITY_SALT_VERSION ?? '1', 10),
-  otpExpirySeconds: parseInt(process.env.OTP_EXPIRY_SECONDS ?? '300', 10),
-  otpLength: parseInt(process.env.OTP_LENGTH ?? '6', 10),
   drillHmacSecret: process.env.DRILL_HMAC_SECRET ?? '',
   telemetryHmacSecret: process.env.TELEMETRY_SERVICE_HMAC_SECRET ?? '',
 }));

@@ -6,21 +6,18 @@ import {
   Param,
   Body,
   UseGuards,
+  UseInterceptors,
   ParseUUIDPipe,
   HttpCode,
   HttpStatus,
 } from '@nestjs/common';
-import {
-  ApiTags,
-  ApiOperation,
-  ApiResponse,
-  ApiBearerAuth,
-} from '@nestjs/swagger';
+import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagger';
 import { MatchmakingService } from './matchmaking.service';
 import { JoinFreeAgentDto } from './dto/join-free-agent.dto';
 import { FreeAgentStatusResponseDto } from './dto/free-agent-status-response.dto';
 import { JwtAuthGuard, AuthenticatedJwtUser } from '../../common/guards/jwt-auth.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
+import { IdempotencyInterceptor } from '../../common/interceptors/idempotency.interceptor';
 
 @ApiTags('Dynamic Free Agent Matchmaking Pool')
 @Controller('tournaments/:tournamentId/brackets/:bracketId/free-agents')
@@ -31,6 +28,7 @@ export class MatchmakingController {
 
   @Post('join')
   @HttpCode(HttpStatus.CREATED)
+  @UseInterceptors(IdempotencyInterceptor)
   @ApiOperation({
     summary: 'Join dynamic free agent matchmaking pool',
     description:
@@ -43,7 +41,8 @@ export class MatchmakingController {
   })
   @ApiResponse({
     status: HttpStatus.CONFLICT,
-    description: 'SANDBAGGING_DETECTED: Athlete skill ceiling exceeded, or already queued in tournament',
+    description:
+      'SANDBAGGING_DETECTED: Athlete skill ceiling exceeded, or already queued in tournament',
   })
   async joinPool(
     @Param('tournamentId', ParseUUIDPipe) tournamentId: string,
@@ -51,20 +50,15 @@ export class MatchmakingController {
     @CurrentUser() user: AuthenticatedJwtUser,
     @Body() dto: JoinFreeAgentDto,
   ): Promise<FreeAgentStatusResponseDto> {
-    return this.matchmakingService.joinPool(
-      tournamentId,
-      bracketId,
-      user.sub,
-      dto,
-    );
+    return this.matchmakingService.joinPool(tournamentId, bracketId, user.sub, dto);
   }
 
   @Delete('leave')
   @HttpCode(HttpStatus.OK)
+  @UseInterceptors(IdempotencyInterceptor)
   @ApiOperation({
     summary: 'Exit free agent queue before matching',
-    description:
-      'Allows an athlete to cancel and exit the queue if their status is still QUEUED.',
+    description: 'Allows an athlete to cancel and exit the queue if their status is still QUEUED.',
   })
   @ApiResponse({
     status: HttpStatus.OK,
@@ -94,10 +88,6 @@ export class MatchmakingController {
     @Param('bracketId', ParseUUIDPipe) bracketId: string,
     @CurrentUser() user: AuthenticatedJwtUser,
   ): Promise<FreeAgentStatusResponseDto> {
-    return this.matchmakingService.getQueueStatus(
-      tournamentId,
-      bracketId,
-      user.sub,
-    );
+    return this.matchmakingService.getQueueStatus(tournamentId, bracketId, user.sub);
   }
 }

@@ -5,6 +5,6 @@ import { WsAuthGuard } from './ws-auth.guard';
 @Global()
 @Module({
   providers: [WsEventGateway, WsAuthGuard],
-  exports: [WsEventGateway],
+  exports: [WsEventGateway, WsAuthGuard],
 })
 export class RealtimeModule {}

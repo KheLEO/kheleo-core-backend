@@ -1,5 +1,20 @@
-import { Controller, Post, Get, Param, Query, HttpCode, HttpStatus } from '@nestjs/common';
+import {
+  Controller,
+  Post,
+  Get,
+  Param,
+  Query,
+  HttpCode,
+  HttpStatus,
+  UseGuards,
+  UseInterceptors,
+  ForbiddenException,
+} from '@nestjs/common';
 import { GtiService, GtiComputationResult } from './gti.service';
+import { AuthenticatedJwtUser, JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
+import { CurrentUser } from '../../common/decorators/current-user.decorator';
+import { UserRole } from '@prisma/client';
+import { IdempotencyInterceptor } from '../../common/interceptors/idempotency.interceptor';
 
 @Controller('gti')
 export class GtiController {
@@ -7,9 +22,16 @@ export class GtiController {
 
   @Post('recalculate/:athleteId')
   @HttpCode(HttpStatus.OK)
+  @UseGuards(JwtAuthGuard)
+  @UseInterceptors(IdempotencyInterceptor)
   async recalculate(
     @Param('athleteId') athleteId: string,
+    @CurrentUser() user: AuthenticatedJwtUser,
   ): Promise<GtiComputationResult> {
+    const privilegedRoles: readonly string[] = [UserRole.FEDERATION_ADMIN, UserRole.SUPER_ADMIN];
+    if (user.sub !== athleteId && !privilegedRoles.includes(user.role)) {
+      throw new ForbiddenException("You cannot recalculate another athlete's GTI.");
+    }
     return this.gtiService.recalculateAthleteGti(athleteId);
   }
 

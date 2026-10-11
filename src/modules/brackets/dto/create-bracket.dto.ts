@@ -1,13 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import {
-  IsEnum,
-  IsInt,
-  IsNotEmpty,
-  IsNumber,
-  IsOptional,
-  IsString,
-  Min,
-} from 'class-validator';
+import { IsEnum, IsInt, IsNotEmpty, IsNumber, IsOptional, IsString, Min } from 'class-validator';
 import { BracketType } from '@prisma/client';
 
 export class CreateBracketDto {
@@ -21,15 +13,24 @@ export class CreateBracketDto {
   @IsNotEmpty()
   readonly tierName!: string;
 
-  @ApiProperty({ example: 45.0, description: 'Minimum GTI threshold for entry' })
+  @ApiProperty({
+    example: 45.0,
+    description: 'Minimum GTI threshold for entry',
+  })
   @IsNumber()
   readonly minGti!: number;
 
-  @ApiProperty({ example: 70.0, description: 'Maximum GTI ceiling (Anti-Sandbagging limit)' })
+  @ApiProperty({
+    example: 70.0,
+    description: 'Maximum GTI ceiling (Anti-Sandbagging limit)',
+  })
   @IsNumber()
   readonly maxGti!: number;
 
-  @ApiPropertyOptional({ example: 500.0, description: 'Registration entry fee' })
+  @ApiPropertyOptional({
+    example: 500.0,
+    description: 'Registration entry fee',
+  })
   @IsOptional()
   @IsNumber()
   readonly entryFee?: number;
@@ -40,7 +41,10 @@ export class CreateBracketDto {
   @Min(2)
   readonly maxTeams?: number;
 
-  @ApiPropertyOptional({ enum: BracketType, default: BracketType.SINGLE_ELIMINATION })
+  @ApiPropertyOptional({
+    enum: BracketType,
+    default: BracketType.SINGLE_ELIMINATION,
+  })
   @IsOptional()
   @IsEnum(BracketType)
   readonly bracketType?: BracketType;

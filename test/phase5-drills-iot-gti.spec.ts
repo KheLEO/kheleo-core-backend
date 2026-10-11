@@ -158,6 +158,9 @@ describe('Phase 5: Edge-AI Drills, IoT Safety Match-Pause, GTI Engine, Scout Ale
             return { id: 'drill-sub-1', ...args.data };
           },
         },
+        $transaction: async (
+          callback: (transaction: unknown) => Promise<unknown>,
+        ) => callback(mockPrisma),
       };
 
       const mockQueueProducer = {
@@ -392,6 +395,13 @@ describe('Phase 5: Edge-AI Drills, IoT Safety Match-Pause, GTI Engine, Scout Ale
                 return args;
               },
             },
+            scoutAlert: {
+              findFirst: async () => null,
+              create: async (args: { data: Record<string, unknown> }) => {
+                createdScoutAlert = args.data;
+                return { id: 'scout-alert-1', ...args.data };
+              },
+            },
           };
           return fn(tx);
         },
@@ -474,7 +484,7 @@ describe('Phase 5: Edge-AI Drills, IoT Safety Match-Pause, GTI Engine, Scout Ale
           wearableScore: 90.0,
           matchPerfScore: 91.0,
           posturePoints: 1200,
-          user: { scoutAlerts: [] },
+          user: { _count: { scoutAlerts: 0 } },
         },
       ];
 

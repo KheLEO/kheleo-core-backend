@@ -13,13 +13,7 @@ import {
   HttpCode,
   HttpStatus,
 } from '@nestjs/common';
-import {
-  ApiTags,
-  ApiOperation,
-  ApiResponse,
-  ApiBearerAuth,
-  ApiHeader,
-} from '@nestjs/swagger';
+import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth, ApiHeader } from '@nestjs/swagger';
 import { PassportService } from './passport.service';
 import { CreatePassportDto } from './dto/create-passport.dto';
 import { UpdatePassportDto } from './dto/update-passport.dto';
@@ -39,6 +33,8 @@ export class PassportController {
   constructor(private readonly passportService: PassportService) {}
 
   @Get(':userId')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
   @ApiOperation({
     summary: 'Retrieve Digital Sports Passport',
     description:
@@ -49,10 +45,22 @@ export class PassportController {
     description: 'Digital Sports Passport returned successfully',
     type: AthletePassportDto,
   })
-  @ApiResponse({ status: HttpStatus.NOT_FOUND, description: 'Passport not found' })
+  @ApiResponse({
+    status: HttpStatus.NOT_FOUND,
+    description: 'Passport not found',
+  })
   async getPassport(
     @Param('userId', ParseUUIDPipe) userId: string,
+    @CurrentUser() user: AuthenticatedJwtUser,
   ): Promise<AthletePassportDto> {
+    const privilegedRoles: readonly string[] = [
+      UserRole.SCOUT,
+      UserRole.FEDERATION_ADMIN,
+      UserRole.SUPER_ADMIN,
+    ];
+    if (user.sub !== userId && !privilegedRoles.includes(user.role)) {
+      throw new ForbiddenException("You cannot view another athlete's passport.");
+    }
     return this.passportService.getPassportByUserId(userId);
   }
 
@@ -67,7 +75,7 @@ export class PassportController {
   })
   @ApiHeader({
     name: 'Idempotency-Key',
-    required: false,
+    required: true,
     description: 'Unique key (min 16 chars) to prevent duplicate submissions',
   })
   @ApiResponse({
@@ -98,7 +106,7 @@ export class PassportController {
   })
   @ApiHeader({
     name: 'Idempotency-Key',
-    required: false,
+    required: true,
     description: 'Idempotency key for state-altering requests over flaky mobile networks',
   })
   @ApiResponse({
@@ -124,12 +132,11 @@ export class PassportController {
   @ApiBearerAuth()
   @ApiOperation({
     summary: 'Add or update multi-sport athlete record',
-    description:
-      'Attaches cross-sport performance logs, badges, or roles to the athlete passport.',
+    description: 'Attaches cross-sport performance logs, badges, or roles to the athlete passport.',
   })
   @ApiHeader({
     name: 'Idempotency-Key',
-    required: false,
+    required: true,
     description: 'Idempotency key for state-altering requests over flaky mobile networks',
   })
   async addSportRecord(

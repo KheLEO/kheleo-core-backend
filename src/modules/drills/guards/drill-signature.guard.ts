@@ -16,23 +16,30 @@ export class DrillSignatureGuard implements CanActivate {
   private readonly secret: string;
 
   constructor(private readonly configService: ConfigService) {
-    this.secret =
-      this.configService.get<string>('auth.drillHmacSecret') ||
-      process.env.DRILL_HMAC_SECRET ||
-      'kheleo-drill-hmac-shared-secret';
+    const configuredSecret =
+      this.configService.get<string>('auth.drillHmacSecret') || process.env.DRILL_HMAC_SECRET;
+    const isProduction =
+      this.configService.get<string>('app.nodeEnv', 'development') === 'production';
+
+    if (!configuredSecret && isProduction) {
+      throw new Error('DRILL_HMAC_SECRET must be configured in production.');
+    }
+    this.secret = configuredSecret ?? 'local-development-drill-secret';
   }
 
   canActivate(context: ExecutionContext): boolean {
     const request = context.switchToHttp().getRequest<FastifyRequest>();
     const headers = request.headers;
-    const signature = (headers['x-drill-signature'] ||
-      headers['x-device-signature']) as string | undefined;
+    const signatureHeader = headers['x-drill-signature'];
+    const signature = Array.isArray(signatureHeader) ? signatureHeader[0] : signatureHeader;
 
-    if (!signature) {
+    if (!signature || !/^[a-f\d]{64}$/i.test(signature)) {
       throw new ForbiddenException('Missing x-drill-signature header');
     }
 
-    const body = (request.body || {}) as SubmitDrillDto & { athleteId?: string };
+    const body = (request.body || {}) as SubmitDrillDto & {
+      athleteId?: string;
+    };
     const user = (request as FastifyRequest & { user?: { sub: string } }).user;
     const athleteId = body.athlete_id || body.athleteId || user?.sub || '';
     const drillType = body.drill_type || '';
@@ -45,9 +52,7 @@ export class DrillSignatureGuard implements CanActivate {
 
     // Normalize timestamp to seconds
     const clientTimestampSec =
-      clientTimestamp > 1e11
-        ? Math.floor(clientTimestamp / 1000)
-        : Math.floor(clientTimestamp);
+      clientTimestamp > 1e11 ? Math.floor(clientTimestamp / 1000) : Math.floor(clientTimestamp);
     const nowSec = Math.floor(Date.now() / 1000);
 
     if (Math.abs(nowSec - clientTimestampSec) > 300) {
@@ -59,31 +64,19 @@ export class DrillSignatureGuard implements CanActivate {
       );
     }
 
-    // Verify HMAC: check both standard delimited and continuous concatenations
+    // Accept the documented wire format and its seconds-normalized equivalent.
     const payloadCandidates = [
       `${athleteId}:${drillType}:${formScore}:${clientTimestamp}`,
-      `${athleteId}${drillType}${formScore}${clientTimestamp}`,
       `${athleteId}:${drillType}:${formScore}:${clientTimestampSec}`,
-      `${athleteId}${drillType}${formScore}${clientTimestampSec}`,
     ];
 
     const isMatch = payloadCandidates.some((candidate) => {
-      const expectedHmac = crypto
-        .createHmac('sha256', this.secret)
-        .update(candidate)
-        .digest('hex');
+      const expectedHmac = crypto.createHmac('sha256', this.secret).update(candidate).digest('hex');
 
-      try {
-        return (
-          signature.length === expectedHmac.length &&
-          crypto.timingSafeEqual(
-            Buffer.from(signature, 'hex'),
-            Buffer.from(expectedHmac, 'hex'),
-          )
-        );
-      } catch {
-        return false;
-      }
+      return crypto.timingSafeEqual(
+        Buffer.from(signature, 'hex'),
+        Buffer.from(expectedHmac, 'hex'),
+      );
     });
 
     if (!isMatch) {

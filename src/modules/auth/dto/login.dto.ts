@@ -1,5 +1,7 @@
-import { ApiPropertyOptional } from '@nestjs/swagger';
-import { IsEmail, IsOptional, IsString, Matches } from 'class-validator';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { IsEmail, IsOptional, IsString, Matches, ValidateNested } from 'class-validator';
+import { Type } from 'class-transformer';
+import { GovernmentIdInputDto } from './register.dto';
 
 export class LoginDto {
   @ApiPropertyOptional({ example: '+919876543210' })
@@ -15,8 +17,8 @@ export class LoginDto {
   @IsEmail()
   readonly email?: string;
 
-  @ApiPropertyOptional({ example: '123456', description: '6-digit OTP code' })
-  @IsOptional()
-  @IsString()
-  readonly otp?: string;
+  @ApiProperty({ type: GovernmentIdInputDto })
+  @ValidateNested()
+  @Type(() => GovernmentIdInputDto)
+  readonly governmentId!: GovernmentIdInputDto;
 }

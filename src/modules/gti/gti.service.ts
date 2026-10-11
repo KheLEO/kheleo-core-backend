@@ -4,6 +4,7 @@ import { RedisService } from '../../infrastructure/cache/redis.service';
 import { QueueProducerService } from '../../infrastructure/queues/queue-producer.service';
 import { WsEventGateway } from '../../infrastructure/realtime/ws-event.gateway';
 import { Prisma } from '@prisma/client';
+import { runSerializableTransaction } from '../../common/database/serializable-transaction';
 
 export interface GtiComputationResult {
   readonly athleteId: string;
@@ -23,7 +24,7 @@ export class GtiService {
   // Weights specified in Kheleo Patent Architecture
   private static readonly W1_BIOMECHANICAL = 0.35;
   private static readonly W2_WEARABLE_CONSISTENCY = 0.25;
-  private static readonly W3_MATCH_PERFORMANCE = 0.40;
+  private static readonly W3_MATCH_PERFORMANCE = 0.4;
 
   constructor(
     private readonly prisma: PrismaService,
@@ -55,13 +56,43 @@ export class GtiService {
     // 1. Resolve athlete profile
     let profile = await this.prisma.athleteProfile.findUnique({
       where: { userId: athleteId },
-      include: { user: true },
+      select: {
+        id: true,
+        userId: true,
+        primarySport: true,
+        district: true,
+        state: true,
+        tierClassification: true,
+        isRuralOrUnderrepresented: true,
+        biomechanicalScore: true,
+        trainingConsistencyScore: true,
+        matchPerformanceScore: true,
+        wearableScore: true,
+        matchPerfScore: true,
+        gti: true,
+        currentGti: true,
+      },
     });
 
     if (!profile) {
       profile = await this.prisma.athleteProfile.findUnique({
         where: { id: athleteId },
-        include: { user: true },
+        select: {
+          id: true,
+          userId: true,
+          primarySport: true,
+          district: true,
+          state: true,
+          tierClassification: true,
+          isRuralOrUnderrepresented: true,
+          biomechanicalScore: true,
+          trainingConsistencyScore: true,
+          matchPerformanceScore: true,
+          wearableScore: true,
+          matchPerfScore: true,
+          gti: true,
+          currentGti: true,
+        },
       });
     }
 
@@ -104,9 +135,11 @@ export class GtiService {
     const computedGti = this.computeCompositeGti(biomech, wearable, matchPerf);
     const previousGti = Number(profile.gti) || Number(profile.currentGti) || 0.0;
     const eliteBreached = computedGti >= 85.0;
+    const isUnderrepresented =
+      profile.isRuralOrUnderrepresented ||
+      ['RURAL', 'TIER_3', 'TIER_2'].includes(String(profile.tierClassification));
 
-    // 4. Update AthleteProfile & GtiHistory in a transaction
-    await this.prisma.$transaction(async (tx) => {
+    const scoutAlertCreated = await runSerializableTransaction(this.prisma, async (tx) => {
       await tx.athleteProfile.update({
         where: { id: profile.id },
         data: {
@@ -132,6 +165,33 @@ export class GtiService {
           },
         },
       });
+
+      if (!eliteBreached || !isUnderrepresented) {
+        return false;
+      }
+
+      const existingAlert = await tx.scoutAlert.findFirst({
+        where: {
+          athleteId: targetUserId,
+          sport,
+          isAcknowledged: false,
+        },
+        select: { id: true },
+      });
+      if (existingAlert) {
+        return false;
+      }
+
+      await tx.scoutAlert.create({
+        data: {
+          athleteId: targetUserId,
+          gtiScore: computedGti,
+          district,
+          sport,
+          isAcknowledged: false,
+        },
+      });
+      return true;
     });
 
     // 5. Update Redis Leaderboard ZSET for O(log N) retrieval
@@ -146,58 +206,32 @@ export class GtiService {
     }
 
     // 6. Automated Scout Outreach Trigger
-    let scoutAlertTriggered = false;
-    const isUnderrepresented =
-      profile.isRuralOrUnderrepresented ||
-      ['RURAL', 'TIER_3', 'TIER_2'].includes(String(profile.tierClassification));
-
-    if (eliteBreached && isUnderrepresented) {
-      const existingAlert = await this.prisma.scoutAlert.findFirst({
-        where: {
-          athleteId: targetUserId,
-          sport,
-          isAcknowledged: false,
-        },
+    if (scoutAlertCreated) {
+      // Push to Scout Alerts queue
+      await this.queueProducer.enqueueScoutAlert({
+        athleteId: targetUserId,
+        newGti: computedGti,
+        sport,
+        district,
+        state: profile.state,
+        tierClassification: String(profile.tierClassification),
       });
 
-      if (!existingAlert) {
-        await this.prisma.scoutAlert.create({
-          data: {
-            athleteId: targetUserId,
-            gtiScore: computedGti,
-            district,
-            sport,
-            isAcknowledged: false,
-          },
-        });
-
-        // Push to Scout Alerts queue
-        await this.queueProducer.enqueueScoutAlert({
+      // Broadcast realtime alert to scout dashboards
+      if (this.wsGateway?.server) {
+        this.wsGateway.server.to('scouts').emit('SCOUT_TALENT_ALERT', {
           athleteId: targetUserId,
-          newGti: computedGti,
+          gtiScore: computedGti,
           sport,
           district,
           state: profile.state,
-          tierClassification: String(profile.tierClassification),
+          tier: profile.tierClassification,
         });
-
-        // Broadcast realtime alert to scout dashboards
-        if (this.wsGateway?.server) {
-          this.wsGateway.server.to('scouts').emit('SCOUT_TALENT_ALERT', {
-            athleteId: targetUserId,
-            gtiScore: computedGti,
-            sport,
-            district,
-            state: profile.state,
-            tier: profile.tierClassification,
-          });
-        }
-
-        scoutAlertTriggered = true;
-        this.logger.log(
-          `AUTOMATED SCOUT ALERT FIRED: Hidden talent detected! Athlete=${targetUserId}, GTI=${computedGti}, District=${district}`,
-        );
       }
+
+      this.logger.log(
+        `AUTOMATED SCOUT ALERT FIRED: Hidden talent detected! Athlete=${targetUserId}, GTI=${computedGti}, District=${district}`,
+      );
     }
 
     // Broadcast GTI updated to athlete socket room
@@ -216,11 +250,15 @@ export class GtiService {
       wearableScore: wearable,
       matchPerformanceScore: matchPerf,
       eliteBreached,
-      scoutAlertTriggered,
+      scoutAlertTriggered: scoutAlertCreated,
     };
   }
 
-  async getLeaderboardRank(sport: string, athleteId: string, district?: string): Promise<number | null> {
+  async getLeaderboardRank(
+    sport: string,
+    athleteId: string,
+    district?: string,
+  ): Promise<number | null> {
     try {
       const key = district
         ? `leaderboard:district:${district}:${sport}`

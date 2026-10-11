@@ -17,7 +17,10 @@ export class AuthUserSummaryDto {
   @ApiProperty({ example: true })
   readonly isVerified!: boolean;
 
-  @ApiProperty({ example: '123e4567-e89b-12d3-a456-426614174001', nullable: true })
+  @ApiProperty({
+    example: '123e4567-e89b-12d3-a456-426614174001',
+    nullable: true,
+  })
   readonly athleteProfileId!: string | null;
 }
 

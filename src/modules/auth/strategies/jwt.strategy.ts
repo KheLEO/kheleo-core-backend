@@ -15,28 +15,43 @@ export interface JwtTokenPayload {
 
 @Injectable()
 export class JwtStrategy extends PassportStrategy(Strategy) {
-  constructor(private readonly configService: ConfigService) {
-    let secretOrKey = 'kheleo_prod_identity_pepper_secure_seed_2026';
-    const keyPath = configService.get<string>(
-      'auth.jwtPublicKeyPath',
-      './keys/public.pem',
+  constructor(configService: ConfigService) {
+    let secretOrKey = '';
+    let algorithm: 'RS256' | 'HS256' = 'HS256';
+    const keyPath = configService.get<string>('auth.jwtPublicKeyPath', './keys/public.pem');
+    const privateKeyPath = configService.get<string>(
+      'auth.jwtPrivateKeyPath',
+      './keys/private.pem',
     );
+    const publicKeyExists = fs.existsSync(keyPath);
+    const privateKeyExists = fs.existsSync(privateKeyPath);
+    if (publicKeyExists !== privateKeyExists) {
+      throw new Error('Both JWT_PRIVATE_KEY_PATH and JWT_PUBLIC_KEY_PATH must exist.');
+    }
 
     try {
-      if (fs.existsSync(keyPath)) {
+      if (publicKeyExists) {
         secretOrKey = fs.readFileSync(keyPath, 'utf-8');
+        algorithm = 'RS256';
       }
     } catch {
-      secretOrKey =
-        configService.get<string>('auth.identityPepper') ||
-        'kheleo_prod_identity_pepper_secure_seed_2026';
+      secretOrKey = '';
+    }
+
+    if (!secretOrKey) {
+      const symmetricSecret = configService.get<string>('auth.identityPepper');
+      const isProduction = configService.get<string>('app.nodeEnv', 'development') === 'production';
+      if (!symmetricSecret && isProduction) {
+        throw new Error('JWT public key or IDENTITY_PEPPER must be configured in production.');
+      }
+      secretOrKey = symmetricSecret ?? 'local-development-jwt-secret';
     }
 
     super({
       jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
       ignoreExpiration: false,
       secretOrKey,
-      algorithms: ['RS256', 'HS256'],
+      algorithms: [algorithm],
     });
   }
 

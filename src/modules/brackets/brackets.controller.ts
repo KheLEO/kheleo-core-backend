@@ -3,6 +3,7 @@ import {
   Post,
   Get,
   Param,
+  Query,
   Body,
   UseGuards,
   UseInterceptors,
@@ -10,13 +11,7 @@ import {
   HttpCode,
   HttpStatus,
 } from '@nestjs/common';
-import {
-  ApiTags,
-  ApiOperation,
-  ApiResponse,
-  ApiBearerAuth,
-  ApiHeader,
-} from '@nestjs/swagger';
+import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth, ApiHeader } from '@nestjs/swagger';
 import { BracketsService } from './brackets.service';
 import { RegisterBracketDto } from './dto/register-bracket.dto';
 import { CreateBracketDto } from './dto/create-bracket.dto';
@@ -27,6 +22,7 @@ import { Roles } from '../../common/decorators/roles.decorator';
 import { RolesGuard } from '../../common/guards/roles.guard';
 import { IdempotencyInterceptor } from '../../common/interceptors/idempotency.interceptor';
 import { UserRole } from '@prisma/client';
+import { CursorPaginationQueryDto } from '../../common/dto/cursor-pagination-query.dto';
 
 @ApiTags('Tournament Brackets & Anti-Sandbagging Gatekeeper')
 @Controller()
@@ -45,8 +41,9 @@ export class BracketsController {
   })
   @ApiHeader({
     name: 'Idempotency-Key',
-    required: false,
-    description: 'Unique key (min 16 chars) to prevent duplicate submissions over flaky mobile networks',
+    required: true,
+    description:
+      'Unique key (min 16 chars) to prevent duplicate submissions over flaky mobile networks',
   })
   @ApiResponse({
     status: HttpStatus.CREATED,
@@ -63,12 +60,7 @@ export class BracketsController {
     @CurrentUser() user: AuthenticatedJwtUser,
     @Body() dto: RegisterBracketDto,
   ): Promise<BracketRegistrationResponseDto> {
-    return this.bracketsService.registerForBracket(
-      tournamentId,
-      bracketId,
-      user.sub,
-      dto,
-    );
+    return this.bracketsService.registerForBracket(tournamentId, bracketId, user.sub, dto);
   }
 
   @Get('tournaments/:tournamentId/brackets')
@@ -76,12 +68,14 @@ export class BracketsController {
   @ApiResponse({ status: HttpStatus.OK, description: 'List of brackets' })
   async findByTournament(
     @Param('tournamentId', ParseUUIDPipe) tournamentId: string,
+    @Query() query: CursorPaginationQueryDto,
   ) {
-    return this.bracketsService.findByTournament(tournamentId);
+    return this.bracketsService.findByTournament(tournamentId, query);
   }
 
   @Post('tournaments/:tournamentId/brackets')
   @HttpCode(HttpStatus.CREATED)
+  @UseInterceptors(IdempotencyInterceptor)
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(UserRole.ORGANIZER, UserRole.FEDERATION_ADMIN, UserRole.SUPER_ADMIN)
   @ApiBearerAuth()

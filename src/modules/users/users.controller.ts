@@ -6,6 +6,7 @@ import {
   Param,
   Body,
   UseGuards,
+  UseInterceptors,
   ParseUUIDPipe,
   ForbiddenException,
 } from '@nestjs/common';
@@ -15,6 +16,7 @@ import { UpdateUserDto } from './dto/update-user.dto';
 import { JwtAuthGuard, AuthenticatedJwtUser } from '../../common/guards/jwt-auth.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { UserRole } from '@prisma/client';
+import { IdempotencyInterceptor } from '../../common/interceptors/idempotency.interceptor';
 
 @ApiTags('Users')
 @Controller('users')
@@ -27,11 +29,18 @@ export class UsersController {
   @ApiOperation({ summary: 'Get user profile by user ID' })
   @ApiResponse({ status: 200, description: 'User found' })
   @ApiResponse({ status: 404, description: 'User not found' })
-  async findById(@Param('id', ParseUUIDPipe) id: string) {
+  async findById(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: AuthenticatedJwtUser,
+  ) {
+    if (user.sub !== id && user.role !== UserRole.SUPER_ADMIN) {
+      throw new ForbiddenException('You can only view your own user details.');
+    }
     return this.usersService.findById(id);
   }
 
   @Patch(':id')
+  @UseInterceptors(IdempotencyInterceptor)
   @ApiOperation({ summary: 'Update user contact details' })
   @ApiResponse({ status: 200, description: 'User updated' })
   async update(
@@ -46,6 +55,7 @@ export class UsersController {
   }
 
   @Delete(':id')
+  @UseInterceptors(IdempotencyInterceptor)
   @ApiOperation({ summary: 'Deactivate user account' })
   @ApiResponse({ status: 200, description: 'User deactivated' })
   async deactivate(

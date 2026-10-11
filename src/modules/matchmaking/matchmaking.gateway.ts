@@ -6,8 +6,13 @@ import {
   MessageBody,
   ConnectedSocket,
 } from '@nestjs/websockets';
-import { Logger } from '@nestjs/common';
+import { ForbiddenException, Logger, UseGuards } from '@nestjs/common';
 import { Server, Socket } from 'socket.io';
+import { WsAuthGuard } from '../../infrastructure/realtime/ws-auth.guard';
+
+interface AuthenticatedSocket extends Socket {
+  readonly user?: { readonly sub: string; readonly role: string };
+}
 
 export interface RosterMemberPayload {
   readonly user_id: string;
@@ -27,6 +32,7 @@ export interface RosterFormedEventData {
   namespace: '/ws/matchmaking',
   cors: { origin: '*' },
 })
+@UseGuards(WsAuthGuard)
 export class MatchmakingGateway implements OnGatewayInit {
   @WebSocketServer()
   server!: Server;
@@ -39,9 +45,12 @@ export class MatchmakingGateway implements OnGatewayInit {
 
   @SubscribeMessage('join:user')
   handleJoinUser(
-    @ConnectedSocket() client: Socket,
+    @ConnectedSocket() client: AuthenticatedSocket,
     @MessageBody() data: { userId: string },
   ): void {
+    if (!client.user || client.user.sub !== data.userId) {
+      throw new ForbiddenException("Cannot subscribe to another user's room.");
+    }
     const room = `user:${data.userId}`;
     void client.join(room);
     this.logger.debug(`Socket ${client.id} joined user room ${room}`);

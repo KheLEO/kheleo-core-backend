@@ -75,7 +75,10 @@ export class AthletePassportDto {
   @ApiProperty({ type: VerifiedPhysicalStatsDto })
   readonly physicalStats!: VerifiedPhysicalStatsDto;
 
-  @ApiProperty({ example: 72.5, description: 'Composite Grassroots Talent Index (0-100)' })
+  @ApiProperty({
+    example: 72.5,
+    description: 'Composite Grassroots Talent Index (0-100)',
+  })
   readonly currentGti!: number;
 
   @ApiProperty({ example: 85.0 })
@@ -87,7 +90,10 @@ export class AthletePassportDto {
   @ApiProperty({ example: 120 })
   readonly posturePoints!: number;
 
-  @ApiProperty({ enum: VerificationStatus, example: VerificationStatus.VERIFIED })
+  @ApiProperty({
+    enum: VerificationStatus,
+    example: VerificationStatus.VERIFIED,
+  })
   readonly identityStatus!: VerificationStatus;
 
   @ApiProperty({ type: [SportPassportRecordSummaryDto] })

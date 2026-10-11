@@ -4,8 +4,8 @@ import { MatchmakingService } from '../src/modules/matchmaking/matchmaking.servi
 import { MatchmakingGateway, RosterFormedEventData } from '../src/modules/matchmaking/matchmaking.gateway';
 import { PrismaService } from '../src/infrastructure/database/prisma.service';
 import { QueueProducerService } from '../src/infrastructure/queues/queue-producer.service';
-import { ConflictException, NotFoundException } from '@nestjs/common';
-import { FreeAgentStatus, RegistrationStatus, TournamentStatus } from '@prisma/client';
+import { ConflictException } from '@nestjs/common';
+import { FreeAgentStatus, TournamentStatus } from '@prisma/client';
 
 describe('Phase 4: Dynamic Free Agent Matchmaking Pool & Role Balancing Engine', () => {
   const mockGateway = {
@@ -98,6 +98,12 @@ describe('Phase 4: Dynamic Free Agent Matchmaking Pool & Role Balancing Engine',
             status: FreeAgentStatus.QUEUED,
           }),
         },
+        teamMember: {
+          findFirst: async () => null,
+        },
+        $transaction: async (
+          callback: (transaction: unknown) => Promise<unknown>,
+        ) => callback(mockPrisma),
       };
 
       const service = new MatchmakingService(
@@ -162,6 +168,9 @@ describe('Phase 4: Dynamic Free Agent Matchmaking Pool & Role Balancing Engine',
         teamMember: {
           findFirst: async () => null,
         },
+        $transaction: async (
+          callback: (transaction: unknown) => Promise<unknown>,
+        ) => callback(mockPrisma),
       };
 
       const customQueueProducer = {
@@ -264,6 +273,7 @@ describe('Phase 4: Dynamic Free Agent Matchmaking Pool & Role Balancing Engine',
         bracket: {
           findUnique: async () => ({
             id: 'bracket-cricket-1',
+            tournamentId: 'tournament-1',
             minGti: 40.0,
             maxGti: 65.0,
             entryFee: 0.0,
@@ -281,8 +291,11 @@ describe('Phase 4: Dynamic Free Agent Matchmaking Pool & Role Balancing Engine',
           callback: (tx: {
             team: { create: (d: { data: { name: string; tournamentId: string; bracketId: string; isFreeAgentTeam: boolean; isFreeAgentFormed: boolean; averageGti: number } }) => Promise<{ id: string; name: string }> };
             teamMember: { create: (d: unknown) => Promise<unknown> };
-            freeAgentRegistration: { update: (d: unknown) => Promise<unknown> };
-            registration: { create: (d: unknown) => Promise<unknown> };
+            freeAgentRegistration: { updateMany: (d: unknown) => Promise<{ count: number }> };
+            registration: {
+              count: (d: unknown) => Promise<number>;
+              create: (d: unknown) => Promise<unknown>;
+            };
           }) => Promise<unknown>,
         ) => {
           return callback({
@@ -290,8 +303,13 @@ describe('Phase 4: Dynamic Free Agent Matchmaking Pool & Role Balancing Engine',
               create: async (d) => ({ id: 'formed-team-1', name: d.data.name }),
             },
             teamMember: { create: async () => ({}) },
-            freeAgentRegistration: { update: async () => ({}) },
-            registration: { create: async () => ({}) },
+            freeAgentRegistration: {
+              updateMany: async () => ({ count: 1 }),
+            },
+            registration: {
+              count: async () => 0,
+              create: async () => ({}),
+            },
           });
         },
       };

@@ -16,7 +16,10 @@ export class BracketRegistrationResponseDto {
   @ApiProperty({ example: 'GOLD' })
   readonly tierName!: string;
 
-  @ApiProperty({ example: 58.4, description: 'Verified GTI score captured at time of registration' })
+  @ApiProperty({
+    example: 58.4,
+    description: 'Verified GTI score captured at time of registration',
+  })
   readonly athleteGti!: number;
 
   @ApiProperty({ example: 'CONFIRMED' })

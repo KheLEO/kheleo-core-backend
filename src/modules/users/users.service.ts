@@ -1,30 +1,36 @@
-import {
-  Injectable,
-  NotFoundException,
-  ConflictException,
-} from '@nestjs/common';
+import { Injectable, NotFoundException, ConflictException } from '@nestjs/common';
 import { PrismaService } from '../../infrastructure/database/prisma.service';
 import { UpdateUserDto } from './dto/update-user.dto';
-import { User } from '@prisma/client';
+import { UserRole } from '@prisma/client';
+
+export interface UserResponse {
+  readonly id: string;
+  readonly phone: string | null;
+  readonly email: string | null;
+  readonly role: UserRole;
+  readonly isActive: boolean;
+  readonly createdAt: Date;
+  readonly updatedAt: Date;
+}
+
+const userResponseSelect = {
+  id: true,
+  phone: true,
+  email: true,
+  role: true,
+  isActive: true,
+  createdAt: true,
+  updatedAt: true,
+} as const;
 
 @Injectable()
 export class UsersService {
   constructor(private readonly prisma: PrismaService) {}
 
-  async findById(id: string): Promise<User> {
+  async findById(id: string): Promise<UserResponse> {
     const user = await this.prisma.user.findUnique({
       where: { id },
-      include: {
-        athleteProfile: true,
-        identityRecord: {
-          select: {
-            id: true,
-            idType: true,
-            status: true,
-            verifiedAt: true,
-          },
-        },
-      },
+      select: userResponseSelect,
     });
 
     if (!user) {
@@ -34,7 +40,7 @@ export class UsersService {
     return user;
   }
 
-  async update(id: string, dto: UpdateUserDto): Promise<User> {
+  async update(id: string, dto: UpdateUserDto): Promise<UserResponse> {
     await this.findById(id);
 
     if (dto.phone) {
@@ -61,14 +67,16 @@ export class UsersService {
         phone: dto.phone,
         email: dto.email,
       },
+      select: userResponseSelect,
     });
   }
 
-  async deactivate(id: string): Promise<User> {
+  async deactivate(id: string): Promise<UserResponse> {
     await this.findById(id);
     return this.prisma.user.update({
       where: { id },
       data: { isActive: false },
+      select: userResponseSelect,
     });
   }
 }

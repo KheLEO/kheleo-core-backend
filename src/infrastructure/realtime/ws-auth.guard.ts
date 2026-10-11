@@ -13,17 +13,35 @@ interface JwtPayload {
 @Injectable()
 export class WsAuthGuard implements CanActivate {
   private readonly publicKey: string;
+  private readonly algorithm: 'RS256' | 'HS256';
 
   constructor(private readonly configService: ConfigService) {
-    const keyPath = this.configService.get<string>(
-      'auth.jwtPublicKeyPath',
-      './keys/public.pem',
+    const keyPath = this.configService.get<string>('auth.jwtPublicKeyPath', './keys/public.pem');
+    const privateKeyPath = this.configService.get<string>(
+      'auth.jwtPrivateKeyPath',
+      './keys/private.pem',
     );
+    const publicKeyExists = fs.existsSync(keyPath);
+    const privateKeyExists = fs.existsSync(privateKeyPath);
+    if (publicKeyExists !== privateKeyExists) {
+      throw new Error('Both JWT_PRIVATE_KEY_PATH and JWT_PUBLIC_KEY_PATH must exist.');
+    }
     try {
-      this.publicKey = fs.readFileSync(keyPath, 'utf-8');
+      if (!publicKeyExists) {
+        throw new Error('JWT public key is not configured.');
+      }
+      const publicKey = fs.readFileSync(keyPath, 'utf-8');
+      this.publicKey = publicKey;
+      this.algorithm = 'RS256';
     } catch {
-      // Fallback for dev: use a symmetric secret
-      this.publicKey = 'dev-secret-key';
+      const symmetricSecret = this.configService.get<string>('auth.identityPepper');
+      const isProduction =
+        this.configService.get<string>('app.nodeEnv', 'development') === 'production';
+      if (!symmetricSecret && isProduction) {
+        throw new Error('JWT public key or IDENTITY_PEPPER must be configured in production.');
+      }
+      this.publicKey = symmetricSecret ?? 'local-development-jwt-secret';
+      this.algorithm = 'HS256';
     }
   }
 
@@ -39,7 +57,7 @@ export class WsAuthGuard implements CanActivate {
 
     try {
       const payload = jwt.verify(token, this.publicKey, {
-        algorithms: ['RS256', 'HS256'],
+        algorithms: [this.algorithm],
       }) as JwtPayload;
 
       (client as Socket & { user: JwtPayload }).user = payload;

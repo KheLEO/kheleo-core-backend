@@ -8,13 +8,7 @@ import {
   HttpCode,
   HttpStatus,
 } from '@nestjs/common';
-import {
-  ApiTags,
-  ApiOperation,
-  ApiResponse,
-  ApiBearerAuth,
-  ApiHeader,
-} from '@nestjs/swagger';
+import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth, ApiHeader } from '@nestjs/swagger';
 import { AuthService } from './auth.service';
 import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
@@ -40,7 +34,7 @@ export class AuthController {
   })
   @ApiHeader({
     name: 'Idempotency-Key',
-    required: false,
+    required: true,
     description: 'Unique key (min 16 chars) to prevent duplicate submissions over flaky networks',
   })
   @ApiResponse({
@@ -50,7 +44,8 @@ export class AuthController {
   })
   @ApiResponse({
     status: HttpStatus.CONFLICT,
-    description: 'Conflict — user already exists or Government ID is already bound to another profile',
+    description:
+      'Conflict — user already exists or Government ID is already bound to another profile',
   })
   async register(@Body() dto: RegisterDto): Promise<AuthResponseDto> {
     return this.authService.register(dto);
@@ -58,10 +53,11 @@ export class AuthController {
 
   @Post('login')
   @HttpCode(HttpStatus.OK)
+  @UseInterceptors(IdempotencyInterceptor)
   @ApiOperation({
-    summary: 'Passwordless login via phone or email',
+    summary: 'Login via verified contact and Government ID proof',
     description:
-      'Authenticates athlete or official and returns lightweight access and refresh tokens.',
+      'Authenticates against the permanent identity ledger and returns lightweight access and refresh tokens.',
   })
   @ApiResponse({
     status: HttpStatus.OK,
@@ -99,6 +95,7 @@ export class AuthController {
 
   @Post('refresh')
   @HttpCode(HttpStatus.OK)
+  @UseInterceptors(IdempotencyInterceptor)
   @ApiOperation({
     summary: 'Rotate refresh token and get fresh lightweight access token',
   })

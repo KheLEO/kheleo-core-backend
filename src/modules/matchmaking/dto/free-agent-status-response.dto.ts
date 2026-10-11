@@ -40,7 +40,10 @@ export class FreeAgentStatusResponseDto {
   @ApiProperty({ enum: FreeAgentStatus, example: FreeAgentStatus.QUEUED })
   readonly status!: FreeAgentStatus;
 
-  @ApiProperty({ example: 3, description: 'Position in FIFO wait queue for bracket (1 = next)' })
+  @ApiProperty({
+    example: 3,
+    description: 'Position in FIFO wait queue for bracket (1 = next)',
+  })
   readonly waitPosition!: number;
 
   @ApiPropertyOptional({ example: '123e4567-e89b-12d3-a456-426614174004' })

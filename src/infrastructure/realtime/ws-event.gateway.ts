@@ -12,14 +12,6 @@ import { Logger, UseGuards } from '@nestjs/common';
 import { Server, Socket } from 'socket.io';
 import { WsAuthGuard } from './ws-auth.guard';
 
-export interface MatchPauseAlertPayload {
-  readonly matchId: string;
-  readonly athleteId: string;
-  readonly severity: string;
-  readonly reason: string;
-  readonly timestamp: string;
-}
-
 export interface AutonomousMatchPausePayload {
   readonly event: 'MATCH_PAUSE_ALERT';
   readonly severity: 'CRITICAL';
@@ -33,13 +25,7 @@ export interface AutonomousMatchPausePayload {
   readonly directive: string;
   readonly tournament_id?: string;
   readonly bracket_id?: string;
-}
-
-export interface FreeAgentMatchedPayload {
-  readonly athleteId: string;
-  readonly tournamentId: string;
-  readonly teamName: string;
-  readonly assignedRole: string;
+  readonly match_id?: string;
 }
 
 export interface GtiUpdatedPayload {
@@ -49,14 +35,16 @@ export interface GtiUpdatedPayload {
   readonly eliteBreached: boolean;
 }
 
+interface AuthenticatedSocket extends Socket {
+  readonly user?: { readonly sub: string; readonly role: string };
+}
+
 @WebSocketGateway({
   namespace: '/ws/events',
   cors: { origin: '*' },
 })
 @UseGuards(WsAuthGuard)
-export class WsEventGateway
-  implements OnGatewayInit, OnGatewayConnection, OnGatewayDisconnect
-{
+export class WsEventGateway implements OnGatewayInit, OnGatewayConnection, OnGatewayDisconnect {
   @WebSocketServer()
   server!: Server;
 
@@ -76,7 +64,7 @@ export class WsEventGateway
 
   @SubscribeMessage('join:match')
   handleJoinMatch(
-    @ConnectedSocket() client: Socket,
+    @ConnectedSocket() client: AuthenticatedSocket,
     @MessageBody() data: { matchId: string },
   ): void {
     const room = `match:${data.matchId}`;
@@ -86,9 +74,16 @@ export class WsEventGateway
 
   @SubscribeMessage('join:athlete')
   handleJoinAthlete(
-    @ConnectedSocket() client: Socket,
+    @ConnectedSocket() client: AuthenticatedSocket,
     @MessageBody() data: { athleteId: string },
   ): void {
+    const privilegedRoles = new Set(['SCOUT', 'ORGANIZER', 'FEDERATION_ADMIN', 'SUPER_ADMIN']);
+    if (
+      !client.user ||
+      (client.user.sub !== data.athleteId && !privilegedRoles.has(client.user.role))
+    ) {
+      return;
+    }
     const room = `athlete:${data.athleteId}`;
     void client.join(room);
     this.logger.debug(`${client.id} joined room ${room}`);
@@ -113,21 +108,17 @@ export class WsEventGateway
     }
 
     if (payload.tournament_id) {
-      this.server
-        .to(`tournament:${payload.tournament_id}`)
-        .emit('MATCH_PAUSE_ALERT', payload);
-      this.server
-        .to(`organizer:${payload.tournament_id}`)
-        .emit('MATCH_PAUSE_ALERT', payload);
-      this.server
-        .to(`umpire:${payload.tournament_id}`)
-        .emit('MATCH_PAUSE_ALERT', payload);
+      this.server.to(`tournament:${payload.tournament_id}`).emit('MATCH_PAUSE_ALERT', payload);
+      this.server.to(`organizer:${payload.tournament_id}`).emit('MATCH_PAUSE_ALERT', payload);
+      this.server.to(`umpire:${payload.tournament_id}`).emit('MATCH_PAUSE_ALERT', payload);
     }
 
     if (payload.bracket_id) {
-      this.server
-        .to(`bracket:${payload.bracket_id}`)
-        .emit('MATCH_PAUSE_ALERT', payload);
+      this.server.to(`bracket:${payload.bracket_id}`).emit('MATCH_PAUSE_ALERT', payload);
+    }
+
+    if (payload.match_id) {
+      this.server.to(`match:${payload.match_id}`).emit('MATCH_PAUSE_ALERT', payload);
     }
 
     // Broadcast across umpire and organizer rooms
@@ -142,25 +133,8 @@ export class WsEventGateway
     );
   }
 
-  broadcastMatchPause(payload: MatchPauseAlertPayload): void {
-    if (!this.server) return;
-    this.server
-      .to(`match:${payload.matchId}`)
-      .emit('MATCH_PAUSE_ALERT', payload);
-    this.logger.warn(`MATCH_PAUSE_ALERT dispatched for match ${payload.matchId}`);
-  }
-
-  broadcastFreeAgentMatched(payload: FreeAgentMatchedPayload): void {
-    if (!this.server) return;
-    this.server
-      .to(`athlete:${payload.athleteId}`)
-      .emit('FREE_AGENT_MATCHED', payload);
-  }
-
   broadcastGtiUpdated(payload: GtiUpdatedPayload): void {
     if (!this.server) return;
-    this.server
-      .to(`athlete:${payload.athleteId}`)
-      .emit('GTI_UPDATED', payload);
+    this.server.to(`athlete:${payload.athleteId}`).emit('GTI_UPDATED', payload);
   }
 }

@@ -1,8 +1,4 @@
-import {
-  Injectable,
-  NotFoundException,
-  Logger,
-} from '@nestjs/common';
+import { Injectable, NotFoundException, Logger } from '@nestjs/common';
 import { PrismaService } from '../../infrastructure/database/prisma.service';
 import {
   PostgisSpatialRepository,
@@ -26,9 +22,7 @@ export class TournamentsService {
    * Discovers tournaments within requested radius utilizing PostgreSQL PostGIS ST_DWithin and ST_MakePoint.
    * Strips all relational joins and returns a flat array of TournamentLocationDto to minimize Android memory overhead.
    */
-  async findNearby(
-    query: NearbyTournamentsQueryDto,
-  ): Promise<readonly TournamentLocationDto[]> {
+  async findNearby(query: NearbyTournamentsQueryDto): Promise<readonly TournamentLocationDto[]> {
     const point = { lat: query.lat, lng: query.lng };
     const radiusKm = query.radius_km ?? 50;
     const limit = query.limit ?? 20;
@@ -56,7 +50,25 @@ export class TournamentsService {
           ...(query.sport ? { sport: query.sport } : {}),
         },
         take: limit * 2,
+        ...(query.cursor ? { cursor: { id: query.cursor }, skip: 1 } : {}),
         orderBy: { id: 'asc' },
+        select: {
+          id: true,
+          name: true,
+          title: true,
+          sport: true,
+          status: true,
+          minGti: true,
+          maxGti: true,
+          venueName: true,
+          venueLat: true,
+          venueLng: true,
+          startDate: true,
+          registrationDeadline: true,
+          prizePool: true,
+          maxTeams: true,
+          teamSize: true,
+        },
       });
 
       const withDistances = allTournaments
@@ -130,6 +142,7 @@ export class TournamentsService {
       include: {
         brackets: {
           orderBy: { roundOrder: 'asc' },
+          take: 100,
         },
       },
     });

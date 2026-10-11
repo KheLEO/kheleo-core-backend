@@ -26,15 +26,10 @@ export class MatchmakingProcessor extends WorkerHost {
     }
 
     try {
-      const teamFormed = await this.matchmakingService.processBracketPool(
-        tournamentId,
-        bracketId,
-      );
+      const teamFormed = await this.matchmakingService.processBracketPool(tournamentId, bracketId);
 
       if (teamFormed) {
-        this.logger.log(
-          `Successfully formed complementary team in Bracket ${bracketId}`,
-        );
+        this.logger.log(`Successfully formed complementary team in Bracket ${bracketId}`);
       } else {
         this.logger.debug(
           `No team formed in this cycle for Bracket ${bracketId}. Waiting for queue pool growth.`,
@@ -44,9 +39,7 @@ export class MatchmakingProcessor extends WorkerHost {
       return teamFormed;
     } catch (err: unknown) {
       const errorMsg = err instanceof Error ? err.message : String(err);
-      this.logger.error(
-        `Matchmaking processor failed for Bracket ${bracketId}: ${errorMsg}`,
-      );
+      this.logger.error(`Matchmaking processor failed for Bracket ${bracketId}: ${errorMsg}`);
       throw err;
     }
   }

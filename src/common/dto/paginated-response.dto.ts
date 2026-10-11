@@ -4,7 +4,9 @@ export class PaginatedResponseDto<T> {
   @ApiProperty({ isArray: true })
   data!: T[];
 
-  @ApiPropertyOptional({ description: 'Cursor for next page, null if last page' })
+  @ApiPropertyOptional({
+    description: 'Cursor for next page, null if last page',
+  })
   next_cursor: string | null = null;
 
   @ApiProperty()

@@ -1,12 +1,7 @@
-import {
-  Injectable,
-  ConflictException,
-  NotFoundException,
-  Logger,
-} from '@nestjs/common';
+import { Injectable, ConflictException, NotFoundException, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../../infrastructure/database/prisma.service';
-import { GovIdType, IdentityVerification, VerificationStatus } from '@prisma/client';
+import { GovIdType, IdentityVerification, Prisma, VerificationStatus } from '@prisma/client';
 import * as crypto from 'node:crypto';
 
 @Injectable()
@@ -19,12 +14,15 @@ export class IdentityService {
     private readonly prisma: PrismaService,
     private readonly configService: ConfigService,
   ) {
-    this.pepper =
-      this.configService.get<string>('auth.identityPepper') ||
-      process.env.IDENTITY_PEPPER ||
-      'kheleo_prod_identity_pepper_secure_seed_2026';
-    this.defaultSaltVersion =
-      this.configService.get<number>('auth.identitySaltVersion') || 1;
+    const configuredPepper =
+      this.configService.get<string>('auth.identityPepper') || process.env.IDENTITY_PEPPER;
+    const isProduction =
+      this.configService.get<string>('app.nodeEnv', 'development') === 'production';
+    if (!configuredPepper && isProduction) {
+      throw new Error('IDENTITY_PEPPER must be configured in production.');
+    }
+    this.pepper = configuredPepper ?? 'local-development-identity-pepper';
+    this.defaultSaltVersion = this.configService.get<number>('auth.identitySaltVersion') || 1;
   }
 
   /**
@@ -46,10 +44,21 @@ export class IdentityService {
   /**
    * Checks whether a Government ID hash already exists in the identity ledger.
    */
-  async findByIdHash(idHash: string): Promise<IdentityVerification | null> {
+  async findByIdHash(idHash: string): Promise<IdentityRecordWithUser | null> {
     return this.prisma.identityVerification.findUnique({
       where: { idHash },
-      include: { user: true },
+      include: {
+        user: {
+          select: {
+            id: true,
+            phone: true,
+            email: true,
+            role: true,
+            isActive: true,
+            athleteProfile: { select: { id: true } },
+          },
+        },
+      },
     });
   }
 
@@ -132,3 +141,18 @@ export class IdentityService {
     });
   }
 }
+
+export type IdentityRecordWithUser = Prisma.IdentityVerificationGetPayload<{
+  include: {
+    user: {
+      select: {
+        id: true;
+        phone: true;
+        email: true;
+        role: true;
+        isActive: true;
+        athleteProfile: { select: { id: true } };
+      };
+    };
+  };
+}>;

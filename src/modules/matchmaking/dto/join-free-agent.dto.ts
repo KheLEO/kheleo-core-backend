@@ -3,7 +3,8 @@ import { IsNotEmpty, IsOptional, IsString } from 'class-validator';
 
 export class JoinFreeAgentDto {
   @ApiProperty({
-    description: 'Primary role of the athlete (e.g. BATSMAN, BOWLER, ALL_ROUNDER, WICKETKEEPER, GOALKEEPER, DEFENDER, MIDFIELDER, FORWARD)',
+    description:
+      'Primary role of the athlete (e.g. BATSMAN, BOWLER, ALL_ROUNDER, WICKETKEEPER, GOALKEEPER, DEFENDER, MIDFIELDER, FORWARD)',
     example: 'BATSMAN',
   })
   @IsString()

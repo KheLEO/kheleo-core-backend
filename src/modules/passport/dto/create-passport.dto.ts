@@ -12,7 +12,10 @@ import {
 import { SportType, TierClassification } from '@prisma/client';
 
 export class CreatePassportDto {
-  @ApiProperty({ example: '2005-04-12', description: 'ISO format date of birth' })
+  @ApiProperty({
+    example: '2005-04-12',
+    description: 'ISO format date of birth',
+  })
   @IsString()
   @IsNotEmpty()
   readonly dateOfBirth!: string;
@@ -42,7 +45,10 @@ export class CreatePassportDto {
   @IsNotEmpty()
   readonly state!: string;
 
-  @ApiPropertyOptional({ enum: TierClassification, default: TierClassification.RURAL })
+  @ApiPropertyOptional({
+    enum: TierClassification,
+    default: TierClassification.RURAL,
+  })
   @IsOptional()
   @IsEnum(TierClassification)
   readonly tierClassification?: TierClassification;

@@ -46,7 +46,8 @@ export class HeatmapsService {
         FROM athlete_profiles
         WHERE district IS NOT NULL AND district <> ''
         GROUP BY district
-        ORDER BY total_athletes DESC;
+        ORDER BY total_athletes DESC
+        LIMIT 500;
       `;
 
       const formatted: DistrictHeatmapRecord[] = rawResults.map((r) => {
@@ -78,19 +79,6 @@ export class HeatmapsService {
         `PostGIS query failed or spatial columns not populated, falling back to Prisma aggregation: ${String(sqlError)}`,
       );
 
-      // 2. Defensive Fallback using standard Prisma queries
-      const profiles = await this.prisma.athleteProfile.findMany({
-        where: { district: { not: '' } },
-        select: {
-          district: true,
-          gender: true,
-          gti: true,
-          currentGti: true,
-          locationLat: true,
-          locationLng: true,
-        },
-      });
-
       const districtMap = new Map<
         string,
         {
@@ -102,58 +90,80 @@ export class HeatmapsService {
         }
       >();
 
-      for (const p of profiles) {
-        const d = p.district || 'UNKNOWN';
-        if (!districtMap.has(d)) {
-          districtMap.set(d, {
-            total: 0,
-            femaleCount: 0,
-            gtiSum: 0,
-            lats: [],
-            lngs: [],
-          });
+      let cursorId: string | undefined;
+      do {
+        const profiles = await this.prisma.athleteProfile.findMany({
+          where: { district: { not: '' } },
+          select: {
+            id: true,
+            district: true,
+            gender: true,
+            gti: true,
+            currentGti: true,
+            locationLat: true,
+            locationLng: true,
+          },
+          orderBy: { id: 'asc' },
+          take: 500,
+          ...(cursorId ? { cursor: { id: cursorId }, skip: 1 } : {}),
+        });
+
+        for (const profile of profiles) {
+          const district = profile.district || 'UNKNOWN';
+          if (!districtMap.has(district)) {
+            districtMap.set(district, {
+              total: 0,
+              femaleCount: 0,
+              gtiSum: 0,
+              lats: [],
+              lngs: [],
+            });
+          }
+
+          const entry = districtMap.get(district)!;
+          entry.total += 1;
+          if (profile.gender.toUpperCase() === 'FEMALE') {
+            entry.femaleCount += 1;
+          }
+          const gtiValue = profile.gti > 0 ? profile.gti : Number(profile.currentGti) || 0;
+          entry.gtiSum += gtiValue;
+          if (profile.locationLat != null && profile.locationLng != null) {
+            entry.lats.push(profile.locationLat);
+            entry.lngs.push(profile.locationLng);
+          }
         }
 
-        const entry = districtMap.get(d)!;
-        entry.total += 1;
-        if (p.gender?.toUpperCase() === 'FEMALE') {
-          entry.femaleCount += 1;
+        cursorId = profiles.at(-1)?.id;
+        if (profiles.length < 500) {
+          break;
         }
-        const gtiVal = p.gti > 0 ? p.gti : Number(p.currentGti) || 0;
-        entry.gtiSum += gtiVal;
-        if (p.locationLat != null && p.locationLng != null) {
-          entry.lats.push(p.locationLat);
-          entry.lngs.push(p.locationLng);
-        }
-      }
+      } while (cursorId);
 
-      const formatted: DistrictHeatmapRecord[] = Array.from(
-        districtMap.entries(),
-      ).map(([district, stats]) => {
-        const avgGti = stats.total > 0 ? Number((stats.gtiSum / stats.total).toFixed(2)) : 0;
-        const femalePct =
-          stats.total > 0
-            ? Number(((stats.femaleCount / stats.total) * 100).toFixed(2))
-            : 0;
+      const formatted: DistrictHeatmapRecord[] = Array.from(districtMap.entries()).map(
+        ([district, stats]) => {
+          const avgGti = stats.total > 0 ? Number((stats.gtiSum / stats.total).toFixed(2)) : 0;
+          const femalePct =
+            stats.total > 0 ? Number(((stats.femaleCount / stats.total) * 100).toFixed(2)) : 0;
 
-        let centroid: Record<string, unknown> | null = null;
-        if (stats.lats.length > 0 && stats.lngs.length > 0) {
-          const avgLat = stats.lats.reduce((a, b) => a + b, 0) / stats.lats.length;
-          const avgLng = stats.lngs.reduce((a, b) => a + b, 0) / stats.lngs.length;
-          centroid = {
-            type: 'Point',
-            coordinates: [Number(avgLng.toFixed(6)), Number(avgLat.toFixed(6))],
+          let centroid: Record<string, unknown> | null = null;
+          if (stats.lats.length > 0 && stats.lngs.length > 0) {
+            const avgLat = stats.lats.reduce((a, b) => a + b, 0) / stats.lats.length;
+            const avgLng = stats.lngs.reduce((a, b) => a + b, 0) / stats.lngs.length;
+            centroid = {
+              type: 'Point',
+              coordinates: [Number(avgLng.toFixed(6)), Number(avgLat.toFixed(6))],
+            };
+          }
+
+          return {
+            district,
+            total_athletes: stats.total,
+            average_gti: avgGti,
+            female_participation_pct: femalePct,
+            centroid,
           };
-        }
-
-        return {
-          district,
-          total_athletes: stats.total,
-          average_gti: avgGti,
-          female_participation_pct: femalePct,
-          centroid,
-        };
-      });
+        },
+      );
 
       return {
         success: true,

@@ -3,29 +3,34 @@ import { IoAdapter } from '@nestjs/platform-socket.io';
 import { ServerOptions } from 'socket.io';
 import { createAdapter } from '@socket.io/redis-adapter';
 import Redis from 'ioredis';
+import { RedisService } from '../cache/redis.service';
 
 export class RedisIoAdapter extends IoAdapter {
   private adapterConstructor: ReturnType<typeof createAdapter> | undefined;
+  private pubClient: Redis | undefined;
+  private subClient: Redis | undefined;
 
-  constructor(private readonly appContext: INestApplicationContext) {
+  constructor(
+    appContext: INestApplicationContext,
+    private readonly redisService: RedisService,
+    private readonly corsOrigins: readonly string[],
+  ) {
     super(appContext);
   }
 
   async connectToRedis(): Promise<void> {
-    const redisHost = process.env.REDIS_HOST ?? 'localhost';
-    const redisPort = parseInt(process.env.REDIS_PORT ?? '6379', 10);
+    this.pubClient = this.redisService.client.duplicate({ lazyConnect: true });
+    this.subClient = this.redisService.client.duplicate({ lazyConnect: true });
+    await Promise.all([this.pubClient.connect(), this.subClient.connect()]);
 
-    const pubClient = new Redis({ host: redisHost, port: redisPort });
-    const subClient = pubClient.duplicate();
-
-    this.adapterConstructor = createAdapter(pubClient, subClient);
+    this.adapterConstructor = createAdapter(this.pubClient, this.subClient);
   }
 
   createIOServer(port: number, options?: Partial<ServerOptions>): unknown {
     const server = super.createIOServer(port, {
       ...options,
       cors: {
-        origin: '*',
+        origin: [...this.corsOrigins],
         methods: ['GET', 'POST'],
       },
     }) as ReturnType<IoAdapter['createIOServer']> & {
@@ -37,5 +42,15 @@ export class RedisIoAdapter extends IoAdapter {
     }
 
     return server;
+  }
+
+  async close(server: Parameters<IoAdapter['close']>[0]): Promise<void> {
+    await super.close(server);
+    await Promise.allSettled([
+      this.pubClient?.quit() ?? Promise.resolve('OK'),
+      this.subClient?.quit() ?? Promise.resolve('OK'),
+    ]);
+    this.pubClient = undefined;
+    this.subClient = undefined;
   }
 }

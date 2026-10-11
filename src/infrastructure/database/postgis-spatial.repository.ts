@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from './prisma.service';
+import { Prisma, SportType } from '@prisma/client';
 
 export interface GeoPoint {
   readonly lat: number;
@@ -36,17 +37,16 @@ export class PostgisSpatialRepository {
   async findTournamentsWithinRadius(
     point: GeoPoint,
     radiusKm: number,
-    sport?: string,
+    sport?: SportType,
     limit = 20,
     cursorId?: string,
   ): Promise<readonly SpatialTournamentRow[]> {
     const radiusMeters = radiusKm * 1000;
 
-    const sportFilter = sport ? `AND sport = '${sport}'` : '';
-    const cursorFilter = cursorId ? `AND id > '${cursorId}'` : '';
+    const sportFilter = sport ? Prisma.sql`AND sport = ${sport}::"SportType"` : Prisma.empty;
+    const cursorFilter = cursorId ? Prisma.sql`AND id > ${cursorId}::uuid` : Prisma.empty;
 
-    const results = await this.prisma.$queryRawUnsafe<SpatialTournamentRow[]>(
-      `
+    const results = await this.prisma.$queryRaw<SpatialTournamentRow[]>(Prisma.sql`
       SELECT
         id,
         COALESCE(NULLIF(name, ''), title, 'Tournament') AS name,
@@ -65,62 +65,22 @@ export class PostgisSpatialRepository {
         start_date,
         ST_Distance(
           COALESCE(venue_geom, ST_SetSRID(ST_MakePoint(venue_lng, venue_lat), 4326))::geography,
-          ST_SetSRID(ST_MakePoint($1, $2), 4326)::geography
+          ST_SetSRID(ST_MakePoint(${point.lng}, ${point.lat}), 4326)::geography
         ) / 1000.0 AS distance_km
       FROM tournaments
       WHERE status = 'REGISTRATION_OPEN'
         AND (venue_geom IS NOT NULL OR (venue_lat IS NOT NULL AND venue_lng IS NOT NULL))
         AND ST_DWithin(
           COALESCE(venue_geom, ST_SetSRID(ST_MakePoint(venue_lng, venue_lat), 4326))::geography,
-          ST_SetSRID(ST_MakePoint($1, $2), 4326)::geography,
-          $3
+          ST_SetSRID(ST_MakePoint(${point.lng}, ${point.lat}), 4326)::geography,
+          ${radiusMeters}
         )
         ${sportFilter}
         ${cursorFilter}
       ORDER BY distance_km ASC
-      LIMIT $4
-    `,
-      point.lng,
-      point.lat,
-      radiusMeters,
-      limit,
-    );
+      LIMIT ${limit}
+    `);
 
     return results;
-  }
-
-  /**
-   * Aggregates athlete count and average GTI by district for heatmap rendering.
-   */
-  async getRegionalDensity(
-    sport?: string,
-    state?: string,
-  ): Promise<ReadonlyArray<{
-    readonly district: string;
-    readonly state: string;
-    readonly athlete_count: number;
-    readonly avg_gti: number;
-    readonly center_lat: number;
-    readonly center_lng: number;
-  }>> {
-    const sportFilter = sport ? `AND primary_sport = '${sport}'` : '';
-    const stateFilter = state ? `AND state = '${state}'` : '';
-
-    return this.prisma.$queryRawUnsafe(`
-      SELECT
-        district,
-        state,
-        COUNT(*)::int AS athlete_count,
-        AVG(current_gti)::float AS avg_gti,
-        AVG(location_lat)::float AS center_lat,
-        AVG(location_lng)::float AS center_lng
-      FROM athlete_profiles
-      WHERE location_lat IS NOT NULL
-        AND location_lng IS NOT NULL
-        ${sportFilter}
-        ${stateFilter}
-      GROUP BY district, state
-      ORDER BY athlete_count DESC
-    `);
   }
 }

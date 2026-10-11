@@ -5,6 +5,8 @@ import { PrismaService } from '../src/infrastructure/database/prisma.service';
 import { ConfigService } from '@nestjs/config';
 import { GovIdType, UserRole } from '@prisma/client';
 import { PaginatedResponseDto } from '../src/common/dto/paginated-response.dto';
+import { AuthService } from '../src/modules/auth/auth.service';
+import { ForbiddenException, ConflictException } from '@nestjs/common';
 
 describe('Phase 2: Identity, Anti-Account Reset, & Passport Tests', () => {
   const mockConfigService = {
@@ -36,6 +38,112 @@ describe('Phase 2: Identity, Anti-Account Reset, & Passport Tests', () => {
       assert.strictEqual(typeof hash, 'string');
       assert.strictEqual(hash.length, 64);
       assert.match(hash, /^[a-f0-9]{64}$/);
+    });
+
+    it('re-attaches the permanent profile when Gov ID and contact both match', async () => {
+      const permanentUser = {
+        id: 'historical-user-id',
+        phone: '+919876543210',
+        email: 'athlete@kheleo.test',
+        role: UserRole.ATHLETE,
+        isActive: false,
+        athleteProfile: { id: 'permanent-profile-id' },
+      };
+      const reattachPrisma = {
+        identityVerification: {
+          findUnique: async () => ({
+            id: 'identity-id',
+            userId: permanentUser.id,
+            idHash: 'hash',
+            status: 'VERIFIED',
+            user: permanentUser,
+          }),
+          update: async () => ({}),
+        },
+        user: {
+          update: async () => ({ ...permanentUser, isActive: true }),
+        },
+        refreshToken: {
+          create: async () => ({}),
+        },
+        $transaction: async (
+          callback: (transaction: unknown) => Promise<unknown>,
+        ) => callback(reattachPrisma),
+      };
+      const reattachIdentity = new IdentityService(
+        reattachPrisma as unknown as PrismaService,
+        mockConfigService as unknown as ConfigService,
+      );
+      const auth = new AuthService(
+        reattachPrisma as unknown as PrismaService,
+        reattachIdentity,
+        mockConfigService as unknown as ConfigService,
+      );
+
+      const result = await auth.register({
+        phone: permanentUser.phone,
+        governmentId: {
+          idType: GovIdType.AADHAAR,
+          idNumber: '542189012345',
+        },
+      });
+
+      assert.strictEqual(result.user.id, permanentUser.id);
+      assert.strictEqual(result.user.athleteProfileId, 'permanent-profile-id');
+      assert.strictEqual(result.user.isVerified, true);
+    });
+
+    it('blocks profile takeover when Gov ID matches but contact does not', async () => {
+      const takeoverPrisma = {
+        identityVerification: {
+          findUnique: async () => ({
+            id: 'identity-id',
+            userId: 'historical-user-id',
+            idHash: 'hash',
+            status: 'VERIFIED',
+            user: {
+              id: 'historical-user-id',
+              phone: '+919876543210',
+              email: null,
+              role: UserRole.ATHLETE,
+              isActive: true,
+              athleteProfile: { id: 'permanent-profile-id' },
+            },
+          }),
+        },
+      };
+      const takeoverIdentity = new IdentityService(
+        takeoverPrisma as unknown as PrismaService,
+        mockConfigService as unknown as ConfigService,
+      );
+      const auth = new AuthService(
+        takeoverPrisma as unknown as PrismaService,
+        takeoverIdentity,
+        mockConfigService as unknown as ConfigService,
+      );
+
+      await assert.rejects(
+        auth.register({
+          phone: '+919999999999',
+          governmentId: {
+            idType: GovIdType.AADHAAR,
+            idNumber: '542189012345',
+          },
+        }),
+        ConflictException,
+      );
+    });
+
+    it('prevents public registration from escalating to privileged roles', async () => {
+      const auth = new AuthService(
+        mockPrisma as unknown as PrismaService,
+        identityService,
+        mockConfigService as unknown as ConfigService,
+      );
+      await assert.rejects(
+        auth.register({ phone: '+919876543210', role: UserRole.SUPER_ADMIN }),
+        ForbiddenException,
+      );
     });
 
     it('normalizes spaces and hyphens so identical IDs produce identical hashes', () => {
