@@ -98,6 +98,13 @@ enum AlertSeverity {
   CRITICAL
 }
 
+enum RegistrationStatus {
+  PENDING
+  CONFIRMED
+  CANCELLED
+  REJECTED_SANDBAGGING
+}
+
 // ─── MODELS ───────────────────────────────────────────────────────────────
 
 model User {
@@ -117,6 +124,7 @@ model User {
   createdTeams      Team[]                @relation("TeamCaptain")
   idempotencyKeys   IdempotencyRecord[]
   refreshTokens     RefreshToken[]
+  registrations     Registration[]
 
   @@index([role, isActive])
   @@map("users")
@@ -174,8 +182,8 @@ model AthleteProfile {
 
   /// PostGIS geometry column - managed via raw SQL migrations
   locationGeom Unsupported("geometry(Point, 4326)")? @map("location_geom")
-  locationLat  Float?                                 @map("location_lat")
-  locationLng  Float?                                 @map("location_lng")
+  locationLat  Float?                                @map("location_lat")
+  locationLng  Float?                                @map("location_lng")
 
   currentGti        Decimal @default(30.00) @map("current_gti") @db.Decimal(5, 2)
   posturePoints     Int     @default(0) @map("posture_points")
@@ -186,12 +194,12 @@ model AthleteProfile {
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
   updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz
 
-  user             User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user             User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
   sportRecords     SportPassportRecord[]
   drillSubmissions DrillSubmission[]
   gtiHistories     GtiHistory[]
   healthAlerts     HealthAlert[]
-  scoutDossiers    ScoutDossier[]      @relation("AthleteDossiers")
+  scoutDossiers    ScoutDossier[]        @relation("AthleteDossiers")
   teamMemberships  TeamMember[]
   freeAgentEntries FreeAgentPool[]
 
@@ -203,17 +211,17 @@ model AthleteProfile {
 }
 
 model SportPassportRecord {
-  id             String    @id @default(uuid()) @db.Uuid
-  athleteId      String    @map("athlete_id") @db.Uuid
-  sport          SportType
-  primaryRole    String    @map("primary_role") @db.VarChar(50)
-  secondaryRoles String[]  @default([]) @map("secondary_roles")
-  totalMatches   Int       @default(0) @map("total_matches")
-  winCount       Int       @default(0) @map("win_count")
-  winStreak      Int       @default(0) @map("win_streak")
-  verifiedMetrics Json     @default("{}") @map("verified_metrics") @db.JsonB
-  earnedBadges    Json     @default("[]") @map("earned_badges") @db.JsonB
-  updatedAt      DateTime  @updatedAt @map("updated_at") @db.Timestamptz
+  id              String    @id @default(uuid()) @db.Uuid
+  athleteId       String    @map("athlete_id") @db.Uuid
+  sport           SportType
+  primaryRole     String    @map("primary_role") @db.VarChar(50)
+  secondaryRoles  String[]  @default([]) @map("secondary_roles")
+  totalMatches    Int       @default(0) @map("total_matches")
+  winCount        Int       @default(0) @map("win_count")
+  winStreak       Int       @default(0) @map("win_streak")
+  verifiedMetrics Json      @default("{}") @map("verified_metrics") @db.JsonB
+  earnedBadges    Json      @default("[]") @map("earned_badges") @db.JsonB
+  updatedAt       DateTime  @updatedAt @map("updated_at") @db.Timestamptz
 
   athlete AthleteProfile @relation(fields: [athleteId], references: [id], onDelete: Cascade)
 
@@ -225,6 +233,7 @@ model SportPassportRecord {
 model Tournament {
   id          String           @id @default(uuid()) @db.Uuid
   organizerId String           @map("organizer_id") @db.Uuid
+  name        String           @default("") @db.VarChar(255)
   title       String           @db.VarChar(255)
   sport       SportType
   status      TournamentStatus @default(DRAFT)
@@ -265,15 +274,41 @@ model Bracket {
   id           String      @id @default(uuid()) @db.Uuid
   tournamentId String      @map("tournament_id") @db.Uuid
   name         String      @db.VarChar(100)
+  tierName     String      @default("OPEN") @map("tier_name") @db.VarChar(100)
+  minGti       Decimal     @default(0.00) @map("min_gti") @db.Decimal(5, 2)
+  maxGti       Decimal     @default(100.00) @map("max_gti") @db.Decimal(5, 2)
+  entryFee     Decimal     @default(0.00) @map("entry_fee") @db.Decimal(10, 2)
+  maxTeams     Int         @default(16) @map("max_teams")
   bracketType  BracketType @default(SINGLE_ELIMINATION) @map("bracket_type")
   roundOrder   Int         @default(1) @map("round_order")
   config       Json        @default("{}") @db.JsonB
 
-  tournament Tournament @relation(fields: [tournamentId], references: [id], onDelete: Cascade)
-  matches    Match[]
+  tournament    Tournament     @relation(fields: [tournamentId], references: [id], onDelete: Cascade)
+  matches       Match[]
+  registrations Registration[]
 
   @@index([tournamentId, roundOrder])
   @@map("brackets")
+}
+
+model Registration {
+  id           String             @id @default(uuid()) @db.Uuid
+  bracketId    String             @map("bracket_id") @db.Uuid
+  userId       String?            @map("user_id") @db.Uuid
+  teamId       String?            @map("team_id") @db.Uuid
+  status       RegistrationStatus @default(CONFIRMED)
+  feePaid      Decimal            @default(0.00) @map("fee_paid") @db.Decimal(10, 2)
+  registeredAt DateTime           @default(now()) @map("registered_at") @db.Timestamptz
+  metadata     Json?              @db.JsonB
+
+  bracket Bracket @relation(fields: [bracketId], references: [id], onDelete: Cascade)
+  user    User?   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  team    Team?   @relation(fields: [teamId], references: [id], onDelete: SetNull)
+
+  @@unique([bracketId, userId])
+  @@index([bracketId, status])
+  @@index([userId])
+  @@map("registrations")
 }
 
 model Team {
@@ -292,6 +327,7 @@ model Team {
   matchesAsTeamB   Match[]         @relation("MatchTeamB")
   wonMatches       Match[]         @relation("MatchWinner")
   formedFromAgents FreeAgentPool[]
+  registrations    Registration[]
 
   @@index([tournamentId, isFreeAgentTeam])
   @@map("teams")
@@ -373,8 +409,8 @@ model DrillSubmission {
   rawScore           Decimal                 @map("raw_score") @db.Decimal(5, 2)
   normalizedScore    Decimal                 @map("normalized_score") @db.Decimal(5, 2)
   deviceSignature    String                  @map("device_signature") @db.VarChar(256)
-  clientTimestamp     DateTime                @map("client_timestamp") @db.Timestamptz
-  serverTimestamp     DateTime                @default(now()) @map("server_timestamp") @db.Timestamptz
+  clientTimestamp    DateTime                @map("client_timestamp") @db.Timestamptz
+  serverTimestamp    DateTime                @default(now()) @map("server_timestamp") @db.Timestamptz
   verificationStatus DrillVerificationStatus @default(VALID) @map("verification_status")
   pointsAwarded      Int                     @default(0) @map("points_awarded")
 

@@ -56,7 +56,16 @@ export class Rfc7807ExceptionFilter implements ExceptionFilter {
       this.logger.error(exception.message, exception.stack);
     }
 
-    const problem: ProblemDetails = {
+    let extraDetails: Record<string, unknown> = {};
+    if (exception instanceof HttpException) {
+      const res = exception.getResponse();
+      if (typeof res === 'object' && res !== null) {
+        const { error, message, ...rest } = res as Record<string, unknown>;
+        extraDetails = rest;
+      }
+    }
+
+    const problem: ProblemDetails & Record<string, unknown> = {
       type: `https://api.kheleo.com/errors/http-${status}`,
       title,
       status,
@@ -64,6 +73,7 @@ export class Rfc7807ExceptionFilter implements ExceptionFilter {
       instance: request.url,
       invalidParams,
       timestamp: new Date().toISOString(),
+      ...extraDetails,
     };
 
     void response

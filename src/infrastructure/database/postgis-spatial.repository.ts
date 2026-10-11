@@ -8,6 +8,7 @@ export interface GeoPoint {
 
 export interface SpatialTournamentRow {
   readonly id: string;
+  readonly name: string;
   readonly title: string;
   readonly sport: string;
   readonly status: string;
@@ -42,28 +43,35 @@ export class PostgisSpatialRepository {
     const radiusMeters = radiusKm * 1000;
 
     const sportFilter = sport ? `AND sport = '${sport}'` : '';
-    const cursorFilter = cursorId
-      ? `AND id > '${cursorId}'`
-      : '';
+    const cursorFilter = cursorId ? `AND id > '${cursorId}'` : '';
 
-    const results = await this.prisma.$queryRawUnsafe<SpatialTournamentRow[]>(`
+    const results = await this.prisma.$queryRawUnsafe<SpatialTournamentRow[]>(
+      `
       SELECT
-        id, title, sport, status,
+        id,
+        COALESCE(NULLIF(name, ''), title, 'Tournament') AS name,
+        title,
+        sport,
+        status,
         min_gti::float AS min_gti,
         max_gti::float AS max_gti,
-        venue_name, venue_lat, venue_lng,
+        venue_name,
+        venue_lat,
+        venue_lng,
         prize_pool::float AS prize_pool,
-        team_size, max_teams,
-        registration_deadline, start_date,
+        team_size,
+        max_teams,
+        registration_deadline,
+        start_date,
         ST_Distance(
-          venue_geom::geography,
+          COALESCE(venue_geom, ST_SetSRID(ST_MakePoint(venue_lng, venue_lat), 4326))::geography,
           ST_SetSRID(ST_MakePoint($1, $2), 4326)::geography
         ) / 1000.0 AS distance_km
       FROM tournaments
       WHERE status = 'REGISTRATION_OPEN'
-        AND venue_geom IS NOT NULL
+        AND (venue_geom IS NOT NULL OR (venue_lat IS NOT NULL AND venue_lng IS NOT NULL))
         AND ST_DWithin(
-          venue_geom::geography,
+          COALESCE(venue_geom, ST_SetSRID(ST_MakePoint(venue_lng, venue_lat), 4326))::geography,
           ST_SetSRID(ST_MakePoint($1, $2), 4326)::geography,
           $3
         )
@@ -71,7 +79,12 @@ export class PostgisSpatialRepository {
         ${cursorFilter}
       ORDER BY distance_km ASC
       LIMIT $4
-    `, point.lng, point.lat, radiusMeters, limit);
+    `,
+      point.lng,
+      point.lat,
+      radiusMeters,
+      limit,
+    );
 
     return results;
   }
