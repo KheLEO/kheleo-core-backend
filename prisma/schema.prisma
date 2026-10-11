@@ -1,0 +1,459 @@
+datasource db {
+  provider   = "postgresql"
+  url        = env("DATABASE_URL")
+  extensions = [postgis(version: "3.4")]
+}
+
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["postgresqlExtensions"]
+}
+
+// ─── ENUMS ────────────────────────────────────────────────────────────────
+
+enum UserRole {
+  ATHLETE
+  SCOUT
+  UMPIRE
+  ORGANIZER
+  FEDERATION_ADMIN
+  SUPER_ADMIN
+}
+
+enum GovIdType {
+  AADHAAR
+  VOTER_ID
+  PASSPORT
+  DRIVING_LICENSE
+  BIRTH_CERTIFICATE
+}
+
+enum VerificationStatus {
+  UNVERIFIED
+  VERIFIED
+  FLAGGED_DUPLICATE
+  REVOKED
+}
+
+enum SportType {
+  CRICKET
+  FOOTBALL
+  BADMINTON
+  ATHLETICS
+  BASKETBALL
+  KABADDI
+}
+
+enum TierClassification {
+  RURAL
+  TIER_3
+  TIER_2
+  TIER_1
+  METRO
+}
+
+enum TournamentStatus {
+  DRAFT
+  REGISTRATION_OPEN
+  REGISTRATION_CLOSED
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+}
+
+enum BracketType {
+  SINGLE_ELIMINATION
+  DOUBLE_ELIMINATION
+  ROUND_ROBIN
+  SWISS
+}
+
+enum MatchStatus {
+  SCHEDULED
+  WARMUP
+  LIVE
+  PAUSED_SAFETY
+  COMPLETED
+  ABANDONED
+}
+
+enum FreeAgentStatus {
+  QUEUED
+  EVALUATING
+  MATCHED
+  EXPIRED
+  WITHDRAWN
+}
+
+enum DrillVerificationStatus {
+  VALID
+  INVALID_SIGNATURE
+  ANOMALOUS_METRICS
+  REJECTED_OUT_OF_BOUNDS
+}
+
+enum AlertSeverity {
+  INFO
+  WARNING
+  CRITICAL
+}
+
+// ─── MODELS ───────────────────────────────────────────────────────────────
+
+model User {
+  id        String   @id @default(uuid()) @db.Uuid
+  phone     String?  @unique @db.VarChar(20)
+  email     String?  @unique @db.VarChar(255)
+  role      UserRole @default(ATHLETE)
+  isActive  Boolean  @default(true) @map("is_active")
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz
+
+  athleteProfile    AthleteProfile?
+  identityRecord    IdentityVerification?
+  scoutDossiers     ScoutDossier[]        @relation("ScoutAuthor")
+  organizedTours    Tournament[]          @relation("OrganizerTournaments")
+  officiatedMatches Match[]               @relation("UmpireMatches")
+  createdTeams      Team[]                @relation("TeamCaptain")
+  idempotencyKeys   IdempotencyRecord[]
+  refreshTokens     RefreshToken[]
+
+  @@index([role, isActive])
+  @@map("users")
+}
+
+model RefreshToken {
+  id        String   @id @default(uuid()) @db.Uuid
+  userId    String   @map("user_id") @db.Uuid
+  tokenHash String   @unique @map("token_hash") @db.VarChar(64)
+  family    String   @db.VarChar(64)
+  revoked   Boolean  @default(false)
+  expiresAt DateTime @map("expires_at") @db.Timestamptz
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([family])
+  @@index([userId, revoked])
+  @@map("refresh_tokens")
+}
+
+model IdentityVerification {
+  id                String             @id @default(uuid()) @db.Uuid
+  userId            String             @unique @map("user_id") @db.Uuid
+  idHash            String             @unique @map("id_hash") @db.VarChar(64)
+  idType            GovIdType          @map("id_type")
+  saltVersion       Int                @default(1) @map("salt_version")
+  status            VerificationStatus @default(VERIFIED)
+  reLinkedCount     Int                @default(0) @map("re_linked_count")
+  historicalUserIds String[]           @default([]) @map("historical_user_ids")
+  verifiedAt        DateTime           @default(now()) @map("verified_at") @db.Timestamptz
+  metadata          Json?              @db.JsonB
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([idHash])
+  @@index([status])
+  @@map("identity_verifications")
+}
+
+model AthleteProfile {
+  id                 String             @id @default(uuid()) @db.Uuid
+  userId             String             @unique @map("user_id") @db.Uuid
+  dateOfBirth        DateTime           @map("date_of_birth") @db.Date
+  gender             String             @db.VarChar(16)
+  primarySport       SportType          @map("primary_sport")
+  secondarySports    SportType[]        @default([]) @map("secondary_sports")
+  district           String             @db.VarChar(100)
+  state              String             @db.VarChar(100)
+  tierClassification TierClassification @default(RURAL) @map("tier_classification")
+
+  heightCm     Decimal? @map("height_cm") @db.Decimal(5, 2)
+  weightKg     Decimal? @map("weight_kg") @db.Decimal(5, 2)
+  dominantSide String?  @map("dominant_side") @db.VarChar(16)
+
+  /// PostGIS geometry column - managed via raw SQL migrations
+  locationGeom Unsupported("geometry(Point, 4326)")? @map("location_geom")
+  locationLat  Float?                                 @map("location_lat")
+  locationLng  Float?                                 @map("location_lng")
+
+  currentGti        Decimal @default(30.00) @map("current_gti") @db.Decimal(5, 2)
+  posturePoints     Int     @default(0) @map("posture_points")
+  wearableScore     Decimal @default(50.00) @map("wearable_score") @db.Decimal(5, 2)
+  matchPerfScore    Decimal @default(50.00) @map("match_perf_score") @db.Decimal(5, 2)
+  isScoutSearchable Boolean @default(true) @map("is_scout_searchable")
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz
+
+  user             User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  sportRecords     SportPassportRecord[]
+  drillSubmissions DrillSubmission[]
+  gtiHistories     GtiHistory[]
+  healthAlerts     HealthAlert[]
+  scoutDossiers    ScoutDossier[]      @relation("AthleteDossiers")
+  teamMemberships  TeamMember[]
+  freeAgentEntries FreeAgentPool[]
+
+  @@index([currentGti(sort: Desc)])
+  @@index([primarySport, currentGti(sort: Desc)])
+  @@index([district, state])
+  @@index([tierClassification, currentGti(sort: Desc)])
+  @@map("athlete_profiles")
+}
+
+model SportPassportRecord {
+  id             String    @id @default(uuid()) @db.Uuid
+  athleteId      String    @map("athlete_id") @db.Uuid
+  sport          SportType
+  primaryRole    String    @map("primary_role") @db.VarChar(50)
+  secondaryRoles String[]  @default([]) @map("secondary_roles")
+  totalMatches   Int       @default(0) @map("total_matches")
+  winCount       Int       @default(0) @map("win_count")
+  winStreak      Int       @default(0) @map("win_streak")
+  verifiedMetrics Json     @default("{}") @map("verified_metrics") @db.JsonB
+  earnedBadges    Json     @default("[]") @map("earned_badges") @db.JsonB
+  updatedAt      DateTime  @updatedAt @map("updated_at") @db.Timestamptz
+
+  athlete AthleteProfile @relation(fields: [athleteId], references: [id], onDelete: Cascade)
+
+  @@unique([athleteId, sport])
+  @@index([sport, primaryRole])
+  @@map("sport_passport_records")
+}
+
+model Tournament {
+  id          String           @id @default(uuid()) @db.Uuid
+  organizerId String           @map("organizer_id") @db.Uuid
+  title       String           @db.VarChar(255)
+  sport       SportType
+  status      TournamentStatus @default(DRAFT)
+  minGti      Decimal          @default(0.00) @map("min_gti") @db.Decimal(5, 2)
+  maxGti      Decimal          @default(100.00) @map("max_gti") @db.Decimal(5, 2)
+  maxTeams    Int              @map("max_teams")
+  teamSize    Int              @map("team_size")
+  prizePool   Decimal          @default(0.00) @map("prize_pool") @db.Decimal(12, 2)
+  currency    String           @default("INR") @db.VarChar(3)
+
+  venueName String @map("venue_name") @db.VarChar(255)
+  venueLat  Float  @map("venue_lat")
+  venueLng  Float  @map("venue_lng")
+
+  /// PostGIS geometry column - managed via raw SQL trigger on insert/update
+  venueGeom Unsupported("geometry(Point, 4326)")? @map("venue_geom")
+
+  registrationDeadline DateTime @map("registration_deadline") @db.Timestamptz
+  startDate            DateTime @map("start_date") @db.Timestamptz
+  endDate              DateTime @map("end_date") @db.Timestamptz
+  rulesConfig          Json     @default("{}") @map("rules_config") @db.JsonB
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz
+
+  organizer      User            @relation("OrganizerTournaments", fields: [organizerId], references: [id])
+  brackets       Bracket[]
+  teams          Team[]
+  freeAgentQueue FreeAgentPool[]
+
+  @@index([sport, status])
+  @@index([minGti, maxGti])
+  @@index([registrationDeadline])
+  @@map("tournaments")
+}
+
+model Bracket {
+  id           String      @id @default(uuid()) @db.Uuid
+  tournamentId String      @map("tournament_id") @db.Uuid
+  name         String      @db.VarChar(100)
+  bracketType  BracketType @default(SINGLE_ELIMINATION) @map("bracket_type")
+  roundOrder   Int         @default(1) @map("round_order")
+  config       Json        @default("{}") @db.JsonB
+
+  tournament Tournament @relation(fields: [tournamentId], references: [id], onDelete: Cascade)
+  matches    Match[]
+
+  @@index([tournamentId, roundOrder])
+  @@map("brackets")
+}
+
+model Team {
+  id               String   @id @default(uuid()) @db.Uuid
+  tournamentId     String   @map("tournament_id") @db.Uuid
+  name             String   @db.VarChar(100)
+  captainId        String?  @map("captain_id") @db.Uuid
+  isFreeAgentTeam  Boolean  @default(false) @map("is_free_agent_team")
+  compositeGti     Decimal  @default(0.00) @map("composite_gti") @db.Decimal(5, 2)
+  registrationDate DateTime @default(now()) @map("registration_date") @db.Timestamptz
+
+  tournament       Tournament      @relation(fields: [tournamentId], references: [id], onDelete: Cascade)
+  captain          User?           @relation("TeamCaptain", fields: [captainId], references: [id], onDelete: SetNull)
+  members          TeamMember[]
+  matchesAsTeamA   Match[]         @relation("MatchTeamA")
+  matchesAsTeamB   Match[]         @relation("MatchTeamB")
+  wonMatches       Match[]         @relation("MatchWinner")
+  formedFromAgents FreeAgentPool[]
+
+  @@index([tournamentId, isFreeAgentTeam])
+  @@map("teams")
+}
+
+model TeamMember {
+  id        String   @id @default(uuid()) @db.Uuid
+  teamId    String   @map("team_id") @db.Uuid
+  athleteId String   @map("athlete_id") @db.Uuid
+  role      String   @db.VarChar(50)
+  joinedAt  DateTime @default(now()) @map("joined_at") @db.Timestamptz
+
+  team    Team           @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  athlete AthleteProfile @relation(fields: [athleteId], references: [id], onDelete: Cascade)
+
+  @@unique([teamId, athleteId])
+  @@index([athleteId])
+  @@map("team_members")
+}
+
+model FreeAgentPool {
+  id             String          @id @default(uuid()) @db.Uuid
+  tournamentId   String          @map("tournament_id") @db.Uuid
+  athleteId      String          @map("athlete_id") @db.Uuid
+  sport          SportType
+  preferredRole  String          @map("preferred_role") @db.VarChar(50)
+  secondaryRoles String[]        @default([]) @map("secondary_roles")
+  athleteGti     Decimal         @map("athlete_gti") @db.Decimal(5, 2)
+  status         FreeAgentStatus @default(QUEUED)
+  queuedAt       DateTime        @default(now()) @map("queued_at") @db.Timestamptz
+  matchedAt      DateTime?       @map("matched_at") @db.Timestamptz
+  matchedTeamId  String?         @map("matched_team_id") @db.Uuid
+
+  tournament  Tournament     @relation(fields: [tournamentId], references: [id], onDelete: Cascade)
+  athlete     AthleteProfile @relation(fields: [athleteId], references: [id], onDelete: Cascade)
+  matchedTeam Team?          @relation(fields: [matchedTeamId], references: [id], onDelete: SetNull)
+
+  @@unique([tournamentId, athleteId])
+  @@index([tournamentId, status, preferredRole])
+  @@map("free_agent_pools")
+}
+
+model Match {
+  id             String      @id @default(uuid()) @db.Uuid
+  bracketId      String      @map("bracket_id") @db.Uuid
+  round          Int         @default(1)
+  matchNumber    Int         @map("match_number")
+  teamAId        String      @map("team_a_id") @db.Uuid
+  teamBId        String      @map("team_b_id") @db.Uuid
+  umpireId       String?     @map("umpire_id") @db.Uuid
+  scheduledStart DateTime    @map("scheduled_start") @db.Timestamptz
+  status         MatchStatus @default(SCHEDULED)
+  winnerTeamId   String?     @map("winner_team_id") @db.Uuid
+  scoreSummary   Json        @default("{}") @map("score_summary") @db.JsonB
+  pauseReason    String?     @map("pause_reason") @db.VarChar(255)
+  pausedAt       DateTime?   @map("paused_at") @db.Timestamptz
+
+  bracket      Bracket       @relation(fields: [bracketId], references: [id], onDelete: Cascade)
+  teamA        Team          @relation("MatchTeamA", fields: [teamAId], references: [id])
+  teamB        Team          @relation("MatchTeamB", fields: [teamBId], references: [id])
+  umpire       User?         @relation("UmpireMatches", fields: [umpireId], references: [id])
+  winnerTeam   Team?         @relation("MatchWinner", fields: [winnerTeamId], references: [id])
+  healthAlerts HealthAlert[]
+
+  @@index([bracketId, status])
+  @@index([teamAId, teamBId])
+  @@map("matches")
+}
+
+model DrillSubmission {
+  id                 String                  @id @default(uuid()) @db.Uuid
+  athleteId          String                  @map("athlete_id") @db.Uuid
+  drillId            String                  @map("drill_id") @db.VarChar(64)
+  sport              SportType
+  drillType          String                  @map("drill_type") @db.VarChar(64)
+  framesAnalyzed     Int                     @map("frames_analyzed")
+  jointAnglesSummary Json                    @map("joint_angles_summary") @db.JsonB
+  flawFlags          Json                    @map("flaw_flags") @db.JsonB
+  rawScore           Decimal                 @map("raw_score") @db.Decimal(5, 2)
+  normalizedScore    Decimal                 @map("normalized_score") @db.Decimal(5, 2)
+  deviceSignature    String                  @map("device_signature") @db.VarChar(256)
+  clientTimestamp     DateTime                @map("client_timestamp") @db.Timestamptz
+  serverTimestamp     DateTime                @default(now()) @map("server_timestamp") @db.Timestamptz
+  verificationStatus DrillVerificationStatus @default(VALID) @map("verification_status")
+  pointsAwarded      Int                     @default(0) @map("points_awarded")
+
+  athlete AthleteProfile @relation(fields: [athleteId], references: [id], onDelete: Cascade)
+
+  @@index([athleteId, serverTimestamp(sort: Desc)])
+  @@index([sport, drillType, normalizedScore(sort: Desc)])
+  @@map("drill_submissions")
+}
+
+model HealthAlert {
+  id              String        @id @default(uuid()) @db.Uuid
+  athleteId       String        @map("athlete_id") @db.Uuid
+  matchId         String?       @map("match_id") @db.Uuid
+  heartRate       Int           @map("heart_rate")
+  spo2Percent     Int           @map("spo2_percent")
+  heatStrainIndex Decimal       @map("heat_strain_index") @db.Decimal(4, 2)
+  coreTempC       Decimal?      @map("core_temp_c") @db.Decimal(4, 2)
+  severity        AlertSeverity @default(WARNING)
+  triggeredPause  Boolean       @default(false) @map("triggered_pause")
+  telemetrySource String        @map("telemetry_source") @db.VarChar(100)
+  rawPayload      Json          @map("raw_payload") @db.JsonB
+  recordedAt      DateTime      @default(now()) @map("recorded_at") @db.Timestamptz
+
+  athlete AthleteProfile @relation(fields: [athleteId], references: [id], onDelete: Cascade)
+  match   Match?         @relation(fields: [matchId], references: [id], onDelete: SetNull)
+
+  @@index([athleteId, recordedAt(sort: Desc)])
+  @@index([matchId, triggeredPause])
+  @@map("health_alerts")
+}
+
+model GtiHistory {
+  id                 String   @id @default(uuid()) @db.Uuid
+  athleteId          String   @map("athlete_id") @db.Uuid
+  biomechanicalScore Decimal  @map("biomechanical_score") @db.Decimal(5, 2)
+  wearableScore      Decimal  @map("wearable_score") @db.Decimal(5, 2)
+  matchScore         Decimal  @map("match_score") @db.Decimal(5, 2)
+  compositeGti       Decimal  @map("composite_gti") @db.Decimal(5, 2)
+  calculationFactors Json     @map("calculation_factors") @db.JsonB
+  calculatedAt       DateTime @default(now()) @map("calculated_at") @db.Timestamptz
+
+  athlete AthleteProfile @relation(fields: [athleteId], references: [id], onDelete: Cascade)
+
+  @@index([athleteId, calculatedAt(sort: Desc)])
+  @@map("gti_histories")
+}
+
+model ScoutDossier {
+  id             String   @id @default(uuid()) @db.Uuid
+  athleteId      String   @map("athlete_id") @db.Uuid
+  scoutId        String   @map("scout_id") @db.Uuid
+  scoutNotes     String   @map("scout_notes") @db.Text
+  federationTag  String?  @map("federation_tag") @db.VarChar(100)
+  isShortlisted  Boolean  @default(false) @map("is_shortlisted")
+  pipelineStatus String   @default("DISCOVERED") @map("pipeline_status") @db.VarChar(50)
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt      DateTime @updatedAt @map("updated_at") @db.Timestamptz
+
+  athlete AthleteProfile @relation("AthleteDossiers", fields: [athleteId], references: [id], onDelete: Cascade)
+  scout   User           @relation("ScoutAuthor", fields: [scoutId], references: [id], onDelete: Cascade)
+
+  @@unique([athleteId, scoutId])
+  @@index([scoutId, pipelineStatus])
+  @@map("scout_dossiers")
+}
+
+model IdempotencyRecord {
+  id           String   @id @default(uuid()) @db.Uuid
+  key          String   @unique @db.VarChar(128)
+  userId       String?  @map("user_id") @db.Uuid
+  route        String   @db.VarChar(255)
+  responseCode Int      @map("response_code")
+  responseBody Json     @map("response_body") @db.JsonB
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz
+  expiresAt    DateTime @map("expires_at") @db.Timestamptz
+
+  user User? @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([key, expiresAt])
+  @@map("idempotency_records")
+}
