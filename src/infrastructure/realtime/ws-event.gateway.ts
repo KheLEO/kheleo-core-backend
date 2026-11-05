@@ -16,6 +16,7 @@ import { ScoutAlertPayload } from '../queues/queue-producer.service';
 
 export interface AutonomousMatchPausePayload {
   readonly event_id?: string;
+  readonly alert_id?: string;
   readonly source?: string;
   readonly baseline_fields?: readonly string[];
   readonly event: 'MATCH_PAUSE_ALERT';
@@ -75,6 +76,12 @@ export class WsEventGateway implements OnGatewayInit, OnGatewayConnection, OnGat
         'Only authorized competition staff may subscribe to match events',
       );
     await client.join(`match:${data.matchId}`);
+    if (
+      ['ORGANIZER', 'UMPIRE', 'FEDERATION_ADMIN', 'SUPER_ADMIN'].includes(
+        client.data.user?.role ?? '',
+      )
+    )
+      await client.join(`safety:match:${data.matchId}`);
   }
 
   @SubscribeMessage('join:athlete')
@@ -95,6 +102,12 @@ export class WsEventGateway implements OnGatewayInit, OnGatewayConnection, OnGat
         'Only the owning organizer or an administrator may subscribe to tournament events',
       );
     await client.join(`tournament:${data.tournamentId}`);
+    if (
+      ['ORGANIZER', 'UMPIRE', 'FEDERATION_ADMIN', 'SUPER_ADMIN'].includes(
+        client.data.user?.role ?? '',
+      )
+    )
+      await client.join(`safety:tournament:${data.tournamentId}`);
   }
 
   @SubscribeMessage('join:bracket')
@@ -107,6 +120,12 @@ export class WsEventGateway implements OnGatewayInit, OnGatewayConnection, OnGat
         'Only authorized competition staff may subscribe to bracket events',
       );
     await client.join(`bracket:${data.bracketId}`);
+    if (
+      ['ORGANIZER', 'UMPIRE', 'FEDERATION_ADMIN', 'SUPER_ADMIN'].includes(
+        client.data.user?.role ?? '',
+      )
+    )
+      await client.join(`safety:bracket:${data.bracketId}`);
   }
 
   // ─── Server-side Broadcast Methods ──────────────────
@@ -117,17 +136,31 @@ export class WsEventGateway implements OnGatewayInit, OnGatewayConnection, OnGat
       return;
     }
 
-    const rooms = [
-      `athlete:${payload.athlete_id}`,
-      'role:ORGANIZER',
-      'role:UMPIRE',
-      'role:FEDERATION_ADMIN',
-      'role:SUPER_ADMIN',
-    ];
-    if (payload.tournament_id) rooms.push(`tournament:${payload.tournament_id}`);
-    if (payload.bracket_id) rooms.push(`bracket:${payload.bracket_id}`);
-    if (payload.match_id) rooms.push(`match:${payload.match_id}`);
+    const rooms: string[] = [];
+    if (payload.tournament_id) rooms.push(`safety:tournament:${payload.tournament_id}`);
+    if (payload.bracket_id) rooms.push(`safety:bracket:${payload.bracket_id}`);
+    if (payload.match_id) rooms.push(`safety:match:${payload.match_id}`);
+    if (!rooms.length) rooms.push(`athlete:${payload.athlete_id}`);
     this.server.to(rooms).emit('MATCH_PAUSE_ALERT', payload);
+  }
+
+  broadcastVitalsUpdated(payload: {
+    readonly tournament_id: string;
+    readonly athlete_id: string;
+    readonly heart_rate: number;
+    readonly spo2: number;
+    readonly skin_temperature: number;
+    readonly severity: string;
+    readonly observed_at: string;
+    readonly source: string;
+    readonly baseline_fields: readonly string[];
+    readonly match_id?: string;
+    readonly bracket_id?: string;
+  }): void {
+    const rooms = [`safety:tournament:${payload.tournament_id}`];
+    if (payload.match_id) rooms.push(`safety:match:${payload.match_id}`);
+    if (payload.bracket_id) rooms.push(`safety:bracket:${payload.bracket_id}`);
+    this.server?.to(rooms).emit('VITALS_UPDATED', payload);
   }
 
   broadcastScoutTalent(payload: ScoutAlertPayload): void {

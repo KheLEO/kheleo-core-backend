@@ -1,6 +1,7 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import {
   IsEnum,
+  IsObject,
   IsInt,
   IsNotEmpty,
   IsNumber,
@@ -57,4 +58,8 @@ export class CreateBracketDto {
   @IsEnum(BracketType)
   @FieldAliases('bracket_type')
   readonly bracketType?: BracketType;
+  @ApiPropertyOptional({ description: 'Role quotas and first/second/third prize allocation' })
+  @ValidateIf((_object: unknown, value: unknown) => value !== undefined)
+  @IsObject()
+  readonly config?: Record<string, unknown>;
 }

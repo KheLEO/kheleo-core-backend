@@ -1,3 +1,4 @@
+import { recordSandbaggingRejection } from '../tournaments/sandbagging-audit';
 import {
   Injectable,
   ConflictException,
@@ -59,10 +60,10 @@ function isEligibleCandidate(candidate: QueuedCandidate): candidate is EligibleC
     profile.user.identityRecord?.status === VerificationStatus.VERIFIED &&
     Boolean(
       profile.dateOfBirth &&
-        profile.gender &&
-        profile.primarySport &&
-        profile.district &&
-        profile.state,
+      profile.gender &&
+      profile.primarySport &&
+      profile.district &&
+      profile.state,
     )
   );
 }
@@ -99,6 +100,8 @@ export class MatchmakingService {
         const requirements = this.getSlotRequirements(
           bracket.tournament.sport,
           bracket.tournament.teamSize,
+          bracket.config,
+          bracket.tournament.rulesConfig,
         );
         const roles = [dto.primary_role, dto.secondary_role].filter((role): role is string =>
           Boolean(role),
@@ -156,7 +159,10 @@ export class MatchmakingService {
 
         return { registration: created, waitPosition: position };
       },
-    );
+    ).catch(async (error: unknown) => {
+      await recordSandbaggingRejection(this.prisma, error, tournamentId, bracketId, userId);
+      throw error;
+    });
 
     // 7. Dispatch async matchmaking trigger to BullMQ queue
     await this.queueProducer.enqueueBracketMatchmaking({
@@ -363,7 +369,12 @@ export class MatchmakingService {
       where: { bracketId, status: RegistrationStatus.CONFIRMED },
     });
     if (registered >= bracket.maxTeams) return null;
-    const slots = this.getSlotRequirements(bracket.tournament.sport, bracket.tournament.teamSize);
+    const slots = this.getSlotRequirements(
+      bracket.tournament.sport,
+      bracket.tournament.teamSize,
+      bracket.config,
+      bracket.tournament.rulesConfig,
+    );
     const candidates = await this.loadCandidates(transaction, tournamentId, bracketId);
     const assigned = this.matchCandidatesToSlots(candidates, slots, {
       minGti: Number(bracket.minGti),
@@ -497,7 +508,38 @@ export class MatchmakingService {
   /**
    * Resolves sport-specific required team role compositions.
    */
-  private getSlotRequirements(sport: string, teamSize?: number): readonly RoleSlotRequirement[] {
+  private getSlotRequirements(
+    sport: string,
+    teamSize?: number,
+    bracketConfig?: Prisma.JsonValue,
+    tournamentConfig?: Prisma.JsonValue,
+  ): readonly RoleSlotRequirement[] {
+    for (const config of [bracketConfig, tournamentConfig]) {
+      if (!config || typeof config !== 'object' || Array.isArray(config) || !config.roleQuotas)
+        continue;
+      const quotas = config.roleQuotas;
+      if (typeof quotas !== 'object' || Array.isArray(quotas))
+        throw new BadRequestException('Invalid configured role quotas');
+      const entries = Object.entries(quotas);
+      if (
+        entries.some(
+          ([role, count]) =>
+            !/^[A-Z][A-Z0-9_]{1,39}$/.test(role) ||
+            typeof count !== 'number' ||
+            !Number.isInteger(count) ||
+            count < 0 ||
+            count > 30,
+        ) ||
+        entries.reduce((sum, [, count]) => sum + Number(count), 0) !== teamSize
+      )
+        throw new BadRequestException('Configured role quotas must match teamSize');
+      return entries.flatMap(([role, count]) =>
+        Array.from({ length: Number(count) }, () => ({
+          slotName: role,
+          rolePattern: new RegExp(`^${role.replaceAll('_', '[_ ]')}$`, 'i'),
+        })),
+      );
+    }
     const s = sport.toUpperCase();
 
     if (s.includes('CRICKET')) {

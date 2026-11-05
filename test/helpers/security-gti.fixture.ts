@@ -1,3 +1,6 @@
+import { OrganizerService } from '../../src/modules/tournaments/organizer.service';
+import { OrganizerController } from '../../src/modules/tournaments/organizer.controller';
+import { MatchmakingService } from '../../src/modules/matchmaking/matchmaking.service';
 import 'reflect-metadata';
 import { Module, ValidationPipe, VersioningType } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
@@ -51,6 +54,7 @@ interface Args {
   cursor?: { id: string };
   skip?: number;
   orderBy?: Fields | Fields[];
+  _sum?: Fields;
 }
 const fields = (value: unknown): Fields =>
   typeof value === 'object' && value !== null ? (value as Fields) : {};
@@ -103,9 +107,12 @@ function matches(row: unknown, where: unknown): boolean {
         ? String(actual).toLowerCase() === String(condition.equals).toLowerCase()
         : compare(actual, condition.equals) === 0;
     if ('not' in condition && compare(actual, condition.not) === 0) return false;
+    if ('gt' in condition && compare(actual, condition.gt) <= 0) return false;
+    if ('lt' in condition && compare(actual, condition.lt) >= 0) return false;
     if ('gte' in condition && compare(actual, condition.gte) < 0) return false;
     if ('lte' in condition && compare(actual, condition.lte) > 0) return false;
-    if (Object.keys(condition).some((op) => ['not', 'gte', 'lte'].includes(op))) return true;
+    if (Object.keys(condition).some((op) => ['not', 'gt', 'lt', 'gte', 'lte'].includes(op)))
+      return true;
     return matches(actual, condition);
   });
 }
@@ -145,6 +152,7 @@ export async function createSecurityFixture() {
     'drillSubmission',
     'healthAlert',
     'wearableSession',
+    'tournamentVital',
     'scoutAlert',
     'gtiHistory',
     'sportPassportRecord',
@@ -152,6 +160,9 @@ export async function createSecurityFixture() {
     'bracket',
     'match',
     'registration',
+    'team',
+    'teamMember',
+    'freeAgentRegistration',
     'verifiedMatchResult',
     'securityAuditLog',
     'refreshToken',
@@ -169,6 +180,7 @@ export async function createSecurityFixture() {
     scoutJobs: [] as ScoutAlertPayload[],
     pauses: [] as AutonomousMatchPausePayload[],
     scoutEvents: [] as ScoutAlertPayload[],
+    matchmakerCalls: [] as string[],
     depth: 0,
     attempts: 0,
     failCommit: false,
@@ -243,15 +255,79 @@ export async function createSecurityFixture() {
     teamA: { members: [{ userId: ATHLETE_ID }] },
     teamB: { members: [{ userId: OPPONENT_ID }] },
   });
+  const registrationScope = (row: Row): Row => ({
+    ...row,
+    bracket: {
+      ...tables.bracket.get(String(row.bracketId)),
+      tournament: tables.tournament.get(
+        String(tables.bracket.get(String(row.bracketId))?.tournamentId),
+      ),
+    },
+  });
+  const teamScope = (id: string): Row | null => {
+    const row = tables.team.get(id);
+    return row
+      ? {
+          ...row,
+          tournament: tables.tournament.get(String(row.tournamentId)),
+          registrations: [...tables.registration.values()]
+            .filter((entry) => entry.teamId === id)
+            .map(registrationScope),
+        }
+      : null;
+  };
+  const userBase = (row: Row): Row => {
+    const profile = [...tables.athleteProfile.values()].find((entry) => entry.userId === row.id);
+    const members = [...tables.teamMember.values()]
+      .filter((entry) => entry.userId === row.id)
+      .map((entry) => ({ ...entry, team: teamScope(String(entry.teamId)) }));
+    return {
+      ...row,
+      identityRecord:
+        [...tables.identityVerification.values()].find((entry) => entry.userId === row.id) ?? null,
+      athleteProfile: profile
+        ? {
+            ...profile,
+            teamMemberships: [...tables.teamMember.values()]
+              .filter((entry) => entry.athleteId === profile.id)
+              .map((entry) => ({ ...entry, team: teamScope(String(entry.teamId)) })),
+          }
+        : null,
+      registrations: [...tables.registration.values()]
+        .filter((entry) => entry.userId === row.id)
+        .map(registrationScope),
+      teamMembers: members,
+      tournamentVitals: [...tables.tournamentVital.values()].filter(
+        (entry) => entry.athleteId === row.id,
+      ),
+      healthAlerts: [...tables.healthAlert.values()].filter((entry) => entry.athleteId === row.id),
+    };
+  };
   const decorate = (model: Table, row: Row): Row => {
-    if (model === 'user')
+    if (model === 'user') return userBase(row);
+    if (model === 'team')
       return {
         ...row,
-        identityRecord:
-          [...tables.identityVerification.values()].find(
-            (identity) => identity.userId === row.id,
-          ) ?? null,
+        ...teamScope(row.id),
+        members: [...tables.teamMember.values()]
+          .filter((member) => member.teamId === row.id)
+          .map((member) => ({
+            ...member,
+            user: member.userId ? userBase(tables.user.get(String(member.userId))!) : null,
+            athlete: member.athleteId
+              ? {
+                  ...tables.athleteProfile.get(String(member.athleteId)),
+                  user: userBase(
+                    tables.user.get(
+                      String(tables.athleteProfile.get(String(member.athleteId))?.userId),
+                    )!,
+                  ),
+                }
+              : null,
+          })),
       };
+    if (model === 'freeAgentRegistration')
+      return { ...row, user: userBase(tables.user.get(String(row.userId))!) };
     if (model === 'athleteProfile')
       return { ...row, user: decorate('user', tables.user.get(String(row.userId))!) };
     if (model === 'verifiedMatchResult')
@@ -261,7 +337,12 @@ export async function createSecurityFixture() {
     if (model === 'match')
       return { ...row, bracket: decorate('bracket', tables.bracket.get(String(row.bracketId))!) };
     if (model === 'registration')
-      return { ...row, bracket: decorate('bracket', tables.bracket.get(String(row.bracketId))!) };
+      return {
+        ...row,
+        bracket: decorate('bracket', tables.bracket.get(String(row.bracketId))!),
+        user: row.userId ? userBase(tables.user.get(String(row.userId))!) : null,
+        team: row.teamId ? decorate('team', tables.team.get(String(row.teamId))!) : null,
+      };
     if (model === 'healthAlert')
       return {
         ...row,
@@ -304,6 +385,11 @@ export async function createSecurityFixture() {
         id: randomUUID(),
         acknowledgedAt: null,
         acknowledgedById: null,
+        medicalCheckNote: null,
+        medicalCheckDispatched: false,
+        matchId: null,
+        tournamentId: null,
+        bracketId: null,
         isAcknowledged: false,
         createdAt: new Date(),
       };
@@ -321,6 +407,14 @@ export async function createSecurityFixture() {
       findFirst: async (args: Args) => read(args)[0] ?? null,
       findMany: async (args: Args) => read(args),
       count: async (args: Args) => read(args).length,
+      aggregate: async (args: Args) => ({
+        _sum: Object.fromEntries(
+          Object.keys(args._sum ?? {}).map((field) => [
+            field,
+            read(args).reduce((sum, row) => sum + Number(row[field] ?? 0), 0),
+          ]),
+        ),
+      }),
       create,
       update,
       updateMany: async (args: Args) => {
@@ -381,6 +475,7 @@ export async function createSecurityFixture() {
     broadcastAutonomousMatchPause: (payload: AutonomousMatchPausePayload) =>
       state.pauses.push(payload),
     broadcastGtiUpdated: () => {},
+    broadcastVitalsUpdated: () => {},
     broadcastScoutTalent: (payload: ScoutAlertPayload) => state.scoutEvents.push(payload),
   } as unknown as WsEventGateway;
   const zsets = new Map<string, Map<string, number>>();
@@ -426,6 +521,12 @@ export async function createSecurityFixture() {
   const jwt = new JwtStrategy(auth.config, prisma);
   const sockets = new WsAuthGuard(jwt);
   const services = {
+    organizer: new OrganizerService(prisma, {
+      processBracketPool: async (tournamentId: string, bracketId: string) => {
+        state.matchmakerCalls.push(`${tournamentId}:${bracketId}`);
+        return true;
+      },
+    } as unknown as MatchmakingService),
     drills: new DrillsService(prisma, queue),
     safety: new SafetyService(prisma, ws, queue),
     gti: new GtiService(prisma, leaderboards, queue, ws),
@@ -441,7 +542,10 @@ export async function createSecurityFixture() {
   const user = (id = ATHLETE_ID): TestUser =>
     decorate('user', tables.user.get(id)!) as unknown as TestUser;
   const setProfile = (data: Fields, userId = ATHLETE_ID): void => {
-    Object.assign([...tables.athleteProfile.values()].find((p) => p.userId === userId)!, data);
+    Object.assign(
+      [...tables.athleteProfile.values()].find((p) => p.userId === userId)!,
+      data,
+    );
   };
   const token = (id = ATHLETE_ID): string =>
     sign({ sub: id, role: user(id).role }, TEST_SECRET, { expiresIn: 900, algorithm: 'HS256' });
@@ -471,6 +575,7 @@ export async function createSecurityApp(fixture: SecurityFixture): Promise<NestF
     {
       module: SecurityTestModule,
       controllers: [
+        OrganizerController,
         SafetyController,
         DrillsController,
         GtiController,
@@ -488,6 +593,7 @@ export async function createSecurityApp(fixture: SecurityFixture): Promise<NestF
         { provide: PrismaService, useValue: fixture.prisma },
         { provide: RedisService, useValue: fixture.redis },
         { provide: JwtStrategy, useValue: fixture.jwt },
+        { provide: OrganizerService, useValue: fixture.services.organizer },
         { provide: SafetyService, useValue: fixture.services.safety },
         { provide: DrillsService, useValue: fixture.services.drills },
         { provide: GtiService, useValue: fixture.services.gti },

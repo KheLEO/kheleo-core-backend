@@ -345,6 +345,10 @@ describe('Phase 4 drill integrity and measured GTI pipelines', () => {
         method: 'POST',
         url: `/api/v1/safety/matches/${MATCH_ID}/resume`,
         headers: operatorHeaders,
+        payload: {
+          medicalClearanceConfirmed: true,
+          medicalClearanceNote: 'Medical staff cleared this athlete',
+        },
       });
       assert.equal(blocked.statusCode, 409, blocked.body);
       const alert = [...f.state.tables.healthAlert.values()][0]!;
@@ -352,12 +356,20 @@ describe('Phase 4 drill integrity and measured GTI pipelines', () => {
         method: 'PATCH',
         url: `/api/v1/safety/alerts/${alert.id}/acknowledge`,
         headers: { ...operatorHeaders, 'idempotency-key': randomUUID() },
+        payload: {
+          medicalCheckDispatched: true,
+          medicalCheckNote: 'Medical check dispatched to court',
+        },
       });
       assert.equal(ack.statusCode, 200, ack.body);
       const resume = await app.inject({
         method: 'POST',
         url: `/api/v1/safety/matches/${MATCH_ID}/resume`,
         headers: { ...operatorHeaders, 'idempotency-key': randomUUID() },
+        payload: {
+          medicalClearanceConfirmed: true,
+          medicalClearanceNote: 'Medical staff cleared this athlete',
+        },
       });
       assert.equal(resume.statusCode, 200, resume.body);
       assert.equal(f.state.tables.match.get(MATCH_ID)?.status, 'LIVE');
@@ -392,10 +404,19 @@ describe('Phase 4 drill integrity and measured GTI pipelines', () => {
     assert.equal(f.state.pauses.length, 1);
     assert.equal([...f.state.tables.healthAlert.values()][0]?.matchPaused, false);
     const outsider = { sub: randomUUID(), role: 'ORGANIZER' };
-    await assert.rejects(f.services.safety.resume(outsider, MATCH_ID), /owning organizer/);
+    await assert.rejects(
+      f.services.safety.resume(outsider, MATCH_ID, {
+        medicalClearanceConfirmed: true,
+        medicalClearanceNote: 'Cleared by medical staff',
+      }),
+      /owning organizer/,
+    );
     assert.equal((await f.services.safety.listAlerts(outsider, { limit: 20 })).data.length, 0);
     await assert.rejects(
-      f.services.safety.acknowledge(outsider, [...f.state.tables.healthAlert.values()][0]!.id),
+      f.services.safety.acknowledge(outsider, [...f.state.tables.healthAlert.values()][0]!.id, {
+        medicalCheckNote: 'Medical team dispatched to court',
+        medicalCheckDispatched: true,
+      }),
       /owning organizer/,
     );
   });

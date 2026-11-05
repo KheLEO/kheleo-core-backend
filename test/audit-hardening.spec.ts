@@ -189,7 +189,7 @@ describe('Audit hardening regressions', () => {
         },
       } as unknown as AuthenticatedSocket;
       await gateway.handleJoinMatch(client, { matchId: MATCH_ID });
-      assert.deepStrictEqual(joins, [`match:${MATCH_ID}`]);
+      assert.deepStrictEqual(joins, [`match:${MATCH_ID}`, `safety:match:${MATCH_ID}`]);
     });
     it('does not globally broadcast sensitive match-pause events', async () => {
       const f = await createSecurityFixture();
@@ -209,14 +209,9 @@ describe('Audit hardening regressions', () => {
       assert.deepStrictEqual(
         new Set(rooms),
         new Set([
-          `athlete:${ATHLETE_ID}`,
-          `tournament:${TOURNAMENT_ID}`,
-          `bracket:${BRACKET_ID}`,
-          `match:${MATCH_ID}`,
-          'role:ORGANIZER',
-          'role:UMPIRE',
-          'role:FEDERATION_ADMIN',
-          'role:SUPER_ADMIN',
+          `safety:tournament:${TOURNAMENT_ID}`,
+          `safety:bracket:${BRACKET_ID}`,
+          `safety:match:${MATCH_ID}`,
         ]),
       );
     });
@@ -843,6 +838,8 @@ describe('Phase 2 auth and frontend HTTP contracts', () => {
         matchId: null,
         acknowledgedAt: null,
         acknowledgedById: null,
+        medicalCheckNote: null,
+        medicalCheckDispatched: false,
         source: 'DEVICE_HMAC',
         baselineFields: [],
         createdAt: new Date(),
@@ -1892,6 +1889,14 @@ describe('Phase 4 authenticated sockets and administrative controls', () => {
     const f = await createSecurityFixture();
     const sockets = await createSocketFixture(f);
     try {
+      f.state.tables.user.get(SCOUT_ID)!.role = 'ORGANIZER';
+      const unrelated = sockets.client('/ws/events', f.token(SCOUT_ID));
+      await sockets.connect(unrelated);
+      let unrelatedEvents = 0;
+      unrelated.on('MATCH_PAUSE_ALERT', () => {
+        unrelatedEvents++;
+      });
+      f.state.tables.user.get(SCOUT_ID)!.role = 'SCOUT';
       const own = sockets.client('/ws/events', f.token());
       const opponent = sockets.client('/ws/events', f.token(OPPONENT_ID));
       const scout = sockets.client('/ws/events', f.token(SCOUT_ID));
@@ -1946,19 +1951,18 @@ describe('Phase 4 authenticated sockets and administrative controls', () => {
       opponent.on('MATCH_PAUSE_ALERT', () => {
         opponentEvents++;
       });
-      const received = deadline(
-        new Promise<unknown>((resolve) => own.once('MATCH_PAUSE_ALERT', resolve)),
-      );
+
       sockets.events.broadcastAutonomousMatchPause(medicalEvent);
-      await Promise.all([received, staffReceived]);
+      await staffReceived;
       assert.strictEqual(staffEvents, 1);
       // A server roundtrip is a deterministic delivery barrier, without timing sleeps.
       const ack = deadline(new Promise<void>((resolve) => own.once('barrier', () => resolve())));
       ownServer.emit('barrier');
       await ack;
-      assert.strictEqual(ownEvents, 1);
+      assert.strictEqual(ownEvents, 0);
       assert.strictEqual(scoutEvents, 0);
       assert.strictEqual(opponentEvents, 0);
+      assert.strictEqual(unrelatedEvents, 0);
     } finally {
       await sockets.close();
     }

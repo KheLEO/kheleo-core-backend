@@ -540,4 +540,46 @@ describe('PostGIS baseline migration', () => {
       userId,
     ]);
   });
+  it('persists organizer telemetry snapshots and medical-check notes through the new migration', async () => {
+    const tournamentId = await createTournament(0, 0);
+    const userId = await createUser();
+    const id = randomUUID();
+    await database.query(
+      `INSERT INTO tournament_vitals (id,tournament_id,athlete_id,heart_rate,spo2,skin_temperature,severity,source,observed_at)
+      VALUES ($1,$2,$3,110,98,36.8,'NORMAL','BLE',now())`,
+      [id, tournamentId, userId],
+    );
+    await database.query(
+      "UPDATE tournament_vitals SET heart_rate=205,severity='CRITICAL' WHERE id=$1",
+      [id],
+    );
+    const rows = await database.query<{ heart_rate: number; severity: string }>(
+      'SELECT heart_rate,severity FROM tournament_vitals WHERE tournament_id=$1 AND athlete_id=$2',
+      [tournamentId, userId],
+    );
+    assert.equal(rows.rows[0]?.heart_rate, 205);
+    assert.equal(rows.rows[0]?.severity, 'CRITICAL');
+    await assert.rejects(
+      database.query(
+        `INSERT INTO tournament_vitals (id,tournament_id,athlete_id,heart_rate,spo2,skin_temperature,severity,source,observed_at)
+      VALUES ($1,$2,$3,110,98,36.8,'NORMAL','BLE',now())`,
+        [randomUUID(), tournamentId, userId],
+      ),
+      /unique constraint/,
+    );
+    const alertId = randomUUID();
+    await database.query(
+      `INSERT INTO health_alerts (id,athlete_id,tournament_id,heart_rate,spo2,skin_temperature,trigger_reason,medical_check_note,medical_check_dispatched)
+      VALUES ($1,$2,$3,205,88,40,'CRITICAL','Medical team dispatched',true)`,
+      [alertId, userId, tournamentId],
+    );
+    const note = await database.query<{
+      medical_check_note: string;
+      medical_check_dispatched: boolean;
+    }>('SELECT medical_check_note,medical_check_dispatched FROM health_alerts WHERE id=$1', [
+      alertId,
+    ]);
+    assert.equal(note.rows[0]?.medical_check_note, 'Medical team dispatched');
+    assert.equal(note.rows[0]?.medical_check_dispatched, true);
+  });
 });

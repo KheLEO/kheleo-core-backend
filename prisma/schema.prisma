@@ -137,6 +137,7 @@ model User {
   wearableSessions       WearableSession[]
   reportedMatchResults   VerifiedMatchResult[]   @relation("ResultReporter")
   acknowledgedAlerts     HealthAlert[]           @relation("AlertAcknowledger")
+  tournamentVitals       TournamentVital[]
 
   @@index([role, isActive])
   @@map("users")
@@ -282,6 +283,7 @@ model Tournament {
   freeAgentQueue         FreeAgentPool[]
   freeAgentRegistrations FreeAgentRegistration[]
   healthAlerts           HealthAlert[]
+  vitals                 TournamentVital[]
 
   @@index([sport, status])
   @@index([minGti, maxGti])
@@ -480,22 +482,24 @@ model DrillSubmission {
 }
 
 model HealthAlert {
-  id               String          @id @default(uuid()) @db.Uuid
-  athleteId        String          @map("athlete_id") @db.Uuid
-  tournamentId     String?         @map("tournament_id") @db.Uuid
-  bracketId        String?         @map("bracket_id") @db.Uuid
-  severity         AlertSeverity   @default(NORMAL)
-  heartRate        Float           @map("heart_rate")
-  spo2             Float           @map("spo2")
-  skinTemperature  Float           @map("skin_temperature")
-  triggerReason    String          @map("trigger_reason")
-  matchPaused      Boolean         @default(false) @map("match_paused")
-  matchId          String?         @map("match_id") @db.Uuid
-  acknowledgedAt   DateTime?       @map("acknowledged_at") @db.Timestamptz
-  acknowledgedById String?         @map("acknowledged_by_id") @db.Uuid
-  baselineFields   String[]        @default([]) @map("baseline_fields")
-  source           TelemetrySource @default(DEVICE_HMAC)
-  createdAt        DateTime        @default(now()) @map("created_at") @db.Timestamptz
+  id                     String          @id @default(uuid()) @db.Uuid
+  athleteId              String          @map("athlete_id") @db.Uuid
+  tournamentId           String?         @map("tournament_id") @db.Uuid
+  bracketId              String?         @map("bracket_id") @db.Uuid
+  severity               AlertSeverity   @default(NORMAL)
+  heartRate              Float           @map("heart_rate")
+  spo2                   Float           @map("spo2")
+  skinTemperature        Float           @map("skin_temperature")
+  triggerReason          String          @map("trigger_reason")
+  matchPaused            Boolean         @default(false) @map("match_paused")
+  matchId                String?         @map("match_id") @db.Uuid
+  medicalCheckNote       String?         @map("medical_check_note") @db.VarChar(1000)
+  medicalCheckDispatched Boolean         @default(false) @map("medical_check_dispatched")
+  acknowledgedAt         DateTime?       @map("acknowledged_at") @db.Timestamptz
+  acknowledgedById       String?         @map("acknowledged_by_id") @db.Uuid
+  baselineFields         String[]        @default([]) @map("baseline_fields")
+  source                 TelemetrySource @default(DEVICE_HMAC)
+  createdAt              DateTime        @default(now()) @map("created_at") @db.Timestamptz
 
   athlete        User        @relation(fields: [athleteId], references: [id], onDelete: Cascade)
   match          Match?      @relation(fields: [matchId], references: [id], onDelete: SetNull)
@@ -624,6 +628,8 @@ model VerifiedMatchResult {
   reportedById          String   @map("reported_by_id") @db.Uuid
   requestKey            String   @unique @map("request_key") @db.VarChar(64)
   fingerprint           String   @db.VarChar(64)
+  matchName             String   @default("") @map("match_name") @db.VarChar(150)
+  scoreSummary          Json     @default("{}") @map("score_summary") @db.JsonB
   participantAthleteIds String[] @map("participant_athlete_ids") @db.Uuid
   winnerAthleteIds      String[] @map("winner_athlete_ids") @db.Uuid
   createdAt             DateTime @default(now()) @map("created_at") @db.Timestamptz
@@ -650,4 +656,26 @@ model OutboxEvent {
 
   @@index([deliveredAt, availableAt])
   @@map("outbox_events")
+}
+
+model TournamentVital {
+  id              String          @id @default(uuid()) @db.Uuid
+  tournamentId    String          @map("tournament_id") @db.Uuid
+  athleteId       String          @map("athlete_id") @db.Uuid
+  bracketId       String?         @map("bracket_id") @db.Uuid
+  matchId         String?         @map("match_id") @db.Uuid
+  heartRate       Float           @map("heart_rate")
+  spo2            Float
+  skinTemperature Float           @map("skin_temperature")
+  severity        AlertSeverity
+  source          TelemetrySource
+  baselineFields  String[]        @default([]) @map("baseline_fields")
+  observedAt      DateTime        @map("observed_at") @db.Timestamptz
+  receivedAt      DateTime        @default(now()) @map("received_at") @db.Timestamptz
+  tournament      Tournament      @relation(fields: [tournamentId], references: [id], onDelete: Cascade)
+  athlete         User            @relation(fields: [athleteId], references: [id], onDelete: Cascade)
+
+  @@unique([tournamentId, athleteId])
+  @@index([tournamentId, severity])
+  @@map("tournament_vitals")
 }

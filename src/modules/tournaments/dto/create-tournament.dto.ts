@@ -2,6 +2,7 @@ import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import {
   IsDateString,
   IsEnum,
+  IsObject,
   IsInt,
   IsNotEmpty,
   IsNumber,
@@ -99,4 +100,8 @@ export class CreateTournamentDto {
   @IsDateString({ strict: true })
   @FieldAliases('end_date')
   readonly endDate!: string;
+  @ApiPropertyOptional({ description: 'Role quotas and first/second/third prize allocation' })
+  @ValidateIf((_object: unknown, value: unknown) => value !== undefined)
+  @IsObject()
+  readonly rulesConfig?: Record<string, unknown>;
 }

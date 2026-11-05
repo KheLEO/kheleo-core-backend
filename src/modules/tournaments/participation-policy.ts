@@ -18,12 +18,20 @@ export const participationBracketSelect = {
   id: true,
   tournamentId: true,
   tierName: true,
+  config: true,
   minGti: true,
   maxGti: true,
   maxTeams: true,
   entryFee: true,
   tournament: {
-    select: { id: true, sport: true, teamSize: true, status: true, registrationDeadline: true },
+    select: {
+      id: true,
+      sport: true,
+      teamSize: true,
+      status: true,
+      registrationDeadline: true,
+      rulesConfig: true,
+    },
   },
 } satisfies Prisma.BracketSelect;
 

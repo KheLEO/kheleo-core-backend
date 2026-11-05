@@ -292,7 +292,7 @@ Telemetry levels are evaluated as follows:
 | Warning  | Heart rate `> 185`, SpO2 `< 93`, or skin temperature `> 38.5`, when no critical condition exists |
 | Normal   | No threshold is breached                                                                         |
 
-Critical telemetry with an active match checks actual roster membership and supplied parent context before moving WARMUP/LIVE to PAUSED_SAFETY. Missing parent IDs are filled from the match. Only a real match transition records matchPaused=true. Every critical reading emits a room-scoped MATCH_PAUSE_ALERT. Standalone critical telemetry records a CRITICAL_ALERT without inventing a paused match. Context without match_id requires confirmed registration. Resume requires owning organizer/assigned umpire/super-admin authority and acknowledgement of all outstanding critical alerts; acknowledgement is an operational record, not medical clearance.
+Critical telemetry with an active match checks actual roster membership and supplied parent context before moving WARMUP/LIVE to PAUSED_SAFETY. Missing parent IDs are filled from the match. Only a real match transition records matchPaused=true. Every critical reading emits a room-scoped MATCH_PAUSE_ALERT. Standalone critical telemetry records a CRITICAL_ALERT without inventing a paused match. Context without match_id requires confirmed registration. Resume requires owning organizer/assigned umpire/federation or super-admin authority, acknowledgement of all outstanding critical alerts, and explicit medical clearance confirmation with a note. Acknowledgement persists the medical-check note and dispatch confirmation; these are staff operational assertions, not clinical certification or an emergency dispatch service.
 
 ## GTI and talent discovery
 
@@ -312,9 +312,30 @@ GTI jobs follow DRILL_SUBMISSION, WEARABLE_SYNC, and MATCH_COMPLETED. GTI respon
 
 Redis stores global, state, legacy district, and state-qualified district ZSETs. Membership tracking removes old sport/geography keys after profile changes or opt-out/deactivation. Leaderboards return rank, athleteId, district, state, sport, gti, biomechanicalScore, wearableScore, matchPerformanceScore, nextCursor, and source (redis/database). State is required for STATE/DISTRICT scope and district for DISTRICT scope. Cursors are bound to scope. Cache pages validate current eligibility/scores and fall back to a database window query when unavailable/incomplete/stale. Heatmaps group by state and district and use current_gti when gti is zero.
 
+## Organizer operations and confidential safety wall
+
+Apply migration `20261106010000_organizer_operations` with `pnpm prisma:deploy`. It adds latest tournament vitals, medical-check notes/dispatch confirmations, and named result summaries.
+
+All organizer listing/read endpoints require ORGANIZER, FEDERATION_ADMIN, or SUPER_ADMIN. Organizers are restricted to owned tournaments; administrators can access all events. Mutations require an idempotency key.
+
+| Endpoint                                                              | Behavior                                                                                                                           |
+| --------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| `GET /tournaments/organizer/summary`                                  | Active event count, distinct registered athletes, configured INR prizes, formed free-agent teams, open safety alerts               |
+| `GET /tournaments/organizer/mine`                                     | Cursor-paginated owned event directory                                                                                             |
+| `GET /tournaments/:tournamentId/brackets/:bracketId/registrations`    | Paginated team/athlete rosters with current GTI and identity status                                                                |
+| `GET .../free-agents/pool`, `POST .../free-agents/process`            | Scoped queue projection and immediate real matchmaking pass                                                                        |
+| `GET /tournaments/:tournamentId/sandbagging-logs`                     | Persisted SANDBAGGING_DETECTED audit events, written after rejected transactions roll back                                         |
+| `POST /tournaments/:tournamentId/brackets/:bracketId/matches/results` | Named verified result with disjoint winner/loser athlete IDs and JSON score summary; updates counters and enqueues GTI             |
+| `GET /safety/tournaments/:tournamentId/vitals`                        | Paginated registered active athletes, latest source-labeled snapshot or AWAITING_READING, active critical alerts, and match states |
+| `GET /safety/tournaments/:tournamentId/alerts`                        | Paginated durable incident history                                                                                                 |
+
+Tournament `rulesConfig` and bracket `config` support canonical `roleQuotas` and `{ first, second, third }` prize breakdowns. Counts must sum to event team size; prize totals cannot exceed event prize pool. The matchmaker uses bracket quotas, then event quotas, then sport defaults. Existing tournament/bracket PATCH and DELETE endpoints enforce parent ownership transactionally.
+
+Acknowledgement requires `{ medicalCheckNote, medicalCheckDispatched: true }`. Resume requires `{ medicalClearanceConfirmed: true, medicalClearanceNote }`, an actual PAUSED_SAFETY state, and no unacknowledged critical incidents. Repeated critical telemetry updates the open incident; latest normal snapshots remain separate from incident history. Older snapshots cannot overwrite more recent observations.
+
 ## Realtime events
 
-Both namespaces authenticate the handshake before connection using auth.token, an Authorization Bearer header, or query.token. JWT algorithms/keys and account state match HTTP authentication. Invalid clients are rejected/disconnected immediately; token expiry and account status changes disconnect established clients. Authenticated sockets automatically join user:<sub>, athlete:<sub>, and role:<role>; scouts and federation/super admins additionally join scouts. Competition-room subscriptions require owning organizer, assigned umpire, or administrator authority; athletes receive their own events through their personal room. Athlete-room subscriptions are self-only. Safety emits only to the authorized competition and affected-athlete room union; there is no namespace-wide medical broadcast. Roster events also use a room union for one delivery per socket.
+Both namespaces authenticate the handshake before connection using auth.token, an Authorization Bearer header, or query.token. JWT algorithms/keys and account state match HTTP authentication. Invalid clients are rejected/disconnected immediately; token expiry and account status changes disconnect established clients. Authenticated sockets automatically join user:<sub>, athlete:<sub>, and role:<role>; scouts and federation/super admins additionally join scouts. Competition-room subscriptions require owning organizer, assigned umpire, administrator authority, or confirmed participant membership. Athlete-room subscriptions are self-only. Competition safety events (`VITALS_UPDATED` and `MATCH_PAUSE_ALERT`) emit only to private `safety:tournament`, `safety:bracket`, and `safety:match` room unions, joined after staff authorization. Normal participant rooms and global role rooms receive no medical events. Standalone critical alerts target only the affected athlete. Roster events also use a room union for one delivery per socket.
 
 | Namespace         | Client subscriptions                                            | Server events                                            |
 | ----------------- | --------------------------------------------------------------- | -------------------------------------------------------- |
@@ -331,7 +352,7 @@ Bracket registration and pool joins read current profile GTI, verified identity,
 
 Pool leave uses a conditional QUEUED-to-CANCELLED update, so a worker claim cannot be overwritten. Matchmaking reads the complete eligible queue in batches, searches primary/secondary-role assignments and alternative rosters within the mean-GTI bounds, and prevents duplicate athletes. Each formed team stores its captain and emits one roster event after commit. One job continues forming teams until no valid roster or capacity remains. Exact GTI-constrained roster search can take more work for large or difficult pools; it has no arbitrary candidate-prefix or search-attempt cutoff.
 
-Nearby results remain a flat array ordered by unrounded distance, then UUID. Pass the last returned UUID as `cursor` with the same search coordinates, radius, and sport; an invalid or out-of-search cursor returns 400. PostGIS computes the cursor distance before applying this ordering. The Haversine fallback scans SQL bounding-box pages (including antimeridian and pole handling), calculates distances, and retains only the nearest requested results in memory. Its spherical distances are approximate compared with PostGIS geography distances.
+Nearby results return `{ data, next_cursor, has_more }`, ordered by unrounded distance, then UUID. Legacy frontend clients can still decode arrays. Pass the returned `next_cursor` as `cursor` with the same search coordinates, radius, and sport; an invalid or out-of-search cursor returns 400. PostGIS computes the cursor distance before applying this ordering. The Haversine fallback scans SQL bounding-box pages (including antimeridian and pole handling), calculates distances, and retains only the nearest requested results in memory. Its spherical distances are approximate compared with PostGIS geography distances.
 
 ## Audit persistence
 

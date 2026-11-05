@@ -1,5 +1,9 @@
 import {
   IsArray,
+  IsString,
+  MinLength,
+  MaxLength,
+  Equals,
   ArrayUnique,
   IsIn,
   IsEnum,
@@ -42,4 +46,13 @@ export interface TelemetryResponseDto {
   readonly alert_triggered: boolean;
   readonly status: 'MATCH_PAUSED' | 'CRITICAL_ALERT' | 'WARNING' | 'NORMAL';
   readonly message?: string;
+}
+
+export class AcknowledgeSafetyDto {
+  @IsString() @MinLength(5) @MaxLength(1000) medicalCheckNote!: string;
+  @Equals(true) medicalCheckDispatched!: boolean;
+}
+export class ResumeSafetyDto {
+  @Equals(true) medicalClearanceConfirmed!: boolean;
+  @IsString() @MinLength(5) @MaxLength(1000) medicalClearanceNote!: string;
 }

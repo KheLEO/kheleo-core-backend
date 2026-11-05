@@ -52,6 +52,8 @@ export class MatchResultsService {
           participants,
           winners,
           matchId: dto.matchId ?? null,
+          matchName: dto.matchName ?? '',
+          scoreSummary: dto.scoreSummary ?? {},
         }),
       )
       .digest('hex');
@@ -102,7 +104,12 @@ export class MatchResultsService {
             status: 'COMPLETED',
             winnerTeamId:
               canonicalJson(teamA) === canonicalJson(winners) ? match.teamAId : match.teamBId,
-            scoreSummary: { participantAthleteIds: participants, winnerAthleteIds: winners },
+            scoreSummary: {
+              ...dto.scoreSummary,
+              matchName: dto.matchName ?? '',
+              participantAthleteIds: participants,
+              winnerAthleteIds: winners,
+            } as Prisma.InputJsonObject,
           },
         });
       } else {
@@ -158,6 +165,8 @@ export class MatchResultsService {
       return tx.verifiedMatchResult.create({
         data: {
           bracketId,
+          matchName: dto.matchName ?? '',
+          scoreSummary: (dto.scoreSummary ?? {}) as Prisma.InputJsonObject,
           matchId: dto.matchId,
           reportedById: actor.sub,
           requestKey,

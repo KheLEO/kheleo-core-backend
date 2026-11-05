@@ -1,3 +1,4 @@
+import { competitionConfig } from './competition-config';
 import {
   BadRequestException,
   HttpException,
@@ -49,8 +50,9 @@ type NearbyTournamentRecord = Prisma.TournamentGetPayload<{
 
 type TournamentWriteData = Omit<
   Required<CreateTournamentDto>,
-  'registrationDeadline' | 'startDate' | 'endDate'
+  'registrationDeadline' | 'startDate' | 'endDate' | 'rulesConfig'
 > & {
+  readonly rulesConfig: Prisma.InputJsonObject;
   readonly title: string;
   readonly registrationDeadline: Date;
   readonly startDate: Date;
@@ -273,6 +275,11 @@ export class TournamentsService {
     const sport = dto.sport ?? existing?.sport;
     if (!sport) throw new BadRequestException('sport is required');
     const data: TournamentWriteData = {
+      rulesConfig: competitionConfig(
+        dto.rulesConfig ?? existing?.rulesConfig,
+        dto.teamSize ?? existing?.teamSize ?? 0,
+        dto.prizePool ?? Number(existing?.prizePool ?? 0),
+      ),
       name: dto.name ?? (existing?.name || existing?.title) ?? '',
       title: dto.name ?? (existing?.name || existing?.title) ?? '',
       sport,

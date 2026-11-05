@@ -1,3 +1,5 @@
+import { recordSandbaggingRejection } from '../tournaments/sandbagging-audit';
+import { competitionConfig } from '../tournaments/competition-config';
 import {
   Injectable,
   ConflictException,
@@ -10,7 +12,7 @@ import { RegisterBracketDto } from './dto/register-bracket.dto';
 import { CreateBracketDto } from './dto/create-bracket.dto';
 import { UpdateBracketDto } from './dto/update-bracket.dto';
 import { BracketRegistrationResponseDto } from './dto/bracket-registration-response.dto';
-import { Bracket, Prisma, Registration, RegistrationStatus } from '@prisma/client';
+import { Bracket, Prisma, Registration, RegistrationStatus, Tournament } from '@prisma/client';
 import { runSerializableTransaction } from '../../common/database/serializable-transaction';
 import { CursorPaginationQueryDto } from '../../common/dto/cursor-pagination-query.dto';
 import { PaginatedResponseDto } from '../../common/dto/paginated-response.dto';
@@ -84,6 +86,9 @@ export class BracketsService {
         bracket.tierName,
         athleteGti,
       );
+    }).catch(async (error: unknown) => {
+      await recordSandbaggingRejection(this.prisma, error, tournamentId, bracketId, userId);
+      throw error;
     });
   }
 
@@ -164,7 +169,7 @@ export class BracketsService {
     actor: AuthenticatedJwtUser,
   ): Promise<Bracket> {
     return runSerializableTransaction(this.prisma, async (transaction) => {
-      await this.assertOwnership(transaction, tournamentId, actor);
+      const tournament = await this.assertOwnership(transaction, tournamentId, actor);
       assertBracketInvariants({
         minGti: dto.minGti,
         maxGti: dto.maxGti,
@@ -174,6 +179,7 @@ export class BracketsService {
       return transaction.bracket.create({
         data: {
           tournamentId,
+          config: competitionConfig(dto.config, tournament.teamSize, Number(tournament.prizePool)),
           name: dto.name,
           tierName: dto.tierName,
           minGti: dto.minGti,
@@ -197,7 +203,14 @@ export class BracketsService {
       const existing = await transaction.bracket.findUnique({ where: { id: bracketId } });
       if (!existing || existing.tournamentId !== tournamentId)
         throw new NotFoundException('Bracket does not exist in this tournament');
+      const tournament = await transaction.tournament.findUnique({ where: { id: tournamentId } });
+      if (!tournament) throw new NotFoundException('Tournament not found');
       const data = {
+        config: competitionConfig(
+          dto.config ?? existing.config,
+          tournament.teamSize,
+          Number(tournament.prizePool),
+        ),
         name: dto.name ?? existing.name,
         tierName: dto.tierName ?? existing.tierName,
         minGti: dto.minGti ?? Number(existing.minGti),
@@ -229,13 +242,14 @@ export class BracketsService {
     transaction: Prisma.TransactionClient,
     tournamentId: string,
     actor: AuthenticatedJwtUser,
-  ): Promise<void> {
+  ): Promise<Pick<Tournament, 'organizerId' | 'teamSize' | 'prizePool'>> {
     const tournament = await transaction.tournament.findUnique({
       where: { id: tournamentId },
-      select: { organizerId: true },
+      select: { organizerId: true, teamSize: true, prizePool: true },
     });
     if (!tournament) throw new NotFoundException('Tournament not found');
     assertTournamentOwner(tournament.organizerId, actor);
+    return tournament;
   }
 
   private mapToResponse(

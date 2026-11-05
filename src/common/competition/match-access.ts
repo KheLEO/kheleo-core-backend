@@ -24,7 +24,7 @@ export function assertMatchOperator(
   organizerId: string,
   match?: MatchContext,
 ): void {
-  if (actor.role === UserRole.SUPER_ADMIN) return;
+  if (actor.role === UserRole.SUPER_ADMIN || actor.role === UserRole.FEDERATION_ADMIN) return;
   if (actor.role === UserRole.ORGANIZER && actor.sub === organizerId) return;
   if (actor.role === UserRole.UMPIRE && match?.umpireId === actor.sub) return;
   throw new ForbiddenException('Match access requires the owning organizer or assigned umpire');
