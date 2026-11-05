@@ -1,7 +1,7 @@
 import { after, before, describe, it } from 'node:test';
 import * as assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { PGlite } from '@electric-sql/pglite';
 import { postgis } from '@electric-sql/pglite-postgis';
@@ -20,11 +20,12 @@ describe('PostGIS baseline migration', () => {
   const database = new PGlite({ extensions: { postgis } });
 
   before(async () => {
-    const migration = readFileSync(
-      resolve(__dirname, '../prisma/migrations/20261105000000_init_postgis_schema/migration.sql'),
-      'utf8',
-    );
-    await database.exec(migration);
+    const migrations = resolve(__dirname, '../prisma/migrations');
+    for (const entry of readdirSync(migrations, { withFileTypes: true })
+      .filter((item) => item.isDirectory())
+      .sort((a, b) => a.name.localeCompare(b.name))) {
+      await database.exec(readFileSync(resolve(migrations, entry.name, 'migration.sql'), 'utf8'));
+    }
   });
 
   after(async () => {
@@ -241,5 +242,22 @@ describe('PostGIS baseline migration', () => {
       [logId],
     );
     assert.deepEqual(logs.rows, [{ user_id: null, action: 'TEST_ACTION' }]);
+  });
+
+  it('stores incomplete passport demographics as null after the follow-up migration', async () => {
+    const userId = await createUser();
+    const profileId = randomUUID();
+    await database.query(
+      "INSERT INTO athlete_profiles (id, user_id, district, state, updated_at) VALUES ($1, $2, '', '', now())",
+      [profileId, userId],
+    );
+    const result = await database.query<{
+      readonly date_of_birth: string | null;
+      readonly gender: string | null;
+      readonly primary_sport: string | null;
+    }>('SELECT date_of_birth, gender, primary_sport FROM athlete_profiles WHERE id = $1', [
+      profileId,
+    ]);
+    assert.deepEqual(result.rows, [{ date_of_birth: null, gender: null, primary_sport: null }]);
   });
 });

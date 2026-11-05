@@ -2,6 +2,7 @@ import { Injectable, NotFoundException, ConflictException } from '@nestjs/common
 import { PrismaService } from '../../infrastructure/database/prisma.service';
 import { UpdateUserDto } from './dto/update-user.dto';
 import { UserRole } from '@prisma/client';
+import { runSerializableTransaction } from '../../common/database/serializable-transaction';
 
 export interface UserResponse {
   readonly id: string;
@@ -73,10 +74,17 @@ export class UsersService {
 
   async deactivate(id: string): Promise<UserResponse> {
     await this.findById(id);
-    return this.prisma.user.update({
-      where: { id },
-      data: { isActive: false },
-      select: userResponseSelect,
+    return runSerializableTransaction(this.prisma, async (transaction) => {
+      const user = await transaction.user.update({
+        where: { id },
+        data: { isActive: false },
+        select: userResponseSelect,
+      });
+      await transaction.refreshToken.updateMany({
+        where: { userId: id, revoked: false },
+        data: { revoked: true },
+      });
+      return user;
     });
   }
 }

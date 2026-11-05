@@ -4,6 +4,7 @@ import {
   UnauthorizedException,
   Logger,
   ForbiddenException,
+  BadRequestException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../../infrastructure/database/prisma.service';
@@ -12,61 +13,47 @@ import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
 import { VerifyGovIdDto } from './dto/verify-gov-id.dto';
 import { AuthResponseDto, AuthUserSummaryDto } from './dto/auth-response.dto';
-import { UserRole, VerificationStatus } from '@prisma/client';
+import { GovIdType, UserRole, VerificationStatus } from '@prisma/client';
 import * as jwt from 'jsonwebtoken';
 import * as crypto from 'node:crypto';
-import * as fs from 'node:fs';
 import { runSerializableTransaction } from '../../common/database/serializable-transaction';
+import { assertAccountAccess, assertIdentityAccess } from '../../common/auth/account-access';
+import { loadLocalJwtKeys, tokenDurationSeconds } from './jwt-keys';
+
+export interface GovernmentIdVerificationResponse {
+  readonly message: string;
+  readonly verified: boolean;
+  readonly idHashPrefix: string;
+  readonly userId: string;
+  readonly athleteProfileId: string | null;
+  readonly currentGti: number | null;
+  readonly auth?: AuthResponseDto;
+}
 
 @Injectable()
 export class AuthService {
   private readonly logger = new Logger(AuthService.name);
   private readonly privateKey: string;
   private readonly algorithm: jwt.Algorithm;
-  private readonly accessExpirySeconds = 900; // 15 mins
-  private readonly refreshExpiryDays = 7;
+  private readonly accessExpirySeconds: number;
+  private readonly refreshExpirySeconds: number;
 
   constructor(
     private readonly prisma: PrismaService,
     private readonly identityService: IdentityService,
     private readonly configService: ConfigService,
   ) {
-    const privateKeyPath = this.configService.get<string>(
-      'auth.jwtPrivateKeyPath',
-      './keys/private.pem',
+    const keys = loadLocalJwtKeys(configService);
+    this.privateKey = keys.signingKey;
+    this.algorithm = keys.algorithm;
+    this.accessExpirySeconds = tokenDurationSeconds(
+      configService.get<string | number>('auth.jwtAccessExpiry', '15m'),
+      'JWT_ACCESS_EXPIRY',
     );
-    const publicKeyPath = this.configService.get<string>(
-      'auth.jwtPublicKeyPath',
-      './keys/public.pem',
+    this.refreshExpirySeconds = tokenDurationSeconds(
+      configService.get<string | number>('auth.jwtRefreshExpiry', '7d'),
+      'JWT_REFRESH_EXPIRY',
     );
-
-    let key = '';
-    const privateKeyExists = fs.existsSync(privateKeyPath);
-    const publicKeyExists = fs.existsSync(publicKeyPath);
-    if (privateKeyExists !== publicKeyExists) {
-      throw new Error('Both JWT_PRIVATE_KEY_PATH and JWT_PUBLIC_KEY_PATH must exist.');
-    }
-    try {
-      if (privateKeyExists) {
-        key = fs.readFileSync(privateKeyPath, 'utf-8');
-      }
-    } catch {
-      key = '';
-    }
-
-    if (key.includes('BEGIN PRIVATE KEY') || key.includes('BEGIN RSA PRIVATE KEY')) {
-      this.privateKey = key;
-      this.algorithm = 'RS256';
-    } else {
-      const symmetricSecret = this.configService.get<string>('auth.identityPepper');
-      const isProduction =
-        this.configService.get<string>('app.nodeEnv', 'development') === 'production';
-      if (!symmetricSecret && isProduction) {
-        throw new Error('JWT key pair or IDENTITY_PEPPER must be configured in production.');
-      }
-      this.privateKey = symmetricSecret ?? 'local-development-jwt-secret';
-      this.algorithm = 'HS256';
-    }
   }
 
   /**
@@ -78,8 +65,21 @@ export class AuthService {
       throw new ConflictException('Either phone number or email address is required.');
     }
 
-    if (dto.role && dto.role !== UserRole.ATHLETE) {
-      throw new ForbiddenException('Public registration can only create ATHLETE accounts.');
+    const publicRoles: readonly UserRole[] = [UserRole.ATHLETE, UserRole.ORGANIZER, UserRole.SCOUT];
+    const role = dto.role ?? UserRole.ATHLETE;
+    if (!publicRoles.includes(role)) {
+      const invite = this.configService.get<string>('auth.adminInviteCode');
+      const supplied = dto.adminInviteCode;
+      const validInvite =
+        invite &&
+        supplied &&
+        crypto.timingSafeEqual(
+          crypto.createHash('sha256').update(invite).digest(),
+          crypto.createHash('sha256').update(supplied).digest(),
+        );
+      if (role !== UserRole.SUPER_ADMIN || !validInvite) {
+        throw new ForbiddenException('This role requires a valid administrator invitation.');
+      }
     }
 
     let precomputedIdHash: string | null = null;
@@ -89,8 +89,12 @@ export class AuthService {
         dto.governmentId.idType,
       );
 
-      const existingRecord = await this.identityService.findByIdHash(precomputedIdHash);
+      const existingRecord = await this.identityService.findByGovernmentId(
+        dto.governmentId.idNumber,
+        dto.governmentId.idType,
+      );
       if (existingRecord) {
+        assertIdentityAccess(existingRecord.status);
         const existingUser = existingRecord.user;
         const contactMatches =
           (dto.phone !== undefined && dto.phone === existingUser.phone) ||
@@ -104,8 +108,6 @@ export class AuthService {
                 where: { id: existingUser.id },
                 data: {
                   isActive: true,
-                  phone: dto.phone ?? existingUser.phone,
-                  email: dto.email ?? existingUser.email,
                 },
                 include: { athleteProfile: { select: { id: true } } },
               });
@@ -159,8 +161,6 @@ export class AuthService {
       }
     }
 
-    const role = dto.role ?? UserRole.ATHLETE;
-
     // Transactional creation of User, Profile, and IdentityVerification
     const user = await this.prisma.$transaction(async (tx) => {
       const newUser = await tx.user.create({
@@ -201,7 +201,7 @@ export class AuthService {
             userId: newUser.id,
             idHash: precomputedIdHash,
             idType: dto.governmentId.idType,
-            saltVersion: 1,
+            saltVersion: this.identityService.getConfiguredSaltVersion(),
             status: VerificationStatus.VERIFIED,
             verifiedAt: new Date(),
           },
@@ -226,6 +226,13 @@ export class AuthService {
    * Log into Kheleo using phone or email.
    */
   async login(dto: LoginDto): Promise<AuthResponseDto> {
+    if (
+      typeof dto.governmentId?.idNumber !== 'string' ||
+      !dto.governmentId.idNumber.trim() ||
+      !Object.values(GovIdType).includes(dto.governmentId.idType)
+    ) {
+      throw new BadRequestException('governmentId with idType and idNumber is required');
+    }
     if (!dto.phone && !dto.email) {
       throw new UnauthorizedException('Either phone or email must be provided to log in.');
     }
@@ -249,22 +256,20 @@ export class AuthService {
       );
     }
 
-    if (!user.isActive) {
-      throw new UnauthorizedException('This account has been deactivated.');
-    }
+    assertAccountAccess(user);
 
     if (!user.identityRecord) {
       throw new UnauthorizedException('Government ID verification is required before login.');
     }
 
-    const suppliedIdHash = this.identityService.hashGovernmentId(
-      dto.governmentId.idNumber,
-      dto.governmentId.idType,
-    );
-    const identityMatches = crypto.timingSafeEqual(
-      Buffer.from(suppliedIdHash, 'hex'),
-      Buffer.from(user.identityRecord.idHash, 'hex'),
-    );
+    const storedHash = Buffer.from(user.identityRecord.idHash, 'hex');
+    const identityMatches = this.identityService
+      .computeCandidateHashes(dto.governmentId.idNumber, dto.governmentId.idType)
+      .map(
+        (hash) =>
+          storedHash.length === 32 && crypto.timingSafeEqual(Buffer.from(hash, 'hex'), storedHash),
+      )
+      .some(Boolean);
     if (!identityMatches) {
       throw new UnauthorizedException('Invalid login credentials.');
     }
@@ -288,17 +293,36 @@ export class AuthService {
   async verifyGovernmentId(
     userId: string,
     dto: VerifyGovIdDto,
-  ): Promise<{ message: string; verified: boolean; idHashPrefix: string }> {
+  ): Promise<GovernmentIdVerificationResponse> {
     const record = await this.identityService.verifyAndBindGovernmentId(
       userId,
       dto.idNumber,
       dto.idType,
     );
 
+    const owner = await this.prisma.user.findUniqueOrThrow({
+      where: { id: record.userId },
+      include: { athleteProfile: { select: { id: true, currentGti: true } } },
+    });
     return {
       message: 'Government ID verified and bound to athlete passport.',
       verified: record.status === VerificationStatus.VERIFIED,
       idHashPrefix: record.idHash.substring(0, 8),
+      userId: owner.id,
+      athleteProfileId: owner.athleteProfile?.id ?? null,
+      currentGti: owner.athleteProfile ? Number(owner.athleteProfile.currentGti) : null,
+      ...(owner.id !== userId
+        ? {
+            auth: await this.generateAuthResponse(
+              owner.id,
+              owner.role,
+              owner.phone,
+              owner.email,
+              record.status === VerificationStatus.VERIFIED,
+              owner.athleteProfile?.id ?? null,
+            ),
+          }
+        : {}),
     };
   }
 
@@ -323,6 +347,8 @@ export class AuthService {
     if (!storedToken) {
       throw new UnauthorizedException('Invalid refresh token.');
     }
+
+    assertAccountAccess(storedToken.user);
 
     if (storedToken.revoked || storedToken.expiresAt < new Date()) {
       // Security measure: Revoke all tokens in family on reuse detection
@@ -389,8 +415,7 @@ export class AuthService {
     const tokenHash = crypto.createHash('sha256').update(rawRefreshToken).digest('hex');
 
     const family = existingFamily ?? crypto.randomBytes(16).toString('hex');
-    const expiresAt = new Date();
-    expiresAt.setDate(expiresAt.getDate() + this.refreshExpiryDays);
+    const expiresAt = new Date(Date.now() + this.refreshExpirySeconds * 1000);
 
     await this.prisma.refreshToken.create({
       data: {

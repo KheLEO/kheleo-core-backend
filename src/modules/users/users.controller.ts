@@ -1,6 +1,7 @@
 import {
   Controller,
   Get,
+  Post,
   Patch,
   Delete,
   Param,
@@ -17,13 +18,52 @@ import { JwtAuthGuard, AuthenticatedJwtUser } from '../../common/guards/jwt-auth
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { UserRole } from '@prisma/client';
 import { IdempotencyInterceptor } from '../../common/interceptors/idempotency.interceptor';
+import { PassportService } from '../passport/passport.service';
+import { UpdatePassportDto } from '../passport/dto/update-passport.dto';
+import { AthletePassportDto } from '../passport/dto/passport-response.dto';
+import { ScoutsDossiersService, AthleteDossierResponse } from '../scouts/dossiers.service';
 
 @ApiTags('Users')
 @Controller('users')
 @UseGuards(JwtAuthGuard)
 @ApiBearerAuth()
 export class UsersController {
-  constructor(private readonly usersService: UsersService) {}
+  constructor(
+    private readonly usersService: UsersService,
+    private readonly passports: PassportService,
+    private readonly dossiers: ScoutsDossiersService,
+  ) {}
+
+  @Get('profile')
+  async getProfile(@CurrentUser() user: AuthenticatedJwtUser): Promise<AthletePassportDto> {
+    return this.passports.getOrCreatePassport(user.sub);
+  }
+
+  @Post('profile')
+  @UseInterceptors(IdempotencyInterceptor)
+  async upsertProfile(
+    @CurrentUser() user: AuthenticatedJwtUser,
+    @Body() dto: UpdatePassportDto,
+  ): Promise<AthletePassportDto> {
+    return this.passports.upsertPassport(user.sub, dto);
+  }
+
+  @Patch('profile')
+  @UseInterceptors(IdempotencyInterceptor)
+  async updateProfile(
+    @CurrentUser() user: AuthenticatedJwtUser,
+    @Body() dto: UpdatePassportDto,
+  ): Promise<AthletePassportDto> {
+    return this.passports.upsertPassport(user.sub, dto);
+  }
+
+  @Get(':id/dossier')
+  async getDossier(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: AuthenticatedJwtUser,
+  ): Promise<AthleteDossierResponse> {
+    return this.dossiers.getDossier(id, user);
+  }
 
   @Get(':id')
   @ApiOperation({ summary: 'Get user profile by user ID' })

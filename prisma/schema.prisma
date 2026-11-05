@@ -176,9 +176,9 @@ model IdentityVerification {
 model AthleteProfile {
   id                 String             @id @default(uuid()) @db.Uuid
   userId             String             @unique @map("user_id") @db.Uuid
-  dateOfBirth        DateTime           @map("date_of_birth") @db.Date
-  gender             String             @db.VarChar(16)
-  primarySport       SportType          @map("primary_sport")
+  dateOfBirth        DateTime?          @map("date_of_birth") @db.Date
+  gender             String?            @db.VarChar(16)
+  primarySport       SportType?         @map("primary_sport")
   secondarySports    SportType[]        @default([]) @map("secondary_sports")
   district           String             @db.VarChar(100)
   state              String             @db.VarChar(100)

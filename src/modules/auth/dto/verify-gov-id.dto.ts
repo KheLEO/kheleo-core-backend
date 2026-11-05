@@ -1,6 +1,8 @@
 import { ApiProperty } from '@nestjs/swagger';
 import { IsEnum, IsNotEmpty, IsString, MinLength } from 'class-validator';
 import { GovIdType } from '@prisma/client';
+import { Transform, TransformFnParams } from 'class-transformer';
+import { FieldAliases } from '../../../common/decorators/field-aliases.decorator';
 
 export class VerifyGovIdDto {
   @ApiProperty({
@@ -10,6 +12,11 @@ export class VerifyGovIdDto {
   })
   @IsEnum(GovIdType)
   @IsNotEmpty()
+  @FieldAliases('id_type')
+  @Transform(
+    ({ value }: TransformFnParams): unknown => (value === undefined ? GovIdType.AADHAAR : value),
+    { toClassOnly: true },
+  )
   readonly idType!: GovIdType;
 
   @ApiProperty({
@@ -19,5 +26,6 @@ export class VerifyGovIdDto {
   @IsString()
   @IsNotEmpty()
   @MinLength(4)
+  @FieldAliases('id_number', 'gov_id')
   readonly idNumber!: string;
 }

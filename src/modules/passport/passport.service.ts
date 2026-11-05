@@ -1,4 +1,9 @@
-import { Injectable, NotFoundException, ConflictException } from '@nestjs/common';
+import {
+  Injectable,
+  NotFoundException,
+  ConflictException,
+  ForbiddenException,
+} from '@nestjs/common';
 import { PrismaService } from '../../infrastructure/database/prisma.service';
 import { CreatePassportDto } from './dto/create-passport.dto';
 import { UpdatePassportDto } from './dto/update-passport.dto';
@@ -8,6 +13,8 @@ import { CursorPaginationQueryDto } from '../../common/dto/cursor-pagination-que
 import { PaginatedResponseDto } from '../../common/dto/paginated-response.dto';
 import { Prisma, SportPassportRecord, VerificationStatus } from '@prisma/client';
 import { runSerializableTransaction } from '../../common/database/serializable-transaction';
+import { assertAccountAccess } from '../../common/auth/account-access';
+import { AuthenticatedJwtUser } from '../../common/guards/jwt-auth.guard';
 
 const athletePassportSelect = {
   id: true,
@@ -22,6 +29,9 @@ const athletePassportSelect = {
   heightCm: true,
   weightKg: true,
   dominantSide: true,
+  locationLat: true,
+  locationLng: true,
+  isScoutSearchable: true,
   currentGti: true,
   wearableScore: true,
   matchPerfScore: true,
@@ -61,7 +71,10 @@ export class PassportService {
    * Retrieves the full Digital Sports Passport:
    * Cross-sport performance logs, badges, and verified physical stats.
    */
-  async getPassportByUserId(userId: string): Promise<AthletePassportDto> {
+  async getPassportByUserId(
+    userId: string,
+    viewer?: AuthenticatedJwtUser,
+  ): Promise<AthletePassportDto> {
     const profile = await this.prisma.athleteProfile.findUnique({
       where: { userId },
       select: athletePassportSelect,
@@ -73,6 +86,9 @@ export class PassportService {
       );
     }
 
+    if (viewer?.role === 'SCOUT' && viewer.sub !== userId && !profile.isScoutSearchable) {
+      throw new ForbiddenException('Athlete profile is not opted into scout discovery');
+    }
     return this.mapToAthletePassportDto(profile);
   }
 
@@ -80,96 +96,107 @@ export class PassportService {
    * Creates a new AthleteProfile (Digital Sports Passport).
    */
   async createPassport(userId: string, dto: CreatePassportDto): Promise<AthletePassportDto> {
-    const user = await this.prisma.user.findUnique({ where: { id: userId } });
-    if (!user) {
-      throw new NotFoundException(`User with ID ${userId} does not exist.`);
-    }
-
-    const existingProfile = await this.prisma.athleteProfile.findUnique({
+    const existing = await this.prisma.athleteProfile.findUnique({
       where: { userId },
+      select: { id: true },
     });
-    if (existingProfile) {
+    if (existing)
       throw new ConflictException('A Digital Sports Passport already exists for this user.');
-    }
+    return this.upsertPassport(userId, {
+      ...dto,
+      isScoutSearchable: dto.isScoutSearchable ?? true,
+    });
+  }
 
-    const profile = await this.prisma.$transaction(async (tx) => {
-      const created = await tx.athleteProfile.create({
-        data: {
+  async getOrCreatePassport(userId: string): Promise<AthletePassportDto> {
+    return this.upsertPassport(userId, {});
+  }
+
+  async upsertPassport(userId: string, dto: UpdatePassportDto): Promise<AthletePassportDto> {
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      include: { identityRecord: { select: { status: true } } },
+    });
+    if (!user) throw new NotFoundException('User does not exist.');
+    assertAccountAccess(user);
+    const metadata = {
+      dateOfBirth: dto.dateOfBirth ? new Date(dto.dateOfBirth) : undefined,
+      gender: dto.gender,
+      primarySport: dto.primarySport,
+      secondarySports: dto.secondarySports ?? undefined,
+      district: dto.district ?? undefined,
+      state: dto.state ?? undefined,
+      tierClassification: dto.tierClassification ?? undefined,
+      heightCm: dto.heightCm,
+      weightKg: dto.weightKg,
+      dominantSide: dto.dominantSide,
+      locationLat: dto.locationLat,
+      locationLng: dto.locationLng,
+      isScoutSearchable: dto.isScoutSearchable ?? undefined,
+    };
+    const profile = await runSerializableTransaction(this.prisma, async (transaction) => {
+      const saved = await transaction.athleteProfile.upsert({
+        where: { userId },
+        update: metadata,
+        create: {
+          ...metadata,
           userId,
-          dateOfBirth: new Date(dto.dateOfBirth),
-          gender: dto.gender,
-          primarySport: dto.primarySport,
-          secondarySports: dto.secondarySports ?? [],
-          district: dto.district,
-          state: dto.state,
-          tierClassification: dto.tierClassification,
-          heightCm: dto.heightCm,
-          weightKg: dto.weightKg,
-          dominantSide: dto.dominantSide,
-          locationLat: dto.locationLat,
-          locationLng: dto.locationLng,
-          isScoutSearchable: dto.isScoutSearchable ?? true,
-          currentGti: 30.0,
-          wearableScore: 50.0,
-          matchPerfScore: 50.0,
+          dateOfBirth: metadata.dateOfBirth ?? null,
+          gender: metadata.gender ?? null,
+          primarySport: metadata.primarySport ?? null,
+          district: metadata.district ?? '',
+          state: metadata.state ?? '',
+          isScoutSearchable: metadata.isScoutSearchable ?? false,
         },
+        select: { id: true, primarySport: true, secondarySports: true },
       });
-
-      // Initialize default primary sport record
-      await tx.sportPassportRecord.create({
-        data: {
-          athleteId: created.id,
-          sport: dto.primarySport,
-          primaryRole: 'GENERAL_ATHLETE',
-          secondaryRoles: [],
-          totalMatches: 0,
-          winCount: 0,
-          winStreak: 0,
-          verifiedMetrics: {},
-          earnedBadges: [],
-        },
-      });
-
-      return tx.athleteProfile.findUniqueOrThrow({
-        where: { id: created.id },
+      if (saved.primarySport) {
+        await transaction.sportPassportRecord.upsert({
+          where: { athleteId_sport: { athleteId: saved.id, sport: saved.primarySport } },
+          create: {
+            athleteId: saved.id,
+            sport: saved.primarySport,
+            primaryRole: 'GENERAL_ATHLETE',
+          },
+          update: {},
+        });
+      }
+      for (const record of dto.sportRecords ?? []) {
+        await transaction.sportPassportRecord.upsert({
+          where: { athleteId_sport: { athleteId: saved.id, sport: record.sport } },
+          create: {
+            athleteId: saved.id,
+            sport: record.sport,
+            primaryRole: record.primaryRole,
+            secondaryRoles: record.secondaryRoles ?? [],
+          },
+          update: { primaryRole: record.primaryRole, secondaryRoles: record.secondaryRoles ?? [] },
+        });
+      }
+      if (dto.sportRecords?.length) {
+        const secondarySports = [
+          ...new Set([...saved.secondarySports, ...dto.sportRecords.map((record) => record.sport)]),
+        ].filter((sport) => sport !== saved.primarySport);
+        await transaction.athleteProfile.update({
+          where: { id: saved.id },
+          data: { secondarySports },
+        });
+      }
+      return transaction.athleteProfile.findUniqueOrThrow({
+        where: { userId },
         select: athletePassportSelect,
       });
     });
-
     return this.mapToAthletePassportDto(profile);
   }
 
-  /**
-   * Updates basic profile metadata and physical stats.
-   */
   async updatePassport(userId: string, dto: UpdatePassportDto): Promise<AthletePassportDto> {
     const existing = await this.prisma.athleteProfile.findUnique({
       where: { userId },
+      select: { id: true },
     });
-
-    if (!existing) {
-      throw new NotFoundException(`Digital Sports Passport for user ${userId} not found.`);
-    }
-
-    const updated = await this.prisma.athleteProfile.update({
-      where: { userId },
-      data: {
-        primarySport: dto.primarySport,
-        secondarySports: dto.secondarySports,
-        district: dto.district,
-        state: dto.state,
-        tierClassification: dto.tierClassification,
-        heightCm: dto.heightCm,
-        weightKg: dto.weightKg,
-        dominantSide: dto.dominantSide,
-        locationLat: dto.locationLat,
-        locationLng: dto.locationLng,
-        isScoutSearchable: dto.isScoutSearchable,
-      },
-      select: athletePassportSelect,
-    });
-
-    return this.mapToAthletePassportDto(updated);
+    if (!existing) throw new NotFoundException('Digital Sports Passport not found.');
+    return this.upsertPassport(userId, dto);
   }
 
   /**
@@ -178,7 +205,14 @@ export class PassportService {
   async addOrUpdateSportRecord(
     userId: string,
     dto: AddSportRecordDto,
+    allowVerifiedFields: boolean = false,
   ): Promise<SportPassportRecord> {
+    if (
+      !allowVerifiedFields &&
+      (dto.verifiedMetrics !== undefined || dto.earnedBadges !== undefined)
+    ) {
+      throw new ForbiddenException('Only an administrator can write verified metrics or badges');
+    }
     const profile = await this.prisma.athleteProfile.findUnique({
       where: { userId },
     });
@@ -294,6 +328,16 @@ export class PassportService {
       district: profile.district,
       state: profile.state,
       tierClassification: profile.tierClassification,
+      locationLat: profile.locationLat,
+      locationLng: profile.locationLng,
+      isScoutSearchable: profile.isScoutSearchable,
+      isProfileComplete: Boolean(
+        profile.dateOfBirth &&
+          profile.gender &&
+          profile.primarySport &&
+          profile.district &&
+          profile.state,
+      ),
       physicalStats: {
         heightCm: profile.heightCm ? Number(profile.heightCm) : null,
         weightKg: profile.weightKg ? Number(profile.weightKg) : null,

@@ -5,6 +5,8 @@ export const authConfig = registerAs('auth', () => ({
   jwtPublicKeyPath: process.env.JWT_PUBLIC_KEY_PATH ?? './keys/public.pem',
   jwtAccessExpiry: process.env.JWT_ACCESS_EXPIRY ?? '15m',
   jwtRefreshExpiry: process.env.JWT_REFRESH_EXPIRY ?? '7d',
+  supabaseJwtSecret: process.env.SUPABASE_JWT_SECRET ?? '',
+  adminInviteCode: process.env.ADMIN_INVITE_CODE ?? '',
   identityPepper: process.env.IDENTITY_PEPPER ?? '',
   identitySaltVersion: parseInt(process.env.IDENTITY_SALT_VERSION ?? '1', 10),
   drillHmacSecret: process.env.DRILL_HMAC_SECRET ?? '',

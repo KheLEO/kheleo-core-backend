@@ -2,63 +2,109 @@ import { Injectable, UnauthorizedException } from '@nestjs/common';
 import { PassportStrategy } from '@nestjs/passport';
 import { ExtractJwt, Strategy } from 'passport-jwt';
 import { ConfigService } from '@nestjs/config';
-import * as fs from 'node:fs';
+import { isUUID } from 'class-validator';
+import * as jwt from 'jsonwebtoken';
+import { PrismaService } from '../../../infrastructure/database/prisma.service';
+import { assertAccountAccess } from '../../../common/auth/account-access';
+import { AuthenticatedJwtUser } from '../../../common/guards/jwt-auth.guard';
+import { loadLocalJwtKeys } from '../jwt-keys';
 
-export interface JwtTokenPayload {
-  readonly sub: string;
-  readonly role: string;
-  readonly email?: string;
-  readonly phone?: string;
+export interface JwtTokenPayload extends AuthenticatedJwtUser {
+  readonly exp: number;
   readonly iat?: number;
-  readonly exp?: number;
+}
+
+function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 @Injectable()
 export class JwtStrategy extends PassportStrategy(Strategy) {
-  constructor(configService: ConfigService) {
-    let secretOrKey = '';
-    let algorithm: 'RS256' | 'HS256' = 'HS256';
-    const keyPath = configService.get<string>('auth.jwtPublicKeyPath', './keys/public.pem');
-    const privateKeyPath = configService.get<string>(
-      'auth.jwtPrivateKeyPath',
-      './keys/private.pem',
-    );
-    const publicKeyExists = fs.existsSync(keyPath);
-    const privateKeyExists = fs.existsSync(privateKeyPath);
-    if (publicKeyExists !== privateKeyExists) {
-      throw new Error('Both JWT_PRIVATE_KEY_PATH and JWT_PUBLIC_KEY_PATH must exist.');
-    }
-
-    try {
-      if (publicKeyExists) {
-        secretOrKey = fs.readFileSync(keyPath, 'utf-8');
-        algorithm = 'RS256';
-      }
-    } catch {
-      secretOrKey = '';
-    }
-
-    if (!secretOrKey) {
-      const symmetricSecret = configService.get<string>('auth.identityPepper');
-      const isProduction = configService.get<string>('app.nodeEnv', 'development') === 'production';
-      if (!symmetricSecret && isProduction) {
-        throw new Error('JWT public key or IDENTITY_PEPPER must be configured in production.');
-      }
-      secretOrKey = symmetricSecret ?? 'local-development-jwt-secret';
-    }
-
+  constructor(
+    configService: ConfigService,
+    private readonly prisma: PrismaService,
+  ) {
+    const local = loadLocalJwtKeys(configService);
+    const supabaseSecret = configService.get<string>('auth.supabaseJwtSecret');
+    const hmacSecrets = [
+      ...(local.algorithm === 'HS256' ? [local.verificationKey] : []),
+      ...(supabaseSecret ? [supabaseSecret] : []),
+    ];
     super({
       jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
       ignoreExpiration: false,
-      secretOrKey,
-      algorithms: [algorithm],
+      algorithms: [
+        ...(local.algorithm === 'RS256' ? ['RS256' as const] : []),
+        ...(hmacSecrets.length ? ['HS256' as const] : []),
+      ],
+      secretOrKeyProvider: (
+        _request: unknown,
+        token: string,
+        done: (error: Error | null, key?: string) => void,
+      ): void => {
+        const decoded = jwt.decode(token, { complete: true });
+        if (decoded?.header.alg === 'RS256' && local.algorithm === 'RS256') {
+          done(null, local.verificationKey);
+          return;
+        }
+        if (decoded?.header.alg === 'HS256') {
+          for (const secret of hmacSecrets) {
+            try {
+              jwt.verify(token, secret, { algorithms: ['HS256'] });
+              done(null, secret);
+              return;
+            } catch {
+              // Try the other explicitly configured HMAC authority.
+            }
+          }
+        }
+        done(new UnauthorizedException('Invalid or expired authentication token'));
+      },
     });
   }
 
-  async validate(payload: JwtTokenPayload): Promise<JwtTokenPayload> {
-    if (!payload.sub || !payload.role) {
-      throw new UnauthorizedException('Invalid token payload');
+  async validate(payload: unknown): Promise<JwtTokenPayload> {
+    if (
+      !isRecord(payload) ||
+      typeof payload.sub !== 'string' ||
+      !isUUID(payload.sub) ||
+      typeof payload.exp !== 'number' ||
+      !Number.isFinite(payload.exp) ||
+      payload.exp <= Date.now() / 1000
+    ) {
+      throw new UnauthorizedException('Invalid or expired token payload');
     }
-    return payload;
+    const user = await this.prisma.user.findUnique({
+      where: { id: payload.sub },
+      select: {
+        id: true,
+        role: true,
+        isActive: true,
+        email: true,
+        phone: true,
+        identityRecord: { select: { status: true } },
+      },
+    });
+    if (!user) throw new UnauthorizedException('Account does not exist');
+    assertAccountAccess(user);
+    const metadataRole = isRecord(payload.user_metadata) ? payload.user_metadata.role : undefined;
+    const claimedRole = payload.role === 'authenticated' ? metadataRole : payload.role;
+    return {
+      sub: user.id,
+      // Supabase user_metadata is user editable; stored roles remain authoritative.
+      role: typeof claimedRole === 'string' && claimedRole === user.role ? claimedRole : user.role,
+      ...(typeof payload.email === 'string'
+        ? { email: payload.email }
+        : user.email
+          ? { email: user.email }
+          : {}),
+      ...(typeof payload.phone === 'string'
+        ? { phone: payload.phone }
+        : user.phone
+          ? { phone: user.phone }
+          : {}),
+      exp: payload.exp,
+      ...(typeof payload.iat === 'number' ? { iat: payload.iat } : {}),
+    };
   }
 }

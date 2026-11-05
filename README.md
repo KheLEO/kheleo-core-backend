@@ -101,8 +101,10 @@ The default API base URL is `http://localhost:3000/api/v1`. Interactive OpenAPI 
 | `REDIS_PASSWORD`                | Optional Redis password                                   | Empty                                            |
 | `JWT_PRIVATE_KEY_PATH`          | RSA private key path                                      | `./keys/private.pem`                             |
 | `JWT_PUBLIC_KEY_PATH`           | RSA public key path                                       | `./keys/public.pem`                              |
-| `JWT_ACCESS_EXPIRY`             | Documented access-token duration                          | `15m`                                            |
-| `JWT_REFRESH_EXPIRY`            | Documented refresh-token duration                         | `7d`                                             |
+| `JWT_ACCESS_EXPIRY`             | Access-token lifetime in seconds or s/m/h/d/w duration    | `15m`                                            |
+| `JWT_REFRESH_EXPIRY`            | Opaque refresh-token lifetime in the same duration format | `7d`                                             |
+| `SUPABASE_JWT_SECRET`           | Optional additional HS256 JWT verification authority     | Empty                                            |
+| `ADMIN_INVITE_CODE`             | Required invitation for SUPER_ADMIN registration         | Empty                                            |
 | `IDENTITY_PEPPER`               | Secret pepper for government-ID hashes and HS256 fallback | Required in production if no RSA pair is present |
 | `IDENTITY_SALT_VERSION`         | Government-ID hash domain version                         | `1`                                              |
 | `DRILL_HMAC_SECRET`             | Shared secret for signed drill submissions                | Required in production                           |
@@ -140,7 +142,11 @@ Run `pnpm build` before `pnpm start:prod`. The build emits `dist/main.js` and a 
 
 Authentication is intentionally passwordless in this service. Public athlete registration accepts a phone number or email and may bind a government ID. Login requires the same verified contact plus the government-ID proof. The normalized ID is hashed with a versioned domain salt and `IDENTITY_PEPPER`; only the hash is stored.
 
-If registration supplies a government ID already attached to the same contact, the existing permanent profile is reactivated and returned. A matching ID with a different contact is rejected to prevent account resets that would discard historical GTI data. Public registration can create only `ATHLETE` accounts.
+If registration supplies a government ID already attached to the same contact, the existing permanent profile is reactivated and returned without changing its contacts or historical GTI. A matching ID with a different contact is rejected. Registration accepts `ATHLETE`, `ORGANIZER`, and `SCOUT`; `SUPER_ADMIN` requires a matching `adminInviteCode` and server `ADMIN_INVITE_CODE`. Other privileged roles cannot self-register.
+
+Login, refresh, and authenticated HTTP requests reject deactivated accounts and identities marked `REVOKED` or `FLAGGED_DUPLICATE`. Deactivation also revokes stored refresh tokens. Token lifetimes follow `JWT_ACCESS_EXPIRY` and `JWT_REFRESH_EXPIRY`. Identity lookups try the configured salt version and version 1; new records store the configured version. Retain the identity pepper when changing the salt version.
+
+When `SUPABASE_JWT_SECRET` is configured, registered users may authenticate with Supabase HS256 tokens alongside local RSA/HS256 tokens. The JWT subject must identify an existing backend user. Supabase email, phone, and matching `user_metadata.role` claims are mapped; the current database role controls authorization because user metadata is editable. This adds JWT compatibility; the local document/contact login still does not perform external OTP or KYC verification.
 
 Protected HTTP routes use:
 
@@ -155,6 +161,14 @@ Idempotency-Key: <unique-request-key>
 ```
 
 Successful responses are cached for 24 hours per authenticated user, HTTP method, full URL including query string, and key. Public requests fall back to the device-signature header, then the caller IP. Fingerprints sort JSON object keys recursively and preserve array order. Reusing a key in the same scope with a different body returns `409 Conflict`; a replay with the same body returns the cached response and `X-Cache-Lookup: IDEMPOTENT_HIT`. Concurrent duplicates receive `409 Conflict`; lock release atomically verifies the invocation's owner token.
+
+Login and refresh still require idempotency keys and acquire request locks, but always execute credential/account checks rather than replaying cached token responses. Outreach checks scout visibility before cache lookup, including repeated requests after an athlete opts out.
+
+`GET /users/profile` initializes an incomplete passport if necessary. Its birth date, gender, and primary sport remain `null` until supplied; `isProfileComplete` reports completion, and drafts default to scout visibility off. Apply the follow-up `20261105010000_allow_incomplete_passports` migration with `pnpm prisma:deploy`. The original Phase 1 baseline is unchanged. Tournament and pool entry require a completed passport and a verified identity.
+
+`POST /users/profile` and `PATCH /users/profile` upsert only the authenticated user's metadata and sport roles. Both accept camelCase and snake_case profile fields, including `sportRecords`/`sport_records`. Latitude and longitude are bounded to ±90 and ±180. Athlete writes cannot set verified metrics, earned badges, GTI, or match counters; existing scores and counters survive profile updates.
+
+`GET /users/:id/dossier` returns the flattened dossier with the latest 20 GTI entries, 10 drill summaries, bounded safety summaries, and sport records. Athletes may read their own dossier; scouts, organizers, and federation/super admins may read others. Scout opt-out also applies to legacy passport reads and outreach. `POST /scouts/dossiers/:athleteId/outreach` upserts the current scout's notes with `outreachType: "TRIAL" | "SCHOLARSHIP"` (default `TRIAL`).
 
 ### Example registration
 
@@ -191,8 +205,13 @@ All routes below are under `/api/v1`.
 | `POST /auth/register`                                                     | Public + idempotency key                                 | Register an athlete or recover the matching permanent profile            |
 | `POST /auth/login`                                                        | Public + idempotency key                                 | Authenticate with verified contact and government ID                     |
 | `POST /auth/verify-government-id`                                         | JWT + idempotency key                                    | Bind a government ID to the current user                                 |
+| `POST /auth/verify-gov-id`                                                | JWT + idempotency key                                    | Alias supporting idType/idNumber, id_type/id_number, or gov_id            |
 | `POST /auth/refresh`                                                      | Public + idempotency key                                 | Rotate a refresh token                                                   |
 | `GET /auth/me`                                                            | JWT                                                      | Return the current JWT identity                                          |
+| `GET /users/profile`                                                     | JWT                                                      | Return or initialize the authenticated user's passport                   |
+| `POST /users/profile`                                                    | JWT + idempotency key                                    | Upsert the authenticated user's passport and sport roles                  |
+| `PATCH /users/profile`                                                   | JWT + idempotency key                                    | Patch the authenticated user's passport                                  |
+| `GET /users/:id/dossier`                                                  | Owner, scout, organizer, federation admin, or super admin | Return bounded scout dossier summaries                                  |
 | `GET /users/:id`                                                          | Owner or super admin                                     | Return user/contact data                                                 |
 | `PATCH /users/:id`                                                        | Owner or super admin + idempotency key                   | Update contact data                                                      |
 | `DELETE /users/:id`                                                       | Owner or super admin + idempotency key                   | Deactivate an account                                                    |
@@ -200,7 +219,7 @@ All routes below are under `/api/v1`.
 | `POST /passport/:userId`                                                  | Owner or super admin + idempotency key                   | Create an athlete passport                                               |
 | `PATCH /passport/:userId`                                                 | Owner or super admin + idempotency key                   | Update passport metadata                                                 |
 | `POST /passport/:userId/sports`                                           | Owner or super admin + idempotency key                   | Add or update a sport record                                             |
-| `GET /passport/:userId/sports`                                            | Public                                                   | List sport records with `limit` and `cursor_id`                          |
+| `GET /passport/:userId/sports`                                            | Owner, scout, federation admin, or super admin           | List sport records with `limit` and `cursor_id`; respect scout opt-out   |
 | `GET /tournaments/nearby`                                                 | Public                                                   | Find open tournaments by `lat`, `lng`, and `radius_km`                   |
 | `GET /tournaments/:id`                                                    | Public                                                   | Return tournament details and brackets                                   |
 | `POST /tournaments`                                                       | Organizer/admin + idempotency key                        | Create an open tournament                                                |
@@ -217,6 +236,7 @@ All routes below are under `/api/v1`.
 | `GET /scouts/feed`                                                        | Scout/federation/super admin                             | Return cursor-paginated prospects                                        |
 | `GET /scouts/alerts`                                                      | Scout/federation/super admin                             | Return up to 50 recent alerts                                            |
 | `PATCH /scouts/alerts/:id/acknowledge`                                    | Scout/federation/super admin + idempotency key           | Acknowledge an alert                                                     |
+| `POST /scouts/dossiers/:athleteId/outreach`                               | Scout/federation/super admin + idempotency key           | Create or update trial/scholarship outreach notes                        |
 | `GET /heatmaps/regional`                                                  | Public                                                   | Return district density, average GTI, female participation, and centroid |
 
 Use Swagger for the authoritative request and response schemas.
@@ -279,7 +299,7 @@ pnpm test
 pnpm build
 ```
 
-The migration suite executes the committed SQL in embedded Postgres/PostGIS (PGlite), including geometry triggers, foreign keys, spatial indexes, and the production discovery/heatmap queries. Health HTTP tests inject dependency failures. These checks do not establish native PostgreSQL/Redis connectivity or full application startup; verify those against the deployment services.
+The migration suite executes the committed migration chain in embedded Postgres/PostGIS (PGlite), including geometry triggers, foreign keys, spatial indexes, and the production discovery/heatmap queries. Auth/passport HTTP tests use real controllers, validation, guards, JWT signature verification, and services with in-memory database/cache doubles. Health HTTP tests inject dependency failures. These checks do not establish native PostgreSQL/Redis connectivity, a live Supabase session, or full application startup; verify those against the deployment services.
 
 ## License
 

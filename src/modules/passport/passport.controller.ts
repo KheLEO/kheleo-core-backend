@@ -61,7 +61,7 @@ export class PassportController {
     if (user.sub !== userId && !privilegedRoles.includes(user.role)) {
       throw new ForbiddenException("You cannot view another athlete's passport.");
     }
-    return this.passportService.getPassportByUserId(userId);
+    return this.passportService.getPassportByUserId(userId, user);
   }
 
   @Post(':userId')
@@ -147,10 +147,15 @@ export class PassportController {
     if (user.sub !== userId && user.role !== UserRole.SUPER_ADMIN) {
       throw new ForbiddenException('You can only update sports for your own passport.');
     }
-    return this.passportService.addOrUpdateSportRecord(userId, dto);
+    return this.passportService.addOrUpdateSportRecord(
+      userId,
+      dto,
+      user.role === UserRole.SUPER_ADMIN,
+    );
   }
 
   @Get(':userId/sports')
+  @UseGuards(JwtAuthGuard)
   @ApiCursorQuery()
   @ApiOperation({
     summary: 'List cross-sport records with cursor-based pagination',
@@ -162,7 +167,16 @@ export class PassportController {
   async listSportRecords(
     @Param('userId', ParseUUIDPipe) userId: string,
     @Query() query: CursorPaginationQueryDto,
+    @CurrentUser() user: AuthenticatedJwtUser,
   ): Promise<PaginatedResponseDto<unknown>> {
+    const allowedRoles: readonly string[] = [
+      UserRole.SCOUT,
+      UserRole.FEDERATION_ADMIN,
+      UserRole.SUPER_ADMIN,
+    ];
+    if (user.sub !== userId && !allowedRoles.includes(user.role))
+      throw new ForbiddenException('You cannot view this passport.');
+    await this.passportService.getPassportByUserId(userId, user);
     return this.passportService.listSportRecords(userId, query);
   }
 }

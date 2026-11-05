@@ -7,9 +7,10 @@ import {
   UseInterceptors,
   HttpCode,
   HttpStatus,
+  SetMetadata,
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth, ApiHeader } from '@nestjs/swagger';
-import { AuthService } from './auth.service';
+import { AuthService, GovernmentIdVerificationResponse } from './auth.service';
 import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
 import { VerifyGovIdDto } from './dto/verify-gov-id.dto';
@@ -17,7 +18,10 @@ import { RefreshTokenDto } from './dto/refresh-token.dto';
 import { AuthResponseDto } from './dto/auth-response.dto';
 import { JwtAuthGuard, AuthenticatedJwtUser } from '../../common/guards/jwt-auth.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
-import { IdempotencyInterceptor } from '../../common/interceptors/idempotency.interceptor';
+import {
+  FRESH_IDEMPOTENCY_KEY,
+  IdempotencyInterceptor,
+} from '../../common/interceptors/idempotency.interceptor';
 
 @ApiTags('Authentication & Identity')
 @Controller('auth')
@@ -52,6 +56,7 @@ export class AuthController {
   }
 
   @Post('login')
+  @SetMetadata(FRESH_IDEMPOTENCY_KEY, true)
   @HttpCode(HttpStatus.OK)
   @UseInterceptors(IdempotencyInterceptor)
   @ApiOperation({
@@ -68,7 +73,7 @@ export class AuthController {
     return this.authService.login(dto);
   }
 
-  @Post('verify-government-id')
+  @Post(['verify-government-id', 'verify-gov-id'])
   @HttpCode(HttpStatus.OK)
   @UseGuards(JwtAuthGuard)
   @UseInterceptors(IdempotencyInterceptor)
@@ -89,11 +94,12 @@ export class AuthController {
   async verifyGovernmentId(
     @CurrentUser() user: AuthenticatedJwtUser,
     @Body() dto: VerifyGovIdDto,
-  ): Promise<{ message: string; verified: boolean; idHashPrefix: string }> {
+  ): Promise<GovernmentIdVerificationResponse> {
     return this.authService.verifyGovernmentId(user.sub, dto);
   }
 
   @Post('refresh')
+  @SetMetadata(FRESH_IDEMPOTENCY_KEY, true)
   @HttpCode(HttpStatus.OK)
   @UseInterceptors(IdempotencyInterceptor)
   @ApiOperation({

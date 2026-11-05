@@ -122,7 +122,7 @@ export class HeatmapsService {
 
           const entry = districtMap.get(district)!;
           entry.total += 1;
-          if (profile.gender.toUpperCase() === 'FEMALE') {
+          if (profile.gender?.toUpperCase() === 'FEMALE') {
             entry.femaleCount += 1;
           }
           const gtiValue = profile.gti > 0 ? profile.gti : Number(profile.currentGti) || 0;

@@ -1,5 +1,13 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsEmail, IsOptional, IsString, Matches, ValidateNested } from 'class-validator';
+import {
+  IsDefined,
+  IsEmail,
+  IsNotEmptyObject,
+  IsOptional,
+  IsString,
+  Matches,
+  ValidateNested,
+} from 'class-validator';
 import { Type } from 'class-transformer';
 import { GovernmentIdInputDto } from './register.dto';
 
@@ -18,6 +26,8 @@ export class LoginDto {
   readonly email?: string;
 
   @ApiProperty({ type: GovernmentIdInputDto })
+  @IsDefined()
+  @IsNotEmptyObject()
   @ValidateNested()
   @Type(() => GovernmentIdInputDto)
   readonly governmentId!: GovernmentIdInputDto;

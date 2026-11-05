@@ -3,6 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../../infrastructure/database/prisma.service';
 import { GovIdType, IdentityVerification, Prisma, VerificationStatus } from '@prisma/client';
 import * as crypto from 'node:crypto';
+import { assertAccountAccess, assertIdentityAccess } from '../../common/auth/account-access';
 
 @Injectable()
 export class IdentityService {
@@ -22,7 +23,31 @@ export class IdentityService {
       throw new Error('IDENTITY_PEPPER must be configured in production.');
     }
     this.pepper = configuredPepper ?? 'local-development-identity-pepper';
-    this.defaultSaltVersion = this.configService.get<number>('auth.identitySaltVersion') || 1;
+    this.defaultSaltVersion = this.configService.get<number>('auth.identitySaltVersion') ?? 1;
+    if (!Number.isSafeInteger(this.defaultSaltVersion) || this.defaultSaltVersion < 1) {
+      throw new Error('IDENTITY_SALT_VERSION must be a positive integer.');
+    }
+  }
+
+  getConfiguredSaltVersion(): number {
+    return this.defaultSaltVersion;
+  }
+
+  computeCandidateHashes(idNumber: string, idType: GovIdType): readonly string[] {
+    return [...new Set([this.defaultSaltVersion, 1])].map((version) =>
+      this.hashGovernmentId(idNumber, idType, version),
+    );
+  }
+
+  async findByGovernmentId(
+    idNumber: string,
+    idType: GovIdType,
+  ): Promise<IdentityRecordWithUser | null> {
+    for (const hash of this.computeCandidateHashes(idNumber, idType)) {
+      const record = await this.findByIdHash(hash);
+      if (record) return record;
+    }
+    return null;
   }
 
   /**
@@ -84,14 +109,28 @@ export class IdentityService {
     if (!user) {
       throw new NotFoundException(`User with ID ${userId} does not exist.`);
     }
+    assertAccountAccess(user);
 
     const idHash = this.hashGovernmentId(idNumber, idType, this.defaultSaltVersion);
 
     // Check if ID hash already exists in database
-    const existing = await this.findByIdHash(idHash);
+    const existing = await this.findByGovernmentId(idNumber, idType);
     if (existing) {
+      assertIdentityAccess(existing.status);
       if (existing.userId === userId) {
         // Already bound to this exact user
+        return existing;
+      }
+      const contactMatches =
+        existing.user &&
+        ((user.phone !== null && user.phone === existing.user.phone) ||
+          (user.email !== null && user.email === existing.user.email));
+      if (contactMatches) {
+        assertAccountAccess(existing.user);
+        await this.prisma.identityVerification.update({
+          where: { id: existing.id },
+          data: { reLinkedCount: { increment: 1 }, historicalUserIds: { push: userId } },
+        });
         return existing;
       }
 

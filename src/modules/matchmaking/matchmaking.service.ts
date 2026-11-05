@@ -16,6 +16,7 @@ import {
 import { FreeAgentStatus, RegistrationStatus, TournamentStatus } from '@prisma/client';
 import * as crypto from 'node:crypto';
 import { runSerializableTransaction } from '../../common/database/serializable-transaction';
+import { assertVerifiedAthlete } from '../../common/auth/account-access';
 
 interface RoleSlotRequirement {
   readonly slotName: string;
@@ -47,7 +48,16 @@ export class MatchmakingService {
     // 1. Resolve athlete profile and GTI
     const athleteProfile = await this.prisma.athleteProfile.findUnique({
       where: { userId },
-      select: { id: true, currentGti: true },
+      select: {
+        id: true,
+        currentGti: true,
+        dateOfBirth: true,
+        gender: true,
+        primarySport: true,
+        district: true,
+        state: true,
+        user: { select: { isActive: true, identityRecord: { select: { status: true } } } },
+      },
     });
 
     if (!athleteProfile) {
@@ -57,6 +67,18 @@ export class MatchmakingService {
     }
 
     const athleteGti = Number(athleteProfile.currentGti);
+    assertVerifiedAthlete(athleteProfile.user);
+    if (
+      !athleteProfile.dateOfBirth ||
+      !athleteProfile.gender ||
+      !athleteProfile.primarySport ||
+      !athleteProfile.district ||
+      !athleteProfile.state
+    ) {
+      throw new BadRequestException(
+        'Complete the athlete passport before tournament participation',
+      );
+    }
 
     // 2. Validate bracket & tournament existence
     const bracket = await this.prisma.bracket.findUnique({

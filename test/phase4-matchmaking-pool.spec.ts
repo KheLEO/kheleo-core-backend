@@ -1,7 +1,10 @@
 import { describe, it } from 'node:test';
 import * as assert from 'node:assert';
 import { MatchmakingService } from '../src/modules/matchmaking/matchmaking.service';
-import { MatchmakingGateway, RosterFormedEventData } from '../src/modules/matchmaking/matchmaking.gateway';
+import {
+  MatchmakingGateway,
+  RosterFormedEventData,
+} from '../src/modules/matchmaking/matchmaking.gateway';
 import { PrismaService } from '../src/infrastructure/database/prisma.service';
 import { QueueProducerService } from '../src/infrastructure/queues/queue-producer.service';
 import { ConflictException } from '@nestjs/common';
@@ -21,6 +24,12 @@ describe('Phase 4: Dynamic Free Agent Matchmaking Pool & Role Balancing Engine',
       const mockPrisma = {
         athleteProfile: {
           findUnique: async () => ({
+            user: { isActive: true, identityRecord: { status: 'VERIFIED' } },
+            dateOfBirth: new Date('2000-01-01'),
+            gender: 'FEMALE',
+            primarySport: 'CRICKET',
+            district: 'Pune',
+            state: 'Maharashtra',
             id: 'prof-1',
             currentGti: 82.0, // High GTI
           }),
@@ -50,12 +59,9 @@ describe('Phase 4: Dynamic Free Agent Matchmaking Pool & Role Balancing Engine',
 
       await assert.rejects(
         async () => {
-          await service.joinPool(
-            'tournament-1',
-            'bracket-open',
-            'user-athlete-high',
-            { primary_role: 'BATSMAN' },
-          );
+          await service.joinPool('tournament-1', 'bracket-open', 'user-athlete-high', {
+            primary_role: 'BATSMAN',
+          });
         },
         (err: unknown) => {
           assert.ok(err instanceof ConflictException);
@@ -72,6 +78,12 @@ describe('Phase 4: Dynamic Free Agent Matchmaking Pool & Role Balancing Engine',
       const mockPrisma = {
         athleteProfile: {
           findUnique: async () => ({
+            user: { isActive: true, identityRecord: { status: 'VERIFIED' } },
+            dateOfBirth: new Date('2000-01-01'),
+            gender: 'FEMALE',
+            primarySport: 'CRICKET',
+            district: 'Pune',
+            state: 'Maharashtra',
             id: 'prof-2',
             currentGti: 45.0,
           }),
@@ -101,9 +113,8 @@ describe('Phase 4: Dynamic Free Agent Matchmaking Pool & Role Balancing Engine',
         teamMember: {
           findFirst: async () => null,
         },
-        $transaction: async (
-          callback: (transaction: unknown) => Promise<unknown>,
-        ) => callback(mockPrisma),
+        $transaction: async (callback: (transaction: unknown) => Promise<unknown>) =>
+          callback(mockPrisma),
       };
 
       const service = new MatchmakingService(
@@ -114,12 +125,9 @@ describe('Phase 4: Dynamic Free Agent Matchmaking Pool & Role Balancing Engine',
 
       await assert.rejects(
         async () => {
-          await service.joinPool(
-            'tournament-1',
-            'bracket-tier-2',
-            'user-athlete-dup',
-            { primary_role: 'BOWLER' },
-          );
+          await service.joinPool('tournament-1', 'bracket-tier-2', 'user-athlete-dup', {
+            primary_role: 'BOWLER',
+          });
         },
         (err: unknown) => {
           assert.ok(err instanceof ConflictException);
@@ -135,6 +143,12 @@ describe('Phase 4: Dynamic Free Agent Matchmaking Pool & Role Balancing Engine',
       const mockPrisma = {
         athleteProfile: {
           findUnique: async () => ({
+            user: { isActive: true, identityRecord: { status: 'VERIFIED' } },
+            dateOfBirth: new Date('2000-01-01'),
+            gender: 'FEMALE',
+            primarySport: 'CRICKET',
+            district: 'Pune',
+            state: 'Maharashtra',
             id: 'prof-3',
             currentGti: 45.0,
           }),
@@ -156,7 +170,16 @@ describe('Phase 4: Dynamic Free Agent Matchmaking Pool & Role Balancing Engine',
         },
         freeAgentRegistration: {
           findFirst: async () => null,
-          create: async (payload: { data: { userId: string; tournamentId: string; bracketId: string; sport: string; primaryRole: string; status: FreeAgentStatus } }) => ({
+          create: async (payload: {
+            data: {
+              userId: string;
+              tournamentId: string;
+              bracketId: string;
+              sport: string;
+              primaryRole: string;
+              status: FreeAgentStatus;
+            };
+          }) => ({
             id: 'new-fa-reg-1',
             ...payload.data,
             secondaryRole: null,
@@ -168,9 +191,8 @@ describe('Phase 4: Dynamic Free Agent Matchmaking Pool & Role Balancing Engine',
         teamMember: {
           findFirst: async () => null,
         },
-        $transaction: async (
-          callback: (transaction: unknown) => Promise<unknown>,
-        ) => callback(mockPrisma),
+        $transaction: async (callback: (transaction: unknown) => Promise<unknown>) =>
+          callback(mockPrisma),
       };
 
       const customQueueProducer = {
@@ -217,7 +239,11 @@ describe('Phase 4: Dynamic Free Agent Matchmaking Pool & Role Balancing Engine',
           primaryRole: 'BATSMAN',
           secondaryRole: null,
           joinedAt: new Date('2026-10-11T13:00:00Z'),
-          user: { email: 'bat1@kheleo.com', phone: '+919000000001', athleteProfile: { currentGti: 48.0 } },
+          user: {
+            email: 'bat1@kheleo.com',
+            phone: '+919000000001',
+            athleteProfile: { currentGti: 48.0 },
+          },
         },
         {
           id: 'fa-2',
@@ -225,7 +251,11 @@ describe('Phase 4: Dynamic Free Agent Matchmaking Pool & Role Balancing Engine',
           primaryRole: 'BATSMAN',
           secondaryRole: null,
           joinedAt: new Date('2026-10-11T13:01:00Z'),
-          user: { email: 'bat2@kheleo.com', phone: '+919000000002', athleteProfile: { currentGti: 52.0 } },
+          user: {
+            email: 'bat2@kheleo.com',
+            phone: '+919000000002',
+            athleteProfile: { currentGti: 52.0 },
+          },
         },
         {
           id: 'fa-3',
@@ -233,7 +263,11 @@ describe('Phase 4: Dynamic Free Agent Matchmaking Pool & Role Balancing Engine',
           primaryRole: 'BATSMAN',
           secondaryRole: null,
           joinedAt: new Date('2026-10-11T13:02:00Z'),
-          user: { email: 'bat3@kheleo.com', phone: '+919000000003', athleteProfile: { currentGti: 46.0 } },
+          user: {
+            email: 'bat3@kheleo.com',
+            phone: '+919000000003',
+            athleteProfile: { currentGti: 46.0 },
+          },
         },
         {
           id: 'fa-4',
@@ -241,7 +275,11 @@ describe('Phase 4: Dynamic Free Agent Matchmaking Pool & Role Balancing Engine',
           primaryRole: 'BOWLER',
           secondaryRole: null,
           joinedAt: new Date('2026-10-11T13:03:00Z'),
-          user: { email: 'bowl1@kheleo.com', phone: '+919000000004', athleteProfile: { currentGti: 55.0 } },
+          user: {
+            email: 'bowl1@kheleo.com',
+            phone: '+919000000004',
+            athleteProfile: { currentGti: 55.0 },
+          },
         },
         {
           id: 'fa-5',
@@ -249,7 +287,11 @@ describe('Phase 4: Dynamic Free Agent Matchmaking Pool & Role Balancing Engine',
           primaryRole: 'BOWLER',
           secondaryRole: null,
           joinedAt: new Date('2026-10-11T13:04:00Z'),
-          user: { email: 'bowl2@kheleo.com', phone: '+919000000005', athleteProfile: { currentGti: 50.0 } },
+          user: {
+            email: 'bowl2@kheleo.com',
+            phone: '+919000000005',
+            athleteProfile: { currentGti: 50.0 },
+          },
         },
         {
           id: 'fa-6',
@@ -257,7 +299,11 @@ describe('Phase 4: Dynamic Free Agent Matchmaking Pool & Role Balancing Engine',
           primaryRole: 'ALL_ROUNDER',
           secondaryRole: null,
           joinedAt: new Date('2026-10-11T13:05:00Z'),
-          user: { email: 'all1@kheleo.com', phone: '+919000000006', athleteProfile: { currentGti: 54.0 } },
+          user: {
+            email: 'all1@kheleo.com',
+            phone: '+919000000006',
+            athleteProfile: { currentGti: 54.0 },
+          },
         },
         {
           id: 'fa-7',
@@ -265,7 +311,11 @@ describe('Phase 4: Dynamic Free Agent Matchmaking Pool & Role Balancing Engine',
           primaryRole: 'WICKETKEEPER',
           secondaryRole: null,
           joinedAt: new Date('2026-10-11T13:06:00Z'),
-          user: { email: 'wk1@kheleo.com', phone: '+919000000007', athleteProfile: { currentGti: 51.0 } },
+          user: {
+            email: 'wk1@kheleo.com',
+            phone: '+919000000007',
+            athleteProfile: { currentGti: 51.0 },
+          },
         },
       ];
 
@@ -289,7 +339,18 @@ describe('Phase 4: Dynamic Free Agent Matchmaking Pool & Role Balancing Engine',
         },
         $transaction: async (
           callback: (tx: {
-            team: { create: (d: { data: { name: string; tournamentId: string; bracketId: string; isFreeAgentTeam: boolean; isFreeAgentFormed: boolean; averageGti: number } }) => Promise<{ id: string; name: string }> };
+            team: {
+              create: (d: {
+                data: {
+                  name: string;
+                  tournamentId: string;
+                  bracketId: string;
+                  isFreeAgentTeam: boolean;
+                  isFreeAgentFormed: boolean;
+                  averageGti: number;
+                };
+              }) => Promise<{ id: string; name: string }>;
+            };
             teamMember: { create: (d: unknown) => Promise<unknown> };
             freeAgentRegistration: { updateMany: (d: unknown) => Promise<{ count: number }> };
             registration: {

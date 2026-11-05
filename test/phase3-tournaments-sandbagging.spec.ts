@@ -13,6 +13,12 @@ describe('Phase 3: Tournaments Geospatial Discovery & Anti-Sandbagging Engine', 
       const mockPrisma = {
         athleteProfile: {
           findUnique: async () => ({
+            user: { isActive: true, identityRecord: { status: 'VERIFIED' } },
+            dateOfBirth: new Date('2000-01-01'),
+            gender: 'FEMALE',
+            primarySport: 'CRICKET',
+            district: 'Pune',
+            state: 'Maharashtra',
             id: 'athlete-prof-1',
             currentGti: 75.5, // High skill (75.5)
           }),
@@ -43,9 +49,7 @@ describe('Phase 3: Tournaments Geospatial Discovery & Anti-Sandbagging Engine', 
         },
       };
 
-      const bracketsService = new BracketsService(
-        mockPrisma as unknown as PrismaService,
-      );
+      const bracketsService = new BracketsService(mockPrisma as unknown as PrismaService);
 
       await assert.rejects(
         async () => {
@@ -73,6 +77,12 @@ describe('Phase 3: Tournaments Geospatial Discovery & Anti-Sandbagging Engine', 
       const mockPrisma = {
         athleteProfile: {
           findUnique: async () => ({
+            user: { isActive: true, identityRecord: { status: 'VERIFIED' } },
+            dateOfBirth: new Date('2000-01-01'),
+            gender: 'FEMALE',
+            primarySport: 'CRICKET',
+            district: 'Pune',
+            state: 'Maharashtra',
             id: 'athlete-prof-2',
             currentGti: 25.0, // Low skill (25.0)
           }),
@@ -95,9 +105,7 @@ describe('Phase 3: Tournaments Geospatial Discovery & Anti-Sandbagging Engine', 
         },
       };
 
-      const bracketsService = new BracketsService(
-        mockPrisma as unknown as PrismaService,
-      );
+      const bracketsService = new BracketsService(mockPrisma as unknown as PrismaService);
 
       await assert.rejects(
         async () => {
@@ -125,6 +133,12 @@ describe('Phase 3: Tournaments Geospatial Discovery & Anti-Sandbagging Engine', 
       const mockPrisma = {
         athleteProfile: {
           findUnique: async () => ({
+            user: { isActive: true, identityRecord: { status: 'VERIFIED' } },
+            dateOfBirth: new Date('2000-01-01'),
+            gender: 'FEMALE',
+            primarySport: 'CRICKET',
+            district: 'Pune',
+            state: 'Maharashtra',
             id: 'athlete-prof-3',
             currentGti: 52.0, // Within range [40.0, 65.0]
           }),
@@ -188,9 +202,7 @@ describe('Phase 3: Tournaments Geospatial Discovery & Anti-Sandbagging Engine', 
         },
       };
 
-      const bracketsService = new BracketsService(
-        mockPrisma as unknown as PrismaService,
-      );
+      const bracketsService = new BracketsService(mockPrisma as unknown as PrismaService);
 
       const result = await bracketsService.registerForBracket(
         'tournament-1',

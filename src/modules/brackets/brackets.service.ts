@@ -13,6 +13,7 @@ import { Bracket, Registration, RegistrationStatus, TournamentStatus } from '@pr
 import { runSerializableTransaction } from '../../common/database/serializable-transaction';
 import { CursorPaginationQueryDto } from '../../common/dto/cursor-pagination-query.dto';
 import { PaginatedResponseDto } from '../../common/dto/paginated-response.dto';
+import { assertVerifiedAthlete } from '../../common/auth/account-access';
 
 @Injectable()
 export class BracketsService {
@@ -36,7 +37,16 @@ export class BracketsService {
     // 1. Retrieve athlete's verified profile & GTI
     const athleteProfile = await this.prisma.athleteProfile.findUnique({
       where: { userId },
-      select: { id: true, currentGti: true },
+      select: {
+        id: true,
+        currentGti: true,
+        dateOfBirth: true,
+        gender: true,
+        primarySport: true,
+        district: true,
+        state: true,
+        user: { select: { isActive: true, identityRecord: { select: { status: true } } } },
+      },
     });
 
     if (!athleteProfile) {
@@ -46,6 +56,18 @@ export class BracketsService {
     }
 
     const athleteGti = Number(athleteProfile.currentGti);
+    assertVerifiedAthlete(athleteProfile.user);
+    if (
+      !athleteProfile.dateOfBirth ||
+      !athleteProfile.gender ||
+      !athleteProfile.primarySport ||
+      !athleteProfile.district ||
+      !athleteProfile.state
+    ) {
+      throw new BadRequestException(
+        'Complete the athlete passport before tournament participation',
+      );
+    }
 
     // 2. Retrieve bracket and verify tournament affiliation
     const bracket = await this.prisma.bracket.findUnique({

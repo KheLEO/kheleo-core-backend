@@ -1,7 +1,7 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../infrastructure/database/prisma.service';
 import { ScoutFeedQueryDto } from './dto/scout-feed-query.dto';
-import { Prisma, SportType } from '@prisma/client';
+import { Prisma, SportType, VerificationStatus } from '@prisma/client';
 
 export interface ProspectSummary {
   readonly athlete_id: string;
@@ -37,6 +37,7 @@ export class ScoutsService {
 
     const where: Prisma.AthleteProfileWhereInput = {
       isScoutSearchable: true,
+      user: { isActive: true, identityRecord: { status: VerificationStatus.VERIFIED } },
       OR: [{ gti: { gte: minGti } }, { currentGti: { gte: new Prisma.Decimal(minGti) } }],
     };
 
@@ -122,7 +123,13 @@ export class ScoutsService {
   }
 
   async getAlerts(sport?: string, district?: string) {
-    const where: Prisma.ScoutAlertWhereInput = {};
+    const where: Prisma.ScoutAlertWhereInput = {
+      athlete: {
+        isActive: true,
+        athleteProfile: { isScoutSearchable: true },
+        identityRecord: { status: VerificationStatus.VERIFIED },
+      },
+    };
     if (sport) where.sport = sport;
     if (district) where.district = district;
 

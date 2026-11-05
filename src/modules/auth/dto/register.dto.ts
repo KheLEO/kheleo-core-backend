@@ -7,6 +7,7 @@ import {
   IsOptional,
   IsString,
   Matches,
+  MinLength,
   ValidateNested,
 } from 'class-validator';
 import { Type } from 'class-transformer';
@@ -97,6 +98,12 @@ export class RegisterDto {
   @IsOptional()
   @IsEnum(UserRole)
   readonly role?: UserRole;
+
+  @ApiPropertyOptional({ description: 'Server-issued invitation required for SUPER_ADMIN signup' })
+  @IsOptional()
+  @IsString()
+  @MinLength(16)
+  readonly adminInviteCode?: string;
 
   @ApiPropertyOptional({ type: InitialAthleteProfileDto })
   @IsOptional()

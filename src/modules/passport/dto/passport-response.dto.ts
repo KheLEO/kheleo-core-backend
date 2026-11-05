@@ -51,14 +51,14 @@ export class AthletePassportDto {
   @ApiProperty({ example: '123e4567-e89b-12d3-a456-426614174001' })
   readonly athleteProfileId!: string;
 
-  @ApiProperty({ example: '2005-04-12' })
-  readonly dateOfBirth!: Date;
+  @ApiProperty({ example: '2005-04-12', type: String, format: 'date', nullable: true })
+  readonly dateOfBirth!: Date | null;
 
-  @ApiProperty({ example: 'MALE' })
-  readonly gender!: string;
+  @ApiProperty({ example: 'MALE', type: String, nullable: true })
+  readonly gender!: string | null;
 
-  @ApiProperty({ enum: SportType, example: SportType.CRICKET })
-  readonly primarySport!: SportType;
+  @ApiProperty({ enum: SportType, example: SportType.CRICKET, nullable: true })
+  readonly primarySport!: SportType | null;
 
   @ApiProperty({ enum: SportType, isArray: true })
   readonly secondarySports!: SportType[];
@@ -71,6 +71,18 @@ export class AthletePassportDto {
 
   @ApiProperty({ enum: TierClassification, example: TierClassification.RURAL })
   readonly tierClassification!: TierClassification;
+
+  @ApiProperty({ nullable: true, type: Number })
+  readonly locationLat!: number | null;
+
+  @ApiProperty({ nullable: true, type: Number })
+  readonly locationLng!: number | null;
+
+  @ApiProperty()
+  readonly isScoutSearchable!: boolean;
+
+  @ApiProperty()
+  readonly isProfileComplete!: boolean;
 
   @ApiProperty({ type: VerifiedPhysicalStatsDto })
   readonly physicalStats!: VerifiedPhysicalStatsDto;
