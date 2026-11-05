@@ -1,32 +1,68 @@
-[
-  {
-    "probe": "cross_user_idempotency",
-    "finding": "Second user receives first user cached response; second handler skipped",
-    "returnedOwner": "athlete-A"
-  },
-  {
-    "probe": "unsigned_drill_metadata",
-    "finding": "HMAC accepts changed sport, frames_analyzed and flaw_flags",
-    "accepted": true
-  },
-  {
-    "probe": "missing_login_government_id",
-    "finding": "Global ValidationPipe accepts missing nested governmentId; service throws TypeError",
-    "error": "Cannot read properties of undefined (reading 'idNumber')"
-  },
-  {
-    "probe": "greedy_role_assignment",
-    "finding": "Rejects feasible 4-player roster: specialist could fill batsman and dual-role player bowler",
-    "result": null
-  },
-  {
-    "probe": "controller_inventory",
-    "httpOperations": 30,
-    "paths": 24
-  },
-  {
-    "probe": "anonymous_safety_broadcast",
-    "finding": "Anonymous Socket.IO connection receives MATCH_PAUSE_ALERT with athlete name and vitals",
-    "receivedWithoutToken": true
-  }
-]
+{
+  "verifiedAt": "2026-11-05T16:14:21.019Z",
+  "baseCommit": "80db5840a6d26ff6ccdb2ca526a382cf9c1c3d57",
+  "bundle": "dist/",
+  "result": "PASS",
+  "passed": 5,
+  "failed": 0,
+  "probes": [
+    {
+      "probe": "cross_user_idempotency",
+      "status": "PASS",
+      "handlerExecutions": 2,
+      "returnedOwners": ["athlete-A", "athlete-B"]
+    },
+    {
+      "probe": "unsigned_drill_metadata",
+      "status": "PASS",
+      "originalTamperRejected": true,
+      "fullPayloadMutationsRejected": 3
+    },
+    {
+      "probe": "missing_login_government_id",
+      "status": "PASS",
+      "httpStatus": 400,
+      "serviceInvoked": false
+    },
+    {
+      "probe": "greedy_role_assignment",
+      "status": "PASS",
+      "roster": [
+        {
+          "slot": "BATSMAN",
+          "primaryRole": "BATSMAN",
+          "secondaryRole": null
+        },
+        {
+          "slot": "BOWLER",
+          "primaryRole": "BATSMAN",
+          "secondaryRole": "BOWLER"
+        },
+        {
+          "slot": "ALL_ROUNDER",
+          "primaryRole": "ALL_ROUNDER",
+          "secondaryRole": null
+        },
+        {
+          "slot": "WICKETKEEPER",
+          "primaryRole": "WICKETKEEPER",
+          "secondaryRole": null
+        }
+      ]
+    },
+    {
+      "probe": "anonymous_safety_broadcast",
+      "status": "PASS",
+      "anonymousConnected": false,
+      "anonymousMedicalEvents": 0,
+      "disconnected": true,
+      "authorizedMedicalEvents": 1
+    }
+  ],
+  "httpOperations": 53,
+  "httpPaths": 41,
+  "limitations": [
+    "Synthetic dependencies for cache, identity state and route inventory",
+    "Real loopback Socket.IO; Redis adapter and physical sensors are not exercised by these five probes"
+  ]
+}

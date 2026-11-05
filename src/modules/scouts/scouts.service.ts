@@ -58,7 +58,7 @@ export class ScoutsService {
         where,
         take: limit + 1,
         ...(query.cursor_id ? { cursor: { id: query.cursor_id }, skip: 1 } : {}),
-        orderBy: [{ gti: 'desc' }, { currentGti: 'desc' }],
+        orderBy: [{ gti: 'desc' }, { currentGti: 'desc' }, { id: 'desc' }],
         select: {
           id: true,
           userId: true,
@@ -122,7 +122,7 @@ export class ScoutsService {
     };
   }
 
-  async getAlerts(sport?: string, district?: string) {
+  async getAlerts(sport?: string, district?: string, cursor?: string, limit = 50) {
     const where: Prisma.ScoutAlertWhereInput = {
       athlete: {
         isActive: true,
@@ -135,8 +135,9 @@ export class ScoutsService {
 
     return this.prisma.scoutAlert.findMany({
       where,
-      orderBy: { createdAt: 'desc' },
-      take: 50,
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      take: Math.min(100, Math.max(1, limit)) + 1,
+      ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
       select: {
         id: true,
         athleteId: true,

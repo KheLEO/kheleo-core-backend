@@ -1,11 +1,16 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import {
   IsEmail,
+  IsArray,
+  IsDateString,
+  Min,
+  Max,
   IsEnum,
   IsNotEmpty,
   IsNumber,
   IsOptional,
   IsString,
+  MaxLength,
   Matches,
   MinLength,
   ValidateNested,
@@ -27,13 +32,13 @@ export class GovernmentIdInputDto {
 
 export class InitialAthleteProfileDto {
   @ApiProperty({ example: '2005-06-15' })
-  @IsString()
-  @IsNotEmpty()
+  @IsDateString({ strict: true })
   readonly dateOfBirth!: string;
 
   @ApiProperty({ example: 'MALE' })
   @IsString()
   @IsNotEmpty()
+  @MaxLength(16)
   readonly gender!: string;
 
   @ApiProperty({ enum: SportType, example: SportType.CRICKET })
@@ -43,6 +48,7 @@ export class InitialAthleteProfileDto {
 
   @ApiPropertyOptional({ enum: SportType, isArray: true })
   @IsOptional()
+  @IsArray()
   @IsEnum(SportType, { each: true })
   readonly secondarySports?: SportType[];
 
@@ -67,11 +73,15 @@ export class InitialAthleteProfileDto {
   @ApiPropertyOptional({ example: 178.5 })
   @IsOptional()
   @IsNumber()
+  @Min(30)
+  @Max(260)
   readonly heightCm?: number;
 
   @ApiPropertyOptional({ example: 71.0 })
   @IsOptional()
   @IsNumber()
+  @Min(5)
+  @Max(350)
   readonly weightKg?: number;
 
   @ApiPropertyOptional({ example: 'RIGHT' })
@@ -81,6 +91,14 @@ export class InitialAthleteProfileDto {
 }
 
 export class RegisterDto {
+  @ApiPropertyOptional({
+    description:
+      'Supabase access token proving confirmed contact ownership; required in production',
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(8192)
+  readonly identityAccessToken?: string;
   @ApiPropertyOptional({ example: '+919876543210' })
   @IsOptional()
   @IsString()

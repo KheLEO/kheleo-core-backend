@@ -5,6 +5,12 @@ export const authConfig = registerAs('auth', () => ({
   jwtPublicKeyPath: process.env.JWT_PUBLIC_KEY_PATH ?? './keys/public.pem',
   jwtAccessExpiry: process.env.JWT_ACCESS_EXPIRY ?? '15m',
   jwtRefreshExpiry: process.env.JWT_REFRESH_EXPIRY ?? '7d',
+  supabaseUrl: process.env.SUPABASE_URL ?? '',
+  supabasePublishableKey: process.env.SUPABASE_PUBLISHABLE_KEY ?? '',
+  allowLegacyDrillSignatures:
+    process.env.DRILL_ALLOW_LEGACY_SIGNATURES === 'true' ||
+    (process.env.NODE_ENV !== 'production' &&
+      process.env.DRILL_ALLOW_LEGACY_SIGNATURES !== 'false'),
   supabaseJwtSecret: process.env.SUPABASE_JWT_SECRET ?? '',
   adminInviteCode: process.env.ADMIN_INVITE_CODE ?? '',
   identityPepper: process.env.IDENTITY_PEPPER ?? '',

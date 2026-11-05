@@ -2,105 +2,350 @@ const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const assert = require('node:assert/strict');
+const { createServer } = require('node:http');
 const { createRequire } = require('node:module');
 const repo = path.resolve(__dirname, '../..');
-const fromRepo = createRequire(path.join(repo, 'package.json'));
-fromRepo('reflect-metadata');
-const { firstValueFrom, of } = fromRepo('rxjs');
-const { Module, ValidationPipe, VersioningType } = fromRepo('@nestjs/common');
-const { NestFactory } = fromRepo('@nestjs/core');
-const { FastifyAdapter } = fromRepo('@nestjs/platform-fastify');
-const { ConfigService } = fromRepo('@nestjs/config');
-const { SwaggerModule, DocumentBuilder } = fromRepo('@nestjs/swagger');
-const compiled = (file) => fromRepo(path.join(repo, 'dist/src', file));
+const requireRepo = createRequire(path.join(repo, 'package.json'));
+requireRepo('reflect-metadata');
+const { firstValueFrom, of } = requireRepo('rxjs');
+const { Module, ValidationPipe, VersioningType, BadRequestException, ForbiddenException } =
+  requireRepo('@nestjs/common');
+const { NestFactory } = requireRepo('@nestjs/core');
+const { FastifyAdapter } = requireRepo('@nestjs/platform-fastify');
+const { ConfigService } = requireRepo('@nestjs/config');
+const { SwaggerModule, DocumentBuilder } = requireRepo('@nestjs/swagger');
+const { Server } = requireRepo('socket.io');
+const { io } = requireRepo('socket.io-client');
+const jwt = requireRepo('jsonwebtoken');
+const compiled = (file) => requireRepo(path.join(repo, 'dist', file));
 const { IdempotencyInterceptor } = compiled('common/interceptors/idempotency.interceptor.js');
-const { DrillSignatureGuard } = compiled('modules/drills/guards/drill-signature.guard.js');
+const { DrillSignatureGuard, fullDrillPayload } = compiled(
+  'modules/drills/guards/drill-signature.guard.js',
+);
 const { WsAuthGuard } = compiled('infrastructure/realtime/ws-auth.guard.js');
 const { WsEventGateway } = compiled('infrastructure/realtime/ws-event.gateway.js');
+const { RoomAccessService } = compiled('infrastructure/realtime/room-access.service.js');
+const { JwtStrategy } = compiled('modules/auth/strategies/jwt.strategy.js');
 const { LoginDto } = compiled('modules/auth/dto/login.dto.js');
-const { AuthService } = compiled('modules/auth/auth.service.js');
 const { MatchmakingService } = compiled('modules/matchmaking/matchmaking.service.js');
 const { RedisService } = compiled('infrastructure/cache/redis.service.js');
+const { PrismaService } = compiled('infrastructure/database/prisma.service.js');
 const { RolesGuard } = compiled('common/guards/roles.guard.js');
 const { JwtAuthGuard } = compiled('common/guards/jwt-auth.guard.js');
 const { HmacTamperGuard } = compiled('common/guards/hmac-tamper.guard.js');
-const results = [];
-const config = { get: (key, fallback) => ({
+const { TelemetryAuthGuard } = compiled('modules/safety/telemetry-auth.guard.js');
+const { ScoutOutreachGuard } = compiled('modules/scouts/scout-outreach.guard.js');
+const { ScoutsDossiersService } = compiled('modules/scouts/dossiers.service.js');
+const ACTOR = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+const settings = {
   'auth.identityPepper': 'synthetic-audit-pepper',
   'auth.drillHmacSecret': 'synthetic-audit-drill-secret',
   'auth.telemetryHmacSecret': 'synthetic-audit-telemetry-secret',
-  'auth.jwtPublicKeyPath': '/tmp/kheleo-audit-nonexistent-public.pem',
-  'auth.jwtPrivateKeyPath': '/tmp/kheleo-audit-nonexistent-private.pem',
-  'app.nodeEnv': 'development',
-}[key] ?? fallback) };
+  'auth.jwtPublicKeyPath': '/nonexistent/audit-public.pem',
+  'auth.jwtPrivateKeyPath': '/nonexistent/audit-private.pem',
+  'app.nodeEnv': 'test',
+};
+const config = { get: (key, fallback) => settings[key] ?? fallback };
 const memory = new Map();
 const redis = {
   get: async (key) => memory.get(key) ?? null,
-  set: async (key, value) => { memory.set(key, value); },
+  set: async (key, value) => {
+    memory.set(key, value);
+  },
   setnx: async (key, value) => {
     if (memory.has(key)) return false;
     memory.set(key, value);
     return true;
   },
-  del: async (key) => { memory.delete(key); },
+  del: async (key) => {
+    memory.delete(key);
+  },
+  deleteIfValueMatches: async (key, value) => memory.get(key) === value && memory.delete(key),
 };
-const context = (request) => {
-  const reply = { statusCode: 201, header: () => reply, status: (code) => {
-    reply.statusCode = code;
-    return reply;
-  } };
-  return { switchToHttp: () => ({ getRequest: () => request, getResponse: () => reply }) };
-};
-
+function context(request) {
+  const reply = {
+    statusCode: 201,
+    header: () => reply,
+    status: (code) => {
+      reply.statusCode = code;
+      return reply;
+    },
+  };
+  return {
+    getHandler: () => function syntheticHandler() {},
+    switchToHttp: () => ({ getRequest: () => request, getResponse: () => reply }),
+  };
+}
+async function deadline(promise) {
+  let timer;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error('Probe timed out')), 4000);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
 async function main() {
+  const results = [];
   const interceptor = new IdempotencyInterceptor(redis);
-  const request = { method: 'POST', url: '/api/v1/tournaments/t/brackets/b/free-agents/join',
-    headers: { 'idempotency-key': 'same-synthetic-key-123456' }, body: { primary_role: 'BATSMAN' } };
-  const first = await firstValueFrom(await interceptor.intercept(
-    context({ ...request, user: { sub: 'athlete-A' } }),
-    { handle: () => of({ owner: 'athlete-A', registrationId: 'private-registration-A' }) },
-  ));
-  const second = await firstValueFrom(await interceptor.intercept(
-    context({ ...request, user: { sub: 'athlete-B' } }),
-    { handle: () => { throw new Error('Second handler should have run for athlete B'); } },
-  ));
-  assert.deepEqual(second, first);
-  results.push({ probe: 'cross_user_idempotency', finding: 'Second user receives first user cached response; second handler skipped', returnedOwner: second.owner });
+  const request = {
+    method: 'POST',
+    url: '/api/v1/tournaments/t/brackets/b/free-agents/join',
+    ip: '127.0.0.1',
+    headers: { 'idempotency-key': 'same-synthetic-key-123456' },
+    body: { primary_role: 'BATSMAN' },
+  };
+  let executions = 0;
+  // Intercept resolves to an Observable; execute each handler explicitly.
+  async function invoke(owner) {
+    return firstValueFrom(
+      await interceptor.intercept(context({ ...request, user: { sub: owner } }), {
+        handle: () => {
+          executions++;
+          return of({ owner });
+        },
+      }),
+    );
+  }
+  const first = await invoke('athlete-A');
+  const second = await invoke('athlete-B');
+  assert.equal(first.owner, 'athlete-A');
+  assert.equal(second.owner, 'athlete-B');
+  assert.equal(executions, 2);
+  results.push({
+    probe: 'cross_user_idempotency',
+    status: 'PASS',
+    handlerExecutions: executions,
+    returnedOwners: [first.owner, second.owner],
+  });
 
   const timestamp = Math.floor(Date.now() / 1000);
-  const signature = crypto.createHmac('sha256', 'synthetic-audit-drill-secret')
-    .update(`athlete-A:BOWLING:90:${timestamp}`).digest('hex');
-  const tampered = { athlete_id: 'athlete-A', drill_type: 'BOWLING', form_score: 90,
-    timestamp, sport: 'FOOTBALL', frames_analyzed: 999999, flaw_flags: ['changed'] };
-  const accepted = new DrillSignatureGuard(config).canActivate(context({
-    headers: { 'x-drill-signature': signature }, body: tampered, user: { sub: 'athlete-A' },
-  }));
-  assert.equal(accepted, true);
-  results.push({ probe: 'unsigned_drill_metadata', finding: 'HMAC accepts changed sport, frames_analyzed and flaw_flags', accepted });
+  const body = {
+    athlete_id: ACTOR,
+    drill_type: 'BOWLING',
+    form_score: 90,
+    timestamp,
+    sport: 'CRICKET',
+    frames_analyzed: 300,
+    flaw_flags: [],
+  };
+  const sign = (input) =>
+    crypto.createHmac('sha256', settings['auth.drillHmacSecret']).update(input).digest('hex');
+  const legacy = sign(`${ACTOR}:BOWLING:90:${timestamp}`);
+  const guard = new DrillSignatureGuard(config);
+  assert.equal(
+    guard.canActivate(
+      context({ headers: { 'x-drill-signature': legacy }, body, user: { sub: ACTOR } }),
+    ),
+    true,
+  );
+  assert.throws(
+    () =>
+      guard.canActivate(
+        context({
+          headers: { 'x-drill-signature': legacy },
+          body: { ...body, sport: 'FOOTBALL', frames_analyzed: 999999, flaw_flags: ['changed'] },
+          user: { sub: ACTOR },
+        }),
+      ),
+    ForbiddenException,
+  );
+  const full = sign(fullDrillPayload(ACTOR, body));
+  for (const mutation of [
+    { sport: 'FOOTBALL' },
+    { frames_analyzed: 301 },
+    { flaw_flags: ['changed'] },
+  ])
+    assert.throws(
+      () =>
+        guard.canActivate(
+          context({
+            headers: { 'x-drill-signature': full, 'x-drill-signed-fields': 'full' },
+            body: { ...body, ...mutation },
+            user: { sub: ACTOR },
+          }),
+        ),
+      ForbiddenException,
+    );
+  results.push({
+    probe: 'unsigned_drill_metadata',
+    status: 'PASS',
+    originalTamperRejected: true,
+    fullPayloadMutationsRejected: 3,
+  });
 
-  const pipe = new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true, transform: true,
-    transformOptions: { enableImplicitConversion: true } });
-  const missingProof = await pipe.transform({ email: 'synthetic@example.test' },
-    { type: 'body', metatype: LoginDto });
-  let loginError;
-  try {
-    await new AuthService({ user: { findFirst: async () => ({ id: 'athlete-A', isActive: true,
-      identityRecord: { idHash: '0'.repeat(64), status: 'VERIFIED' } }) } }, {}, config).login(missingProof);
-  } catch (error) { loginError = error; }
-  assert.ok(loginError instanceof TypeError);
-  results.push({ probe: 'missing_login_government_id', finding: 'Global ValidationPipe accepts missing nested governmentId; service throws TypeError', error: loginError.message });
+  const pipe = new ValidationPipe({
+    whitelist: true,
+    forbidNonWhitelisted: true,
+    transform: true,
+    transformOptions: { enableImplicitConversion: true },
+  });
+  let status;
+  await assert.rejects(
+    pipe.transform({ email: 'synthetic@example.test' }, { type: 'body', metatype: LoginDto }),
+    (error) => {
+      assert.ok(error instanceof BadRequestException);
+      status = error.getStatus();
+      return status === 400;
+    },
+  );
+  results.push({
+    probe: 'missing_login_government_id',
+    status: 'PASS',
+    httpStatus: status,
+    serviceInvoked: false,
+  });
 
   const service = new MatchmakingService({}, {}, {});
-  const greedyResult = service.matchCandidatesToSlots([
+  const candidates = [
     { primaryRole: 'BATSMAN', secondaryRole: 'BOWLER' },
     { primaryRole: 'BATSMAN', secondaryRole: null },
     { primaryRole: 'ALL_ROUNDER', secondaryRole: null },
     { primaryRole: 'WICKETKEEPER', secondaryRole: null },
-  ], service.getSlotRequirements('CRICKET', 4));
-  assert.equal(greedyResult, null);
-  results.push({ probe: 'greedy_role_assignment', finding: 'Rejects feasible 4-player roster: specialist could fill batsman and dual-role player bowler', result: greedyResult });
+  ];
+  const roster = service.matchCandidatesToSlots(
+    candidates,
+    service.getSlotRequirements('CRICKET', 4),
+  );
+  assert.ok(roster);
+  assert.equal(roster.length, 4);
+  assert.equal(new Set(roster.map((item) => item.candidate)).size, 4);
+  assert.equal(roster.find((item) => item.slotName === 'BOWLER').candidate, candidates[0]);
+  assert.equal(roster.find((item) => item.slotName === 'BATSMAN').candidate, candidates[1]);
+  results.push({
+    probe: 'greedy_role_assignment',
+    status: 'PASS',
+    roster: roster.map((item) => ({
+      slot: item.slotName,
+      primaryRole: item.candidate.primaryRole,
+      secondaryRole: item.candidate.secondaryRole,
+    })),
+  });
 
-  const domains = ['auth', 'users', 'passport', 'tournaments', 'brackets', 'matchmaking', 'drills', 'safety', 'gti', 'scouts', 'heatmaps'];
+  const prisma = {
+    user: {
+      findUnique: async () => ({
+        id: ACTOR,
+        role: 'ATHLETE',
+        isActive: true,
+        identityRecord: { status: 'VERIFIED' },
+      }),
+    },
+  };
+  const strategy = new JwtStrategy(config, prisma);
+  const wsAuth = new WsAuthGuard(strategy);
+  const gateway = new WsEventGateway(wsAuth, new RoomAccessService(prisma));
+  const http = createServer();
+  const sockets = new Server(http, { serveClient: false });
+  const namespace = sockets.of('/ws/events');
+  gateway.server = namespace;
+  gateway.afterInit(namespace);
+  let ready;
+  const authorizedReady = new Promise((resolve) => {
+    ready = resolve;
+  });
+  namespace.on('connection', (socket) => {
+    void gateway.handleConnection(socket).then(() => ready());
+  });
+  await new Promise((resolve) => http.listen(0, '127.0.0.1', resolve));
+  const origin = `http://127.0.0.1:${http.address().port}/ws/events`;
+  const anonymous = io(origin, {
+    autoConnect: false,
+    reconnection: false,
+    transports: ['websocket'],
+  });
+  const authorized = io(origin, {
+    autoConnect: false,
+    reconnection: false,
+    transports: ['websocket'],
+    auth: {
+      token: jwt.sign({ sub: ACTOR, role: 'ATHLETE' }, settings['auth.identityPepper'], {
+        expiresIn: 60,
+      }),
+    },
+  });
+  let leaked = 0;
+  let connected = false;
+  anonymous.on('MATCH_PAUSE_ALERT', () => {
+    leaked++;
+  });
+  anonymous.on('connect', () => {
+    connected = true;
+  });
+  try {
+    await deadline(
+      new Promise((resolve, reject) => {
+        anonymous.once('connect_error', resolve);
+        anonymous.once('connect', () => reject(new Error('Anonymous namespace connected')));
+        anonymous.connect();
+      }),
+    );
+    await deadline(
+      new Promise((resolve, reject) => {
+        authorized.once('connect', resolve);
+        authorized.once('connect_error', reject);
+        authorized.connect();
+      }),
+    );
+    await deadline(authorizedReady);
+    const received = deadline(
+      new Promise((resolve) => authorized.once('MATCH_PAUSE_ALERT', resolve)),
+    );
+    gateway.broadcastAutonomousMatchPause({
+      event: 'MATCH_PAUSE_ALERT',
+      severity: 'CRITICAL',
+      athlete_id: ACTOR,
+      athlete_name: 'Synthetic athlete',
+      vitals: { heart_rate: 205, spo2: 88, skin_temperature: 40 },
+      directive: 'Synthetic probe only',
+    });
+    const event = await received;
+    assert.equal(event.athlete_id, ACTOR);
+    assert.equal(leaked, 0);
+    assert.equal(connected, false);
+    assert.equal(anonymous.connected, false);
+    let disconnected = false;
+    await gateway.handleConnection({
+      handshake: { auth: {}, headers: {}, query: {} },
+      data: {},
+      disconnect: () => {
+        disconnected = true;
+      },
+    });
+    assert.equal(disconnected, true);
+    results.push({
+      probe: 'anonymous_safety_broadcast',
+      status: 'PASS',
+      anonymousConnected: connected,
+      anonymousMedicalEvents: leaked,
+      disconnected,
+      authorizedMedicalEvents: 1,
+    });
+  } finally {
+    anonymous.disconnect();
+    authorized.disconnect();
+    await new Promise((resolve) => sockets.close(resolve));
+  }
+
+  const domains = [
+    'auth',
+    'users',
+    'passport',
+    'tournaments',
+    'brackets',
+    'matchmaking',
+    'drills',
+    'safety',
+    'gti',
+    'scouts',
+    'heatmaps',
+    'admin',
+    'health',
+  ];
   const classes = domains.map((domain) => {
     const name = domain[0].toUpperCase() + domain.slice(1);
     return {
@@ -108,47 +353,86 @@ async function main() {
       service: compiled(`modules/${domain}/${domain}.service.js`)[`${name}Service`],
     };
   });
-  class AuditModule {}
-  Module({ controllers: classes.map(({ controller }) => controller), providers: [
-    ...classes.map(({ service }) => ({ provide: service, useValue: {} })),
-    { provide: ConfigService, useValue: config }, { provide: RedisService, useValue: redis },
-    IdempotencyInterceptor, JwtAuthGuard, RolesGuard, HmacTamperGuard, DrillSignatureGuard,
-    WsEventGateway, WsAuthGuard,
-  ] })(AuditModule);
-  const app = await NestFactory.create(AuditModule, new FastifyAdapter(), { logger: false });
+  classes.push({
+    controller: compiled('modules/tournaments/match-results.controller.js').MatchResultsController,
+    service: compiled('modules/tournaments/match-results.service.js').MatchResultsService,
+  });
+  class InventoryModule {}
+  Module({
+    controllers: classes.map((item) => item.controller),
+    providers: [
+      ...classes.map((item) => ({ provide: item.service, useValue: {} })),
+      { provide: ScoutsDossiersService, useValue: {} },
+      { provide: ConfigService, useValue: config },
+      { provide: RedisService, useValue: redis },
+      { provide: PrismaService, useValue: prisma },
+      { provide: JwtStrategy, useValue: strategy },
+      IdempotencyInterceptor,
+      JwtAuthGuard,
+      RolesGuard,
+      HmacTamperGuard,
+      DrillSignatureGuard,
+      TelemetryAuthGuard,
+      ScoutOutreachGuard,
+    ],
+  })(InventoryModule);
+  const app = await NestFactory.create(InventoryModule, new FastifyAdapter(), { logger: false });
+  let inventory;
   try {
     app.setGlobalPrefix('api');
     app.enableVersioning({ type: VersioningType.URI, defaultVersion: '1' });
-    const document = SwaggerModule.createDocument(app,
-      new DocumentBuilder().setTitle('Audit of actual controller metadata').setVersion('1').build());
-    fs.writeFileSync(path.join(__dirname, 'openapi.json'), JSON.stringify(document, null, 2));
-    results.push({ probe: 'controller_inventory', httpOperations: Object.values(document.paths)
-      .reduce((count, operations) => count + Object.keys(operations).filter((key) => ['get','post','patch','delete','put'].includes(key)).length, 0),
-      paths: Object.keys(document.paths).length });
-    await app.listen(0, '127.0.0.1');
-    const address = app.getHttpServer().address();
-    const event = await new Promise((resolve, reject) => {
-      const socket = new WebSocket(`ws://127.0.0.1:${address.port}/socket.io/?EIO=4&transport=websocket`);
-      const timer = setTimeout(() => { socket.close(); reject(new Error('Socket probe timed out')); }, 4000);
-      socket.addEventListener('message', ({ data }) => {
-        const packet = String(data);
-        if (packet.startsWith('0')) socket.send('40/ws/events,');
-        if (packet === '2') socket.send('3');
-        if (packet.startsWith('40/ws/events,')) {
-          app.get(WsEventGateway).broadcastAutonomousMatchPause({ event: 'MATCH_PAUSE_ALERT', severity: 'CRITICAL',
-            athlete_id: 'synthetic-athlete', athlete_name: 'Synthetic Athlete',
-            vitals: { heart_rate: 196, spo2: 99, skin_temperature: 37 }, directive: 'synthetic-audit-event' });
-        }
-        if (packet.startsWith('42/ws/events,') && packet.includes('MATCH_PAUSE_ALERT')) {
-          clearTimeout(timer); socket.close(); resolve(packet);
-        }
-      });
-      socket.addEventListener('error', (error) => { clearTimeout(timer); reject(error); });
-    });
-    assert.ok(event.includes('synthetic-athlete'));
-    results.push({ probe: 'anonymous_safety_broadcast', finding: 'Anonymous Socket.IO connection receives MATCH_PAUSE_ALERT with athlete name and vitals', receivedWithoutToken: true });
-  } finally { await app.close(); }
-  fs.writeFileSync(path.join(__dirname, 'probe-results.json'), JSON.stringify(results, null, 2));
-  process.stdout.write(JSON.stringify(results, null, 2) + '\n');
+    const document = SwaggerModule.createDocument(
+      app,
+      new DocumentBuilder()
+        .setTitle('Verified backend route inventory')
+        .setVersion('1')
+        .addBearerAuth()
+        .build(),
+    );
+    fs.writeFileSync(
+      path.join(__dirname, 'openapi.json'),
+      JSON.stringify(document, null, 2) + '\n',
+    );
+    inventory = Object.entries(document.paths).flatMap(([url, operations]) =>
+      Object.entries(operations)
+        .filter(([method]) => ['get', 'post', 'patch', 'delete', 'put'].includes(method))
+        .map(([method, operation]) => ({
+          method: method.toUpperCase(),
+          path: url,
+          operationId: operation.operationId,
+        })),
+    );
+    fs.writeFileSync(
+      path.join(__dirname, 'route-inventory.json'),
+      JSON.stringify(inventory, null, 2) + '\n',
+    );
+  } finally {
+    await app.close();
+  }
+  const report = {
+    verifiedAt: new Date().toISOString(),
+    baseCommit: require('node:child_process')
+      .execFileSync('git', ['rev-parse', 'HEAD'], { cwd: repo, encoding: 'utf8' })
+      .trim(),
+    bundle: 'dist/',
+    result: 'PASS',
+    passed: results.length,
+    failed: 0,
+    probes: results,
+    httpOperations: inventory.length,
+    httpPaths: new Set(inventory.map((item) => item.path)).size,
+    limitations: [
+      'Synthetic dependencies for cache, identity state and route inventory',
+      'Real loopback Socket.IO; Redis adapter and physical sensors are not exercised by these five probes',
+    ],
+  };
+  fs.writeFileSync(
+    path.join(__dirname, 'probe-results.json'),
+    JSON.stringify(report, null, 2) + '\n',
+  );
+  process.stdout.write(JSON.stringify(report, null, 2) + '\n');
 }
-main().catch((error) => { process.stderr.write(String(error.stack ?? error) + '\n'); process.exitCode = 1; });
+main().catch((error) => {
+  process.stderr.write(String(error.stack ?? error) + '\n');
+  process.exitCode = 1;
+});

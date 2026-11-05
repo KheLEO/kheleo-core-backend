@@ -161,7 +161,11 @@ export class AdminService {
       }
       const user = await tx.user.update({
         where: { id },
-        data: { role: dto.role, isActive: dto.isActive },
+        data: {
+          role: dto.role,
+          isActive: dto.isActive,
+          ...(dto.isActive !== undefined ? { isRecoveryBlocked: !dto.isActive } : {}),
+        },
         select: adminUserSelect,
       });
       await tx.refreshToken.updateMany({

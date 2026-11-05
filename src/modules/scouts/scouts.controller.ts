@@ -6,6 +6,7 @@ import {
   ParseUUIDPipe,
   Patch,
   Query,
+  Res,
   Param,
   HttpCode,
   HttpStatus,
@@ -23,6 +24,9 @@ import { ScoutsDossiersService } from './dossiers.service';
 import { OutreachDto } from './dto/outreach.dto';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { ScoutOutreachGuard } from './scout-outreach.guard';
+
+import { FastifyReply } from 'fastify';
+import { ScoutAlertsQueryDto } from './dto/scout-alerts-query.dto';
 
 @Controller('scouts')
 @UseGuards(JwtAuthGuard, RolesGuard)
@@ -50,14 +54,25 @@ export class ScoutsController {
   }
 
   @Get('alerts')
-  async getAlerts(@Query('sport') sport?: string, @Query('district') district?: string) {
-    return this.scoutsService.getAlerts(sport, district);
+  async getAlerts(
+    @Query() query: ScoutAlertsQueryDto,
+    @Res({ passthrough: true }) reply: FastifyReply,
+  ) {
+    const rows = await this.scoutsService.getAlerts(
+      query.sport,
+      query.district,
+      query.cursor_id,
+      query.limit,
+    );
+    const page = rows.slice(0, query.limit);
+    if (rows.length > query.limit) void reply.header('X-Next-Cursor', page.at(-1)!.id);
+    return page;
   }
 
   @Patch('alerts/:id/acknowledge')
   @HttpCode(HttpStatus.OK)
   @UseInterceptors(IdempotencyInterceptor)
-  async acknowledgeAlert(@Param('id') id: string) {
+  async acknowledgeAlert(@Param('id', ParseUUIDPipe) id: string) {
     return this.scoutsService.acknowledgeAlert(id);
   }
 }

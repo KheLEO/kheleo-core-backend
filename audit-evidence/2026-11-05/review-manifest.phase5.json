@@ -1,0 +1,678 @@
+{
+  "scope": "Release source, tests, manifests and configuration fingerprints; excludes secrets, generated build outputs and audit artifacts",
+  "verifiedCodeCommit": "80db5840a6d26ff6ccdb2ca526a382cf9c1c3d57",
+  "files": [
+    {
+      "path": ".dockerignore",
+      "sha256": "ea1b5a37a7bda30517dab7f1d798639a27ea4309d8c62d3efff85d4bedd1fcf9"
+    },
+    {
+      "path": ".env.example",
+      "sha256": "3c7c73510347b207974af8670e31595e1e8f1ff2ddb62e5446f1e90f30ee6166"
+    },
+    {
+      "path": ".github/workflows/verify.yml",
+      "sha256": "d7bc75459db90094191db1d88ddafc5c0185fc9835f791316299fdf5f0912cec"
+    },
+    {
+      "path": ".gitignore",
+      "sha256": "37a77ac94b2a73079d79d37ba5be880a68b6f4f612af2bcf37a17231b6536871"
+    },
+    {
+      "path": ".prettierrc.json",
+      "sha256": "4927fe80046372da124fd1400d74eaf7e2d8fa4a19e5c81abeed3827d3ac11ed"
+    },
+    {
+      "path": "Dockerfile",
+      "sha256": "8e300426f90a7f59b73703f734a306a03307d7790af04d7bc8affaa02fd2a13c"
+    },
+    {
+      "path": "docker-compose.yml",
+      "sha256": "c59acdaf667d98232ddf94fff57ab4455b58670c6afdf7a3e7f0f12c58c8e796"
+    },
+    {
+      "path": "nest-cli.json",
+      "sha256": "bcb15e3049ff5d131762d2bfe3a6f917c3c64c83ac772467a4073975cd423b5b"
+    },
+    {
+      "path": "package.json",
+      "sha256": "4cc2d07b8a2eb4225f440a4c99c1c3810912712c0832d198f479ced10042c067"
+    },
+    {
+      "path": "pnpm-lock.yaml",
+      "sha256": "3904d17fcf53e2b88ecd6d192ca08eb432896fdcee536818110238cf2a374ef3"
+    },
+    {
+      "path": "pnpm-workspace.yaml",
+      "sha256": "7722ff99c819987badaf91430a0fcabe868aaef5ad596ea92e3481a6a89a55ff"
+    },
+    {
+      "path": "prisma/migrations/20261105000000_init_postgis_schema/migration.sql",
+      "sha256": "1b4fc344d813aca3b3865ba975a887f36377d983544c0a5a188d82370dac6638"
+    },
+    {
+      "path": "prisma/migrations/20261105010000_allow_incomplete_passports/migration.sql",
+      "sha256": "d8c809cbd93963a1c75a35393917bdb1f6d3942ea71cc35eeb9609699bfd8fdd"
+    },
+    {
+      "path": "prisma/migrations/20261105020000_security_measured_gti_admin/migration.sql",
+      "sha256": "c400af3c08b9d50cbd3958424874861a4996c0bf0e4c7e25116494e1d7eff774"
+    },
+    {
+      "path": "prisma/migrations/20261105030000_release_recovery/migration.sql",
+      "sha256": "4aa4775b55782915ea654e668047920943344de85aa0523b0f5b98d9295a10cb"
+    },
+    {
+      "path": "prisma/migrations/migration_lock.toml",
+      "sha256": "1db17a8d051aa136110736752c5e1f8b7ed92b6ea8e803112fbbe2497047c210"
+    },
+    {
+      "path": "prisma/schema.prisma",
+      "sha256": "10c0e4235f78824cbc64f31ef0718d22a8688513fc8dd63586651b32acf4f55c"
+    },
+    {
+      "path": "scripts/create-entrypoint-shim.cjs",
+      "sha256": "b82939b23707159fd387790d2586feb2314cf03ef0a5f0e5ad6f7e19a8fc8308"
+    },
+    {
+      "path": "scripts/smoke-production.cjs",
+      "sha256": "c52610e2515365319a80983dd6ef8edcbf0783bf02f55658bab55793b2508339"
+    },
+    {
+      "path": "scripts/verify-entrypoints.cjs",
+      "sha256": "513fd8e1ab8ef27e8e1ddd8bb560ef20aed7f1ab7dcd5f3195686453c73477d6"
+    },
+    {
+      "path": "src/app.module.ts",
+      "sha256": "f2ac2ff52efd383577b1700c7e6931d1737bd404b83f5871af177cff5724b550"
+    },
+    {
+      "path": "src/common/auth/account-access.ts",
+      "sha256": "81d94460764b4547c621fd41734c605e82ee1b97130a4fc5024684ab5c47ae1d"
+    },
+    {
+      "path": "src/common/common.module.ts",
+      "sha256": "37b2f09295aada47dc24f93d0a4de68bfe164cadffa2adb32c76dab464e0037e"
+    },
+    {
+      "path": "src/common/competition/match-access.ts",
+      "sha256": "d61977c7542d2437e065592086c58558e27a3d1f910e99070ce5ab436d9fd47c"
+    },
+    {
+      "path": "src/common/constants/app.constants.ts",
+      "sha256": "9d9fd606b33c5e16922397a66485cc9109fdc12de2e007e84a095bc82b84929c"
+    },
+    {
+      "path": "src/common/constants/queue.constants.ts",
+      "sha256": "6ee304c4f1a070f8af92b64a725dbd038a4db7febf111df865a93276b14c3c79"
+    },
+    {
+      "path": "src/common/crypto/canonical-json.ts",
+      "sha256": "2f055e9779cbfffaf316cb42c328cb74c8fa6a9ea3c36789624f9067ff1bfebb"
+    },
+    {
+      "path": "src/common/database/serializable-transaction.ts",
+      "sha256": "15c4f383fdb0ce10ebcfb8db83b20bf5d4b3e1e3721c85756cc47b071c8cc5c8"
+    },
+    {
+      "path": "src/common/decorators/api-cursor-query.decorator.ts",
+      "sha256": "1129e98f945c9fe6d861e9e8b97021a2338d950565aa2f86f3831fffbcea53cd"
+    },
+    {
+      "path": "src/common/decorators/current-user.decorator.ts",
+      "sha256": "80c982d358e9c9ba620181314596141fb4e2e923c25a42018c5aad665aa8b7ec"
+    },
+    {
+      "path": "src/common/decorators/field-aliases.decorator.ts",
+      "sha256": "c124909604b601cefc9a7acc0daf0fa6a2634c25460c26ccf52407de9cc23bb8"
+    },
+    {
+      "path": "src/common/decorators/roles.decorator.ts",
+      "sha256": "8080391fc73ab433dcea7bfa51c3ab08e5bb1cab10572fcbc16481ed755d9fac"
+    },
+    {
+      "path": "src/common/dto/cursor-page.ts",
+      "sha256": "2e0f97a4cd1b0408b03282eb18cd5f948559126c9ba10b64abfd2da4879ebb89"
+    },
+    {
+      "path": "src/common/dto/cursor-pagination-query.dto.ts",
+      "sha256": "1a61739b5d8d043d6676b2b55551eaa7d75f5db16ab16311e3a8bf9c8b80a260"
+    },
+    {
+      "path": "src/common/dto/paginated-response.dto.ts",
+      "sha256": "2e8fed11fd2f5cb5034a1b41900fdc4d94c750a54361b42e55aab5686a197bd5"
+    },
+    {
+      "path": "src/common/filters/prisma-exception.filter.ts",
+      "sha256": "321dbed67fc4fe4509a458a3075bc045eef2bbb2bd62e3477053aa99f82bc761"
+    },
+    {
+      "path": "src/common/filters/rfc7807-exception.filter.ts",
+      "sha256": "55b8faf347347ec08477cb2362f04629e8c8e76b014b98ca91ea8c3a0c4a3a8c"
+    },
+    {
+      "path": "src/common/guards/hmac-tamper.guard.ts",
+      "sha256": "9979aad24ee84c572b9a926ba87e10f5f46da4c50da7dcc5b81e28f05170bc76"
+    },
+    {
+      "path": "src/common/guards/jwt-auth.guard.ts",
+      "sha256": "44966feead8357315b933f03cb8bed94d113fbd911461bc9cae203adde68feb1"
+    },
+    {
+      "path": "src/common/guards/roles.guard.ts",
+      "sha256": "bf1c135b00390d05b0044d481182356e1757696925d652c7c7c4b97f4123d59e"
+    },
+    {
+      "path": "src/common/interceptors/idempotency.interceptor.ts",
+      "sha256": "3e80ddc89edeb1c028ec93e18ca88c793e81e32dc82a1431d08628bce4662db0"
+    },
+    {
+      "path": "src/common/interceptors/logging.interceptor.ts",
+      "sha256": "52be6b3361075a29d37ae75ed5e0d9238f2fea75d5aeefda9ff3c539744f4f9b"
+    },
+    {
+      "path": "src/common/interceptors/response-transform.interceptor.ts",
+      "sha256": "a93fd914300cf8ced9fe447898bbf6a071aaaa4d46631c098852b8c1a91bdd54"
+    },
+    {
+      "path": "src/config/app.config.ts",
+      "sha256": "3d1efe49745d3fc45ceba21a97f9e742c42a5a58889ab37d5be4b246db4e7820"
+    },
+    {
+      "path": "src/config/auth.config.ts",
+      "sha256": "451d552561ca380081997a48865a718907cd8ed464218e6361470779e941eb75"
+    },
+    {
+      "path": "src/config/configuration.module.ts",
+      "sha256": "807720066a10c2c5f618f3ad7ca98dffec1992ba665d72c91c11c6bd7a57e591"
+    },
+    {
+      "path": "src/config/database.config.ts",
+      "sha256": "3efb6e2f61adc6511564f3eeb4f5de79810285ab959d279c9c27a3671fbc720a"
+    },
+    {
+      "path": "src/config/queue.config.ts",
+      "sha256": "16738b57aeb364ef02c1abc4bd3e635be08cbfcb75b0bf0c1aa2f54f692339d8"
+    },
+    {
+      "path": "src/config/redis.config.ts",
+      "sha256": "d45b1dca9daf9068ef0c7c5f6dfabb5218aa8128899a4443fde4117f830c6676"
+    },
+    {
+      "path": "src/config/validate-environment.ts",
+      "sha256": "9b9589de82c50da485ca9183c9039b115403c4f145e667cbc10cd9724c621428"
+    },
+    {
+      "path": "src/infrastructure/cache/redis-options.ts",
+      "sha256": "88d0eab4b79097cb2b1db8a15148436b7abf1d94275074c10a2322d591eb9444"
+    },
+    {
+      "path": "src/infrastructure/cache/redis.module.ts",
+      "sha256": "63d750644ccd2c23cd59bc05b3b5edd82b915e56c9a805d1dcfebbdb02454fed"
+    },
+    {
+      "path": "src/infrastructure/cache/redis.service.ts",
+      "sha256": "494691ae19a0772c4e7df0341666a08b633559637d7b51b6df0f81b429a66d23"
+    },
+    {
+      "path": "src/infrastructure/database/geo-distance.ts",
+      "sha256": "e4aae939e2babfc3245cd0c402923be602fd45df7be381c2161c45ef752c7e3a"
+    },
+    {
+      "path": "src/infrastructure/database/postgis-spatial.repository.ts",
+      "sha256": "ffb1ebbf71148c0d1eae9e88a153ec1f29f748ad73cc9e66d1fa5d285e0ae7a0"
+    },
+    {
+      "path": "src/infrastructure/database/prisma.module.ts",
+      "sha256": "914d1f7bdc57443cc06863fbd2c82ae86e739f8df3bd2432a8acdb6436f655a5"
+    },
+    {
+      "path": "src/infrastructure/database/prisma.service.ts",
+      "sha256": "bd357b4c3e53b4a52f825fed4bd997cb294cc33bcef811c0e762a46d8632132e"
+    },
+    {
+      "path": "src/infrastructure/outbox/outbox-dispatcher.service.ts",
+      "sha256": "25cb5c10f4056ccd2e7740d6857b609572e94ca42d4460b69b736d69bc29f2a7"
+    },
+    {
+      "path": "src/infrastructure/queues/bullmq.module.ts",
+      "sha256": "fa2dd3ceb582e6c654f7f4e31d12f773f1b5615725d1310950cd96125fd507eb"
+    },
+    {
+      "path": "src/infrastructure/queues/queue-producer.service.ts",
+      "sha256": "759eec60a93ce62113772edb5f382491f4310784e79b89f658f3846d4014233d"
+    },
+    {
+      "path": "src/infrastructure/realtime/realtime.module.ts",
+      "sha256": "2bcd55324a5c99e6b82018c47c5fb6c7c141799ab82da33c977555fd392f394c"
+    },
+    {
+      "path": "src/infrastructure/realtime/redis-io.adapter.ts",
+      "sha256": "98ea0e151faeafe53cf68109477323f532a707b7e7b66ad982f405fadab05060"
+    },
+    {
+      "path": "src/infrastructure/realtime/room-access.service.ts",
+      "sha256": "a4057c2592b9a50dfa033aa12154ea5eec954cca756c4bce50c1cd021cabc959"
+    },
+    {
+      "path": "src/infrastructure/realtime/ws-auth.guard.ts",
+      "sha256": "6e030faa6d74e81d193ca5c20ca7d6f3e8a52805641848662e03188aaa0e5223"
+    },
+    {
+      "path": "src/infrastructure/realtime/ws-event.gateway.ts",
+      "sha256": "42404e881376e46a1351f4a5a944d0f6eb15825e5ca665875427a297eb23e313"
+    },
+    {
+      "path": "src/main.ts",
+      "sha256": "e1af571182f01ad8cbd296835cde1282716f5e733d1b667b23fd05478c40ce8e"
+    },
+    {
+      "path": "src/modules/admin/admin.controller.ts",
+      "sha256": "7804ce63246fd8e34b95bb8017781d2d231ba1f5ced02297ffce779bde3e4eaa"
+    },
+    {
+      "path": "src/modules/admin/admin.dto.ts",
+      "sha256": "fd90b480639779203ea48dfb9801419c513dd54252b39376967ed192e9f38432"
+    },
+    {
+      "path": "src/modules/admin/admin.module.ts",
+      "sha256": "84fa50e536a1e3c5170b154cf478ba3fd49b640dbd9b99b3d2172cae2b6ec40b"
+    },
+    {
+      "path": "src/modules/admin/admin.service.ts",
+      "sha256": "a555244a41fe7c6a743104a4f7ebbaf555f262ae826d3c5ee1e95770b82642d3"
+    },
+    {
+      "path": "src/modules/auth/auth.controller.ts",
+      "sha256": "4ea1b64620b62cb9f64df813c8eed339a4cd4d519abbfd177c0e20257200d68e"
+    },
+    {
+      "path": "src/modules/auth/auth.module.ts",
+      "sha256": "fdcda4b60f3af95450b484fd98b6cd972174f7aa78a5496fd8e71352d00d0a66"
+    },
+    {
+      "path": "src/modules/auth/auth.service.ts",
+      "sha256": "e910468685a7c7f18910f0e28645c2d1cd61bad89c9cde6e0967fafea5ca00a2"
+    },
+    {
+      "path": "src/modules/auth/contact-proof.ts",
+      "sha256": "571e0c999cf951ff2240099dadf871a2cb1bc93955d9760dcbf6546d1eb34c8d"
+    },
+    {
+      "path": "src/modules/auth/dto/auth-response.dto.ts",
+      "sha256": "173a08427b5a6655da2188c4b67c03be6fb4c1aaeee8db69bf4909e6ddcb782f"
+    },
+    {
+      "path": "src/modules/auth/dto/login.dto.ts",
+      "sha256": "08f2523b7980996fd479dca7226af5601668ab61df215b7471805b6e52fc5e91"
+    },
+    {
+      "path": "src/modules/auth/dto/refresh-token.dto.ts",
+      "sha256": "8573c07bd4049df2603c880c5b67313d9ffb01309708d5aae3e5dce58af9abd3"
+    },
+    {
+      "path": "src/modules/auth/dto/register.dto.ts",
+      "sha256": "f8325106cd298a8b053e2e459575d02a7e9211c03c715dc612a9b0805f8356d9"
+    },
+    {
+      "path": "src/modules/auth/dto/verify-gov-id.dto.ts",
+      "sha256": "36d30539a6b4193f3fad6daa543b5a8c089561ba5ccd7c365209e913be9fdda3"
+    },
+    {
+      "path": "src/modules/auth/jwt-keys.ts",
+      "sha256": "18b02c8b9dba18ab079e66ba6eeb46923128bfc771d8128333c36d611c6471e9"
+    },
+    {
+      "path": "src/modules/auth/strategies/jwt.strategy.ts",
+      "sha256": "fadad099aa1367178e4ec8c49c0567580cba3d77a84f0b6941f826062c1bbdb3"
+    },
+    {
+      "path": "src/modules/brackets/brackets.controller.ts",
+      "sha256": "a52d5bf1257f5797d8ded9fd73472deb1c7d16fb2e1b721a8fc10dadf3d9a87a"
+    },
+    {
+      "path": "src/modules/brackets/brackets.module.ts",
+      "sha256": "44e978db4e35c9ca962416cbc29b48dab0804bf80ef6150faf74d4437e5effef"
+    },
+    {
+      "path": "src/modules/brackets/brackets.service.ts",
+      "sha256": "fc7124576ccea4735296ec278f2b2440b48cee939cee765d4239e900cbddebb6"
+    },
+    {
+      "path": "src/modules/brackets/dto/bracket-registration-response.dto.ts",
+      "sha256": "3c571c6beda7a81eec303b287532961bd7172492277e4bdd0be4392cd1090878"
+    },
+    {
+      "path": "src/modules/brackets/dto/create-bracket.dto.ts",
+      "sha256": "23205c36b5ea076bb86bf26e28a743c524a8ab036c984efcf24be5b4e104d7f7"
+    },
+    {
+      "path": "src/modules/brackets/dto/register-bracket.dto.ts",
+      "sha256": "26b8e843d6fab90c0468451b463343943087c8eb83eb02f659d8f5e2a0bfc701"
+    },
+    {
+      "path": "src/modules/brackets/dto/update-bracket.dto.ts",
+      "sha256": "8e48cc4099d5c524bbd42c2f861474cf8378f36cd349d8befe1566437727a28b"
+    },
+    {
+      "path": "src/modules/drills/drills.controller.ts",
+      "sha256": "a21435d4819e0c7763b70626f5d16fa6d5f31304f56df7379f24f336e97ac4c2"
+    },
+    {
+      "path": "src/modules/drills/drills.module.ts",
+      "sha256": "d8446181cd1f06bd7cf86b96a317be548a74405db9dc4dfa86785a7735269408"
+    },
+    {
+      "path": "src/modules/drills/drills.service.ts",
+      "sha256": "fd00b73523e215f84e797b1f1104a98f2345f64c36e0730838797244d5649225"
+    },
+    {
+      "path": "src/modules/drills/dto/submit-drill.dto.ts",
+      "sha256": "ff4483366a553c9f642bebae460eb0c9f9591a0cf4a10e692da5776f833ffc15"
+    },
+    {
+      "path": "src/modules/drills/guards/drill-signature.guard.ts",
+      "sha256": "73f2355a7f5b38e5aebf067d31fb3c1dfae5aadf0d538335e526c068e6a9b172"
+    },
+    {
+      "path": "src/modules/gti/gti.controller.ts",
+      "sha256": "39dc965c0d1098ad519d2c7d17b3af0d4fcc7fdf0d90e7bc89787cf25d7dcda1"
+    },
+    {
+      "path": "src/modules/gti/gti.module.ts",
+      "sha256": "796e72a6e6e20ec5361a94fd3b03ae863f52aca30eedb273c712d964da0c6911"
+    },
+    {
+      "path": "src/modules/gti/gti.service.ts",
+      "sha256": "05a6eb2b60fad0388092240e2d81f395e20616f0f4384c2b9361858e4fea63da"
+    },
+    {
+      "path": "src/modules/gti/processors/gti-calculation.processor.ts",
+      "sha256": "3b454e7ac67e2b60cf65b92c677874acbc5b7865c3b2ad530b044388fac0a412"
+    },
+    {
+      "path": "src/modules/gti/processors/scout-alerts.processor.ts",
+      "sha256": "88f5b6094136bc946411cc2e09dacb8689a02890c50dad19c837499661159a0d"
+    },
+    {
+      "path": "src/modules/health/health.controller.ts",
+      "sha256": "adc499f1d9190c0148087489b24c5d8936be87d8710f56552f905eaf01672f45"
+    },
+    {
+      "path": "src/modules/health/health.module.ts",
+      "sha256": "161530a0a079f1530e2622bf15f01d6dd046ed0e0553ff43913f65bb56fe5bf1"
+    },
+    {
+      "path": "src/modules/health/health.service.ts",
+      "sha256": "ddce7c9255db336c921bb5c9486f230b0029c7aa42c79f3384b421dd2937204a"
+    },
+    {
+      "path": "src/modules/heatmaps/heatmaps.controller.ts",
+      "sha256": "f1844fdfd4839a880dffa4249eaeb4b67628a5687f2061c0ae2bef0ba611a4c4"
+    },
+    {
+      "path": "src/modules/heatmaps/heatmaps.module.ts",
+      "sha256": "b9165f4e3463ce686c32f8babf21945be5beecda9a183dc76baec327583cf07f"
+    },
+    {
+      "path": "src/modules/heatmaps/heatmaps.service.ts",
+      "sha256": "8fe826f54806ca0f6c7afcd4b10b0fa414d98998f63ebaecfefb554a8c662ae8"
+    },
+    {
+      "path": "src/modules/identity/identity.module.ts",
+      "sha256": "35ee9b2ef2edebd73cc97885d5ceed2bdf27e7bd04f88d37baec0325ce49a835"
+    },
+    {
+      "path": "src/modules/identity/identity.service.ts",
+      "sha256": "a5baaec4be1da57d9e87eab4e0ac23196de16fcbc8b3976e1b3468d0137967be"
+    },
+    {
+      "path": "src/modules/leaderboards/leaderboards.dto.ts",
+      "sha256": "9305525aab81c9b271e5857452050468f3c697edb081890b8098dd6ead6b9410"
+    },
+    {
+      "path": "src/modules/leaderboards/leaderboards.module.ts",
+      "sha256": "a508925d0e154e627173ca9086b2e23e7127b62c0ea847f8c5ffd1abe1d0b0e4"
+    },
+    {
+      "path": "src/modules/leaderboards/leaderboards.service.ts",
+      "sha256": "dc92bf17fa98b134a93c05738818c7b565fb9f2d925669ccd82001219b65efcb"
+    },
+    {
+      "path": "src/modules/matchmaking/dto/free-agent-status-response.dto.ts",
+      "sha256": "ba189e44af3a85f4fc2b67d2204eb401ba8471cccb14e764c9da9333f19ce1cb"
+    },
+    {
+      "path": "src/modules/matchmaking/dto/join-free-agent.dto.ts",
+      "sha256": "da38bea10024b05619e2a9eca91c59d1e377740946f87b14ebe66a9cb13f92de"
+    },
+    {
+      "path": "src/modules/matchmaking/matchmaking.controller.ts",
+      "sha256": "9d7436f8ac75532925d6a983d6a0ba9451f439b66b4890f8847caa0dcb997836"
+    },
+    {
+      "path": "src/modules/matchmaking/matchmaking.gateway.ts",
+      "sha256": "a80fd6108f35123a47aacc760b76a30c7ba7bfa845cfd5594382a46b57a5e0da"
+    },
+    {
+      "path": "src/modules/matchmaking/matchmaking.module.ts",
+      "sha256": "a806d2e2734fd6c46e0bcfe72ebd542ab0fab6f07360319973b9bf557363fba3"
+    },
+    {
+      "path": "src/modules/matchmaking/matchmaking.service.ts",
+      "sha256": "a8c931ab898126c3633bb7725f7656ec1a54c43b66206d763a7c322d31de25ee"
+    },
+    {
+      "path": "src/modules/matchmaking/processors/matchmaking.processor.ts",
+      "sha256": "74c71c4153f59fe626c148c63fc45107e2c1b85f0843429e77344fe70d2fd162"
+    },
+    {
+      "path": "src/modules/matchmaking/role-matcher.ts",
+      "sha256": "6f3bce9e24bf715dd498d1efe05340817b0373da166034d3ce68d093254dd944"
+    },
+    {
+      "path": "src/modules/passport/dto/add-sport-record.dto.ts",
+      "sha256": "ba69e0f7176882659dda1cdfc5979138690e46f8028522e903bb37729d131e5f"
+    },
+    {
+      "path": "src/modules/passport/dto/create-passport.dto.ts",
+      "sha256": "6d80b10aab6e7e0229c6fe838d61be8e5ce187564ad6c02bb40a5df203bab048"
+    },
+    {
+      "path": "src/modules/passport/dto/passport-response.dto.ts",
+      "sha256": "371d48d7266f44dbaad996714651c1e2ab49d26615fc76ce6b32436cae2c1cd8"
+    },
+    {
+      "path": "src/modules/passport/dto/update-passport.dto.ts",
+      "sha256": "f3e5ea78f11563d48c7f5201d88287d1cbcdf7182508076918a5b2588023e6e2"
+    },
+    {
+      "path": "src/modules/passport/passport.controller.ts",
+      "sha256": "4d678efc6516fce0e546807104a74fd95c3132ef0d5b9a85e458ccf94711aa06"
+    },
+    {
+      "path": "src/modules/passport/passport.module.ts",
+      "sha256": "d084e8b0e23222476eaf7514e793676c1bb422d1f1e2e2cddeb27b1fc7af0423"
+    },
+    {
+      "path": "src/modules/passport/passport.service.ts",
+      "sha256": "baf693196f44f599d2ea5ac5b455560813894a057184cf50a71a849b913a05ad"
+    },
+    {
+      "path": "src/modules/safety/dto/telemetry-webhook.dto.ts",
+      "sha256": "031bb2d14f3aa2d78632b676d61de9f1cffdbb255cf1f74dfd54c953c26bb5e1"
+    },
+    {
+      "path": "src/modules/safety/safety.controller.ts",
+      "sha256": "fd0e64ebfd87f255196f71a24aa15da573cabd51282c6eed19dd7fc06971c300"
+    },
+    {
+      "path": "src/modules/safety/safety.module.ts",
+      "sha256": "d3a753a1be421a1d0ed3a7702c5c3dea2007e7b80bb898fb5e30ef282862b7d6"
+    },
+    {
+      "path": "src/modules/safety/safety.service.ts",
+      "sha256": "54098be31cefd4871d3afda68f91ee70c30f7045f53db4e83b9e55de37f1538e"
+    },
+    {
+      "path": "src/modules/safety/telemetry-auth.guard.ts",
+      "sha256": "3d46f12fc5010388abc09db35e0cefc76cd211038abcac936898110d7fc8b25d"
+    },
+    {
+      "path": "src/modules/scouts/dossiers.service.ts",
+      "sha256": "4d82148be9d92c1feda1a315cae709208bbcf8c5ff7b04fd88aa7acc8cd576ee"
+    },
+    {
+      "path": "src/modules/scouts/dto/outreach.dto.ts",
+      "sha256": "8654beaaed104ba93288efeedb3143c829abe9c128b2e194ac6144d658b40b9d"
+    },
+    {
+      "path": "src/modules/scouts/dto/scout-alerts-query.dto.ts",
+      "sha256": "71bea6f14ef1b244b119f69e69e25f36091fc4e249364e497770065297287b74"
+    },
+    {
+      "path": "src/modules/scouts/dto/scout-feed-query.dto.ts",
+      "sha256": "5a651859059774ce4f311ffdf4f0a78450228719ac646280dfde431d809686fd"
+    },
+    {
+      "path": "src/modules/scouts/scout-outreach.guard.ts",
+      "sha256": "343d54ac0321cf8ca02f39d76b788aad0ce6adb9326e874feaced4f33a961228"
+    },
+    {
+      "path": "src/modules/scouts/scouts.controller.ts",
+      "sha256": "909a8850c1233036f12e03ec3bf4faafcf4775e71eaeadc6055ee05e209aaa64"
+    },
+    {
+      "path": "src/modules/scouts/scouts.module.ts",
+      "sha256": "57c830f675fab191b0a386179e4192313a7b592807e8a362eb4d856316b00968"
+    },
+    {
+      "path": "src/modules/scouts/scouts.service.ts",
+      "sha256": "736600de246dcffc280300c8d981533a9e5a19fded4b7dca7102f22bf70a252d"
+    },
+    {
+      "path": "src/modules/tournaments/dto/create-tournament.dto.ts",
+      "sha256": "146342f12e9534f1a58896573d3dc64bd4098b1bf5a84dca25a55daab9121d47"
+    },
+    {
+      "path": "src/modules/tournaments/dto/list-tournaments-query.dto.ts",
+      "sha256": "0b8dc4172d36a1059e843a97e26d4ae317c0f1b4e09fab741243e0bdccf83c56"
+    },
+    {
+      "path": "src/modules/tournaments/dto/nearby-tournaments-query.dto.ts",
+      "sha256": "c2469fe0471a26f277b406f8f43bcb418cda58f3c7cd6bc25696cd34e7bf525a"
+    },
+    {
+      "path": "src/modules/tournaments/dto/record-match-result.dto.ts",
+      "sha256": "ae103ac8bc4cfcdb072d12047bffc5d996a2aa3f47121cd052161c62f6e8f0eb"
+    },
+    {
+      "path": "src/modules/tournaments/dto/tournament-location.dto.ts",
+      "sha256": "561f02dd1e0919c933bb08b22efd308a02b44f0f84165d5d3e707616d21a32fc"
+    },
+    {
+      "path": "src/modules/tournaments/dto/update-tournament.dto.ts",
+      "sha256": "a764923185d1fa24b0c21aa6ff9309c0405a23e1c5edc7c955528c674cb39115"
+    },
+    {
+      "path": "src/modules/tournaments/match-results.controller.ts",
+      "sha256": "7a371f60f2dd56f2bb87162def53488eb82a2c44367e32a6960d2e510c10590c"
+    },
+    {
+      "path": "src/modules/tournaments/match-results.service.ts",
+      "sha256": "25c6183383523d2345f0f0719d967a135d33e6db9631775a392ab19e7d6f7e66"
+    },
+    {
+      "path": "src/modules/tournaments/participation-policy.ts",
+      "sha256": "3a5f41e95392395150deaf9a9ee437032a770b928955c239ae81876bfbb1af43"
+    },
+    {
+      "path": "src/modules/tournaments/tournament-policy.ts",
+      "sha256": "253f1d4438dc7573cf7df2450e5993b7774449af7054f4a0baeef0f5cb5bb5b6"
+    },
+    {
+      "path": "src/modules/tournaments/tournaments.controller.ts",
+      "sha256": "5d4122bd8f890382c1d3aa3d9109916163f1681d99f17d8bb29afa3c9d35e300"
+    },
+    {
+      "path": "src/modules/tournaments/tournaments.module.ts",
+      "sha256": "ad27003141d5070fd18cdcdb8c246946c6439ccc6667a10acf68f7aff3476e5c"
+    },
+    {
+      "path": "src/modules/tournaments/tournaments.service.ts",
+      "sha256": "f0b4cfba6f1c6ec48fde08e218d6f10dd0e26ce44a94455c2ba11dc9a9399555"
+    },
+    {
+      "path": "src/modules/users/dto/update-user.dto.ts",
+      "sha256": "d5e8c40ecf7aff8774888c8f544ec463ef55159e2fb5309782628a166e3af713"
+    },
+    {
+      "path": "src/modules/users/users.controller.ts",
+      "sha256": "ebd13f638e39b5e927c421ba46942d6da63348af0fba9f3442fdd4f60027518f"
+    },
+    {
+      "path": "src/modules/users/users.module.ts",
+      "sha256": "9ac16a9aa9f4b380c3c536193c8820087161a6350e5b96238123de9bbf53e222"
+    },
+    {
+      "path": "src/modules/users/users.service.ts",
+      "sha256": "91131025d898e740b2ca9dee7988f6f34478c9db69245ac91bb4ceda6ec2ac6b"
+    },
+    {
+      "path": "test/audit-hardening.spec.ts",
+      "sha256": "86604aedc3022312d154d7e8078024e039a98e7be1ec6dbcce6ec35cee36b16c"
+    },
+    {
+      "path": "test/health.spec.ts",
+      "sha256": "0985032cf7cd967aaa65cb8cdeb360b8c86760521db54505ad315801b2d12a80"
+    },
+    {
+      "path": "test/helpers/auth-passport.fixture.ts",
+      "sha256": "d55cd18557b730b01c6f23c7e9fc18b685f6f695f13044994482c96d0d39cc38"
+    },
+    {
+      "path": "test/helpers/competition.fixture.ts",
+      "sha256": "aa14703408d9c56a05936c8d10790191a7b62d15dba20ed977a0c16f4a3d977f"
+    },
+    {
+      "path": "test/helpers/security-gti.fixture.ts",
+      "sha256": "8c245019d5fa0fd991fc1f3090a9383604d6d59dad80c06d439324a00914be03"
+    },
+    {
+      "path": "test/helpers/socket.fixture.ts",
+      "sha256": "36f7b6f1170221d78d6eb5e174b131d1c1d47889b643744560eea868bb65c70a"
+    },
+    {
+      "path": "test/phase2-auth-passport.spec.ts",
+      "sha256": "1483bf1884a65747c5967fa1f030760aaa5bdc2d03fe6efe78c46cfa6c9be3de"
+    },
+    {
+      "path": "test/phase3-tournaments-sandbagging.spec.ts",
+      "sha256": "64d48f651f498004ec5cf62c490dbdea7f718722a92278fabc9709634500efef"
+    },
+    {
+      "path": "test/phase4-matchmaking-pool.spec.ts",
+      "sha256": "cac212a9beb09e44d9b3c9ef3bb900d4e9db451a0cbf9366f0a12631cd6e1fbd"
+    },
+    {
+      "path": "test/phase5-drills-iot-gti.spec.ts",
+      "sha256": "3174537eea4705bcab62958fbbe04ccab0be61cc4d3fe6272bc02249d249feff"
+    },
+    {
+      "path": "test/postgis-migration.spec.ts",
+      "sha256": "a0cbb54f1e541663a0605a743ca2ab1afb718e4f4dcd38c73f603d37334ce12c"
+    },
+    {
+      "path": "test/release-readiness.spec.ts",
+      "sha256": "3567410eb9e04c8b91adc90b11ce15c7b89b0216b69dda15948d7e4edbe65f47"
+    },
+    {
+      "path": "tsconfig.build.json",
+      "sha256": "10fadd03d42a0049f3b09d7e80b02262ade06fb164d81b4dfd8fffbea1ff2b7c"
+    },
+    {
+      "path": "tsconfig.json",
+      "sha256": "48f5d96c207a3a62d97c820f73da191c30dbd57f8e24bc98e52c966cbedf4940"
+    }
+  ]
+}

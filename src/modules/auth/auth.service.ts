@@ -20,6 +20,8 @@ import { runSerializableTransaction } from '../../common/database/serializable-t
 import { assertAccountAccess, assertIdentityAccess } from '../../common/auth/account-access';
 import { loadLocalJwtKeys, tokenDurationSeconds } from './jwt-keys';
 
+import { verifyContactProof } from './contact-proof';
+
 export interface GovernmentIdVerificationResponse {
   readonly message: string;
   readonly verified: boolean;
@@ -82,6 +84,15 @@ export class AuthService {
       }
     }
 
+    if (
+      dto.profile &&
+      (!Number.isFinite(Date.parse(dto.profile.dateOfBirth)) ||
+        new Date(dto.profile.dateOfBirth) > new Date())
+    )
+      throw new BadRequestException('dateOfBirth must be a valid past date');
+    const proof = await verifyContactProof(this.configService, dto);
+    const production =
+      this.configService.get<string>('app.nodeEnv', 'development') === 'production';
     let precomputedIdHash: string | null = null;
     if (dto.governmentId) {
       precomputedIdHash = this.identityService.hashGovernmentId(
@@ -96,6 +107,8 @@ export class AuthService {
       if (existingRecord) {
         assertIdentityAccess(existingRecord.status);
         const existingUser = existingRecord.user;
+        if (existingUser.isRecoveryBlocked)
+          throw new ForbiddenException('This account requires administrator reactivation');
         const contactMatches =
           (dto.phone !== undefined && dto.phone === existingUser.phone) ||
           (dto.email !== undefined && dto.email === existingUser.email);
@@ -174,6 +187,7 @@ export class AuthService {
     const user = await this.prisma.$transaction(async (tx) => {
       const newUser = await tx.user.create({
         data: {
+          ...(proof ? { id: proof.subject } : {}),
           phone: dto.phone,
           email: dto.email,
           role,
@@ -211,7 +225,7 @@ export class AuthService {
             idHash: precomputedIdHash,
             idType: dto.governmentId.idType,
             saltVersion: this.identityService.getConfiguredSaltVersion(),
-            status: VerificationStatus.VERIFIED,
+            status: production ? VerificationStatus.UNVERIFIED : VerificationStatus.VERIFIED,
             verifiedAt: new Date(),
           },
         });
@@ -220,7 +234,7 @@ export class AuthService {
       return { ...newUser, athleteProfileId: profileId ?? null };
     });
 
-    const isVerified = Boolean(precomputedIdHash);
+    const isVerified = Boolean(precomputedIdHash) && !production;
     return this.generateAuthResponse(
       user.id,
       user.role,
@@ -246,6 +260,7 @@ export class AuthService {
       throw new UnauthorizedException('Either phone or email must be provided to log in.');
     }
 
+    await verifyContactProof(this.configService, dto);
     const user = await this.prisma.user.findFirst({
       where: {
         OR: [
@@ -314,7 +329,10 @@ export class AuthService {
       include: { athleteProfile: { select: { id: true, currentGti: true } } },
     });
     return {
-      message: 'Government ID verified and bound to athlete passport.',
+      message:
+        record.status === VerificationStatus.VERIFIED
+          ? 'Government ID verified and bound to athlete passport.'
+          : 'Government ID bound; administrator verification is pending.',
       verified: record.status === VerificationStatus.VERIFIED,
       idHashPrefix: record.idHash.substring(0, 8),
       userId: owner.id,

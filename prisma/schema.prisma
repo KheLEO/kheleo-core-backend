@@ -111,13 +111,14 @@ enum RegistrationStatus {
 // ─── MODELS ───────────────────────────────────────────────────────────────
 
 model User {
-  id        String   @id @default(uuid()) @db.Uuid
-  phone     String?  @unique @db.VarChar(20)
-  email     String?  @unique @db.VarChar(255)
-  role      UserRole @default(ATHLETE)
-  isActive  Boolean  @default(true) @map("is_active")
-  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
-  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz
+  id                String   @id @default(uuid()) @db.Uuid
+  phone             String?  @unique @db.VarChar(20)
+  email             String?  @unique @db.VarChar(255)
+  role              UserRole @default(ATHLETE)
+  isActive          Boolean  @default(true) @map("is_active")
+  isRecoveryBlocked Boolean  @default(false) @map("is_recovery_blocked")
+  createdAt         DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt         DateTime @updatedAt @map("updated_at") @db.Timestamptz
 
   athleteProfile         AthleteProfile?
   identityRecord         IdentityVerification?
@@ -169,7 +170,7 @@ model IdentityVerification {
   verifiedAt        DateTime           @default(now()) @map("verified_at") @db.Timestamptz
   metadata          Json?              @db.JsonB
 
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Restrict)
 
   @@index([idHash])
   @@index([status])
@@ -627,4 +628,20 @@ model VerifiedMatchResult {
   @@index([bracketId, createdAt(sort: Desc)])
   @@index([participantAthleteIds], type: Gin)
   @@map("verified_match_results")
+}
+
+model OutboxEvent {
+  id          String    @id @default(uuid()) @db.Uuid
+  kind        String    @db.VarChar(32)
+  payload     Json      @db.JsonB
+  attempts    Int       @default(0)
+  availableAt DateTime  @default(now()) @map("available_at") @db.Timestamptz
+  lockedUntil DateTime? @map("locked_until") @db.Timestamptz
+  lockedBy    String?   @map("locked_by") @db.Uuid
+  deliveredAt DateTime? @map("delivered_at") @db.Timestamptz
+  lastError   String?   @map("last_error") @db.VarChar(500)
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz
+
+  @@index([deliveredAt, availableAt])
+  @@map("outbox_events")
 }

@@ -1,0 +1,32 @@
+[
+  {
+    "probe": "cross_user_idempotency",
+    "finding": "Second user receives first user cached response; second handler skipped",
+    "returnedOwner": "athlete-A"
+  },
+  {
+    "probe": "unsigned_drill_metadata",
+    "finding": "HMAC accepts changed sport, frames_analyzed and flaw_flags",
+    "accepted": true
+  },
+  {
+    "probe": "missing_login_government_id",
+    "finding": "Global ValidationPipe accepts missing nested governmentId; service throws TypeError",
+    "error": "Cannot read properties of undefined (reading 'idNumber')"
+  },
+  {
+    "probe": "greedy_role_assignment",
+    "finding": "Rejects feasible 4-player roster: specialist could fill batsman and dual-role player bowler",
+    "result": null
+  },
+  {
+    "probe": "controller_inventory",
+    "httpOperations": 30,
+    "paths": 24
+  },
+  {
+    "probe": "anonymous_safety_broadcast",
+    "finding": "Anonymous Socket.IO connection receives MATCH_PAUSE_ALERT with athlete name and vitals",
+    "receivedWithoutToken": true
+  }
+]

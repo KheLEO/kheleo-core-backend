@@ -9,17 +9,6 @@
   "engines": {
     "node": ">=20.0.0"
   },
-  "pnpm": {
-    "onlyBuiltDependencies": [
-      "@prisma/client",
-      "@prisma/engines",
-      "prisma",
-      "msgpackr-extract",
-      "@scarf/scarf",
-      "bcrypt",
-      "argon2"
-    ]
-  },
   "scripts": {
     "build": "nest build && node scripts/create-entrypoint-shim.cjs",
     "postinstall": "prisma generate",
@@ -31,10 +20,13 @@
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
     "prisma:deploy": "prisma migrate deploy",
-    "test": "ts-node test/phase2-auth-passport.spec.ts && ts-node test/phase3-tournaments-sandbagging.spec.ts && ts-node test/phase4-matchmaking-pool.spec.ts && ts-node test/phase5-drills-iot-gti.spec.ts && ts-node test/audit-hardening.spec.ts && ts-node test/health.spec.ts && ts-node test/postgis-migration.spec.ts"
+    "test": "ts-node test/phase2-auth-passport.spec.ts && ts-node test/phase3-tournaments-sandbagging.spec.ts && ts-node test/phase4-matchmaking-pool.spec.ts && ts-node test/phase5-drills-iot-gti.spec.ts && ts-node test/audit-hardening.spec.ts && ts-node test/health.spec.ts && ts-node test/postgis-migration.spec.ts && ts-node test/release-readiness.spec.ts",
+    "audit:probes": "node audit-evidence/2026-11-05/probes.cjs",
+    "verify:live": "node scripts/smoke-production.cjs"
   },
   "dependencies": {
     "@fastify/compress": "^8.0.1",
+    "@fastify/static": "^10.1.10",
     "@nestjs/bullmq": "^11.0.4",
     "@nestjs/common": "^11.0.11",
     "@nestjs/config": "^4.0.1",

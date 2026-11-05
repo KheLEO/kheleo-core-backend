@@ -22,7 +22,10 @@ import { HealthModule } from './modules/health/health.module';
 import { AdminModule } from './modules/admin/admin.module';
 import { LeaderboardsModule } from './modules/leaderboards/leaderboards.module';
 
+import { OutboxDispatcher } from './infrastructure/outbox/outbox-dispatcher.service';
+
 @Module({
+  providers: [OutboxDispatcher],
   imports: [
     // Infrastructure
     ConfigurationModule,

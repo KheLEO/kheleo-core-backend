@@ -54,6 +54,8 @@ The application is organized by domain under `src/modules`, with shared guards, 
 - pnpm 10.32.0 (pinned in `package.json`; Corepack selects this version)
 - Docker with Docker Compose, or compatible PostgreSQL/PostGIS and Redis instances
 
+Production rollout instructions, secret generation, database/Redis setup, and dashboard integration are in [PRODUCTION_DEPLOYMENT.md](PRODUCTION_DEPLOYMENT.md). The current finding-by-finding verification is in [BACKEND_AUDIT_REPORT.md](BACKEND_AUDIT_REPORT.md).
+
 ## Local setup
 
 1. Install dependencies and create the local environment file.
@@ -146,7 +148,7 @@ If registration supplies a government ID already attached to the same contact, t
 
 Login, refresh, and authenticated HTTP requests reject deactivated accounts and identities marked `REVOKED` or `FLAGGED_DUPLICATE`. Deactivation also revokes stored refresh tokens. Token lifetimes follow `JWT_ACCESS_EXPIRY` and `JWT_REFRESH_EXPIRY`. Identity lookups try the configured salt version and version 1; new records store the configured version. Retain the identity pepper when changing the salt version.
 
-When `SUPABASE_JWT_SECRET` is configured, registered users may authenticate with Supabase HS256 tokens alongside local RSA/HS256 tokens. The JWT subject must identify an existing backend user. Supabase email, phone, and matching `user_metadata.role` claims are mapped; the current database role controls authorization because user metadata is editable. This adds JWT compatibility; the local document/contact login still does not perform external OTP or KYC verification.
+When `SUPABASE_JWT_SECRET` is configured, registered users may authenticate with Supabase HS256 tokens alongside local RSA/HS256 tokens. The JWT subject must identify an existing backend user. Supabase email, phone, and matching `user_metadata.role` claims are mapped; the current database role controls authorization because user metadata is editable. Production register/login additionally require identityAccessToken from a confirmed Supabase contact session. Newly bound government IDs remain UNVERIFIED pending administrator approval.
 
 Protected HTTP routes use:
 
@@ -276,7 +278,7 @@ Send `X-Drill-Signed-Fields: full` to prohibit legacy downgrade. This format req
 
 The timestamp may be Unix seconds or milliseconds and must be within 300 seconds. Athlete identity must match the JWT, sport must be a SportType, frames must be integer 1–18000, flags must be strings, and joints must be an object. Bowling/batting/wicket, smash/drop, and strike/dribble must match Cricket, Badminton, and Football respectively.
 
-For compatibility, four-field `<user-id>:<drill_type>:<form_score>:<timestamp>` signatures remain accepted under these bounds without the full-signing header. They authenticate the identity, drill, and score; they cannot authenticate added metadata. These records store `metadataVerified=false` and do not count as fully verified drills in admin KPIs. Migrate signers to full/full-v2 for metadata integrity.
+In production, full/full-v2 signing is required by default. For local compatibility, four-field `<user-id>:<drill_type>:<form_score>:<timestamp>` signatures remain accepted under these bounds without the full-signing header. They authenticate the identity, drill, and score; they cannot authenticate added metadata. These records store `metadataVerified=false` and do not count as fully verified drills in admin KPIs. Migrate signers to full/full-v2 for metadata integrity.
 
 ### Safety telemetry
 
@@ -349,3 +351,7 @@ The migration suite executes the committed migration chain in embedded Postgres/
 ## License
 
 Private and unlicensed. See `package.json`.
+
+Phase 5 adds durable outbox delivery/retry intents, production contact proof, pending identity approval, administrative recovery blocking, Redis URL/TLS/ACL settings, and Data API isolation. Apply all migrations before startup. Queue/event recovery is at least once; clients should reconcile with durable REST state and deduplicate recovered event IDs or business IDs. Scout alert lists retain their array response and accept cursor_id/limit with X-Next-Cursor for the next page. Registration never marks fees paid without settlement.
+
+Run the complete embedded PostGIS/PGlite test suite on Node 24. CI checks the Node 20 application build, compiled probes, native PostGIS/Redis integration and container separately; its older V8 cannot load the pinned PostGIS WASM test extension.

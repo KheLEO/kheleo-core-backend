@@ -97,8 +97,9 @@ export class HeatmapsService {
           total: number;
           femaleCount: number;
           gtiSum: number;
-          lats: number[];
-          lngs: number[];
+          latSum: number;
+          lngSum: number;
+          coordinateCount: number;
         }
       >();
 
@@ -131,8 +132,9 @@ export class HeatmapsService {
               total: 0,
               femaleCount: 0,
               gtiSum: 0,
-              lats: [],
-              lngs: [],
+              latSum: 0,
+              lngSum: 0,
+              coordinateCount: 0,
             });
           }
 
@@ -144,8 +146,9 @@ export class HeatmapsService {
           const gtiValue = profile.gti > 0 ? profile.gti : Number(profile.currentGti) || 0;
           entry.gtiSum += gtiValue;
           if (profile.locationLat != null && profile.locationLng != null) {
-            entry.lats.push(profile.locationLat);
-            entry.lngs.push(profile.locationLng);
+            entry.latSum += profile.locationLat;
+            entry.lngSum += profile.locationLng;
+            entry.coordinateCount += 1;
           }
         }
 
@@ -162,9 +165,9 @@ export class HeatmapsService {
             stats.total > 0 ? Number(((stats.femaleCount / stats.total) * 100).toFixed(2)) : 0;
 
           let centroid: Record<string, unknown> | null = null;
-          if (stats.lats.length > 0 && stats.lngs.length > 0) {
-            const avgLat = stats.lats.reduce((a, b) => a + b, 0) / stats.lats.length;
-            const avgLng = stats.lngs.reduce((a, b) => a + b, 0) / stats.lngs.length;
+          if (stats.coordinateCount > 0) {
+            const avgLat = stats.latSum / stats.coordinateCount;
+            const avgLng = stats.lngSum / stats.coordinateCount;
             centroid = {
               type: 'Point',
               coordinates: [Number(avgLng.toFixed(6)), Number(avgLat.toFixed(6))],
@@ -184,8 +187,15 @@ export class HeatmapsService {
 
       return {
         success: true,
-        count: formatted.length,
-        data: formatted,
+        count: Math.min(500, formatted.length),
+        data: formatted
+          .sort(
+            (a, b) =>
+              b.total_athletes - a.total_athletes ||
+              a.state.localeCompare(b.state) ||
+              a.district.localeCompare(b.district),
+          )
+          .slice(0, 500),
       };
     }
   }

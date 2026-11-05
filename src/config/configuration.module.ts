@@ -6,10 +6,13 @@ import { databaseConfig } from './database.config';
 import { redisConfig } from './redis.config';
 import { queueConfig } from './queue.config';
 
+import { validateEnvironment } from './validate-environment';
+
 @Module({
   imports: [
     ConfigModule.forRoot({
       isGlobal: true,
+      validate: validateEnvironment,
       load: [appConfig, authConfig, databaseConfig, redisConfig, queueConfig],
       envFilePath: ['.env'],
     }),

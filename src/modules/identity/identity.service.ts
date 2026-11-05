@@ -80,6 +80,7 @@ export class IdentityService {
             email: true,
             role: true,
             isActive: true,
+            isRecoveryBlocked: true,
             athleteProfile: { select: { id: true } },
           },
         },
@@ -169,7 +170,10 @@ export class IdentityService {
         idHash,
         idType,
         saltVersion: this.defaultSaltVersion,
-        status: VerificationStatus.VERIFIED,
+        status:
+          this.configService.get<string>('app.nodeEnv', 'development') === 'production'
+            ? VerificationStatus.UNVERIFIED
+            : VerificationStatus.VERIFIED,
         verifiedAt: new Date(),
         metadata: {
           hashAlgorithm: 'SHA-256',
@@ -190,6 +194,7 @@ export type IdentityRecordWithUser = Prisma.IdentityVerificationGetPayload<{
         email: true;
         role: true;
         isActive: true;
+        isRecoveryBlocked: true;
         athleteProfile: { select: { id: true } };
       };
     };

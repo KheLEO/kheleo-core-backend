@@ -38,11 +38,16 @@ export function canonicalDrillPayload(athleteId: string, dto: SubmitDrillDto): s
 @Injectable()
 export class DrillSignatureGuard implements CanActivate {
   private readonly secret: string;
+  private readonly allowLegacy: boolean;
   constructor(config: ConfigService) {
     const secret = config.get<string>('auth.drillHmacSecret');
     if (!secret && config.get<string>('app.nodeEnv', 'development') === 'production')
       throw new Error('DRILL_HMAC_SECRET must be configured in production.');
     this.secret = secret || 'local-development-drill-secret';
+    this.allowLegacy = config.get<boolean>(
+      'auth.allowLegacyDrillSignatures',
+      config.get<string>('app.nodeEnv', 'development') !== 'production',
+    );
   }
 
   canActivate(context: ExecutionContext): boolean {
@@ -99,6 +104,7 @@ export class DrillSignatureGuard implements CanActivate {
     else {
       const signed = request.headers['x-drill-signed-fields'];
       if (
+        !this.allowLegacy ||
         signed !== undefined ||
         ![dto.timestamp, seconds].some((time) =>
           matches(`${athleteId}:${dto.drill_type}:${dto.form_score}:${time}`),

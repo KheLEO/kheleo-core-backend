@@ -1,0 +1,16 @@
+node_modules
+.pnpm-store
+dist
+build
+.git
+.env
+.env.*
+keys
+**/*.pem
+**/*.key
+**/*.log
+coverage
+test
+audit-evidence
+.github
+.DS_Store

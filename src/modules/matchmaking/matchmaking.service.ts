@@ -441,7 +441,7 @@ export class MatchmakingService {
         bracketId,
         teamId: team.id,
         status: RegistrationStatus.CONFIRMED,
-        feePaid: bracket.entryFee,
+        feePaid: 0,
         metadata: {
           isFreeAgentFormedTeam: true,
           averageGti: meanGti,

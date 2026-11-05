@@ -15,6 +15,7 @@ import { RoomAccessService } from './room-access.service';
 import { ScoutAlertPayload } from '../queues/queue-producer.service';
 
 export interface AutonomousMatchPausePayload {
+  readonly event_id?: string;
   readonly event: 'MATCH_PAUSE_ALERT';
   readonly severity: 'CRITICAL';
   readonly athlete_id: string;
@@ -31,6 +32,7 @@ export interface AutonomousMatchPausePayload {
 }
 
 export interface GtiUpdatedPayload {
+  readonly eventId?: string;
   readonly athleteId: string;
   readonly previousGti: number;
   readonly newGti: number;

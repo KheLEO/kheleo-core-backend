@@ -1,0 +1,24 @@
+{
+  "verifiedAt": "2026-11-05T16:14:23.454Z",
+  "runtime": "v24.22.1",
+  "result": "PASS",
+  "results": [
+    {
+      "command": "/opt/hostedtoolcache/node/24.22.1/x64/bin/node dist/main",
+      "code": 1,
+      "signal": null,
+      "entrypointResolved": true,
+      "dependencyInjectionResolved": true,
+      "unavailableInfrastructureControl": true
+    },
+    {
+      "command": "pnpm start:prod",
+      "code": 1,
+      "signal": null,
+      "entrypointResolved": true,
+      "dependencyInjectionResolved": true,
+      "unavailableInfrastructureControl": true
+    }
+  ],
+  "scope": "Entrypoint/module resolution only; native production boot is verified separately by smoke-production.cjs"
+}

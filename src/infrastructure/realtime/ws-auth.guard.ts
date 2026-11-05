@@ -36,7 +36,12 @@ export class WsAuthGuard implements CanActivate {
     this.namespaces.add(server);
     server.use((client, next) => {
       void this.authenticate(client).then(
-        () => next(),
+        async (user) => {
+          await client.join([`user:${user.sub}`, `role:${user.role}`, `athlete:${user.sub}`]);
+          if (['SCOUT', 'FEDERATION_ADMIN', 'SUPER_ADMIN'].includes(user.role))
+            await client.join('scouts');
+          next();
+        },
         () => next(new Error('Unauthorized connection')),
       );
     });

@@ -22,6 +22,7 @@ export class LeaderboardsService {
   async syncAthlete(
     userId: string,
     previous?: { primarySport: SportType | null; state: string; district: string } | null,
+    requireDelivery = false,
   ): Promise<void> {
     try {
       const profile = await this.prisma.athleteProfile.findUnique({
@@ -72,6 +73,7 @@ export class LeaderboardsService {
         JSON.stringify(keys),
       );
     } catch (error: unknown) {
+      if (requireDelivery) throw error;
       this.logger.warn(`Leaderboard cache sync failed for ${userId}: ${String(error)}`);
     }
   }

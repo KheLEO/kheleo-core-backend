@@ -5,6 +5,7 @@ import {
   IsNotEmptyObject,
   IsOptional,
   IsString,
+  MaxLength,
   Matches,
   ValidateNested,
 } from 'class-validator';
@@ -12,6 +13,14 @@ import { Type } from 'class-transformer';
 import { GovernmentIdInputDto } from './register.dto';
 
 export class LoginDto {
+  @ApiPropertyOptional({
+    description:
+      'Supabase access token proving confirmed contact ownership; required in production',
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(8192)
+  readonly identityAccessToken?: string;
   @ApiPropertyOptional({ example: '+919876543210' })
   @IsOptional()
   @IsString()

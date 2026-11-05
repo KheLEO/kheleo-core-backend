@@ -81,9 +81,10 @@ export class MatchmakingGateway implements OnGatewayInit, OnGatewayConnection {
   /**
    * Broadcasts the ROSTER_FORMED event targeting all matched members and the bracket room.
    */
-  emitRosterFormed(data: RosterFormedEventData): void {
+  emitRosterFormed(data: RosterFormedEventData, eventId?: string): void {
     const payload = {
       event: 'ROSTER_FORMED',
+      eventId,
       data,
     };
 

@@ -21,7 +21,21 @@ export class RedisIoAdapter extends IoAdapter {
   async connectToRedis(): Promise<void> {
     this.pubClient = this.redisService.client.duplicate({ lazyConnect: true });
     this.subClient = this.redisService.client.duplicate({ lazyConnect: true });
-    await Promise.all([this.pubClient.connect(), this.subClient.connect()]);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await Promise.race([
+        Promise.all([this.pubClient.connect(), this.subClient.connect()]),
+        new Promise<never>((_resolve, reject) => {
+          timer = setTimeout(() => reject(new Error('Redis realtime startup timed out')), 5000);
+        }),
+      ]);
+    } catch (error: unknown) {
+      this.pubClient.disconnect();
+      this.subClient.disconnect();
+      throw error;
+    } finally {
+      clearTimeout(timer);
+    }
 
     this.adapterConstructor = createAdapter(this.pubClient, this.subClient);
   }

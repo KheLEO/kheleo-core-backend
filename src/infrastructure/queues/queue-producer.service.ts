@@ -38,8 +38,12 @@ export class QueueProducerService {
     private readonly scoutAlertQueue: Queue,
   ) {}
 
-  async enqueueGtiRecalculation(payload: GtiRecalculationPayload): Promise<string> {
+  async enqueueGtiRecalculation(
+    payload: GtiRecalculationPayload,
+    deliveryId?: string,
+  ): Promise<string> {
     const job = await this.gtiCalcQueue.add('recalculate', payload, {
+      ...(deliveryId ? { jobId: deliveryId } : {}),
       attempts: 3,
       backoff: { type: 'exponential', delay: 2000 },
       removeOnComplete: 100,
@@ -49,8 +53,12 @@ export class QueueProducerService {
     return job.id ?? '';
   }
 
-  async enqueueBracketMatchmaking(payload: MatchmakingPayload): Promise<string> {
+  async enqueueBracketMatchmaking(
+    payload: MatchmakingPayload,
+    deliveryId?: string,
+  ): Promise<string> {
     const job = await this.matchmakingQueue.add('process-bracket-pool', payload, {
+      ...(deliveryId ? { jobId: deliveryId } : {}),
       attempts: 3,
       backoff: { type: 'exponential', delay: 2000 },
       removeOnComplete: 100,

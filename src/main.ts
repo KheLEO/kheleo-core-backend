@@ -41,7 +41,7 @@ async function bootstrap(): Promise<void> {
       'X-Timestamp',
       'If-None-Match',
     ],
-    exposedHeaders: ['ETag', 'X-Cache-Lookup', 'X-Request-Id'],
+    exposedHeaders: ['ETag', 'X-Cache-Lookup', 'X-Request-Id', 'X-Next-Cursor'],
   });
 
   // ─── Versioning ─────────────────────────────────────

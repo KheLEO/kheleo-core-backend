@@ -65,7 +65,7 @@ export class BracketsService {
         userId,
         teamId: dto.teamId ?? null,
         status: RegistrationStatus.CONFIRMED,
-        feePaid: bracket.entryFee,
+        feePaid: 0,
         metadata: {
           verifiedGtiAtRegistration: athleteGti,
           ...(teamGti !== undefined ? { teamGti } : {}),

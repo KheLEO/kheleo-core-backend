@@ -130,6 +130,7 @@ export function createAuthFixture(options: FixtureOptions = {}) {
     email: 'athlete@fixture.test',
     role: UserRole.ATHLETE,
     isActive: true,
+    isRecoveryBlocked: false,
     createdAt: now,
     updatedAt: now,
     identityRecord: null,
@@ -199,6 +200,7 @@ export function createAuthFixture(options: FixtureOptions = {}) {
         data,
       }: {
         readonly data: {
+          readonly id?: string;
           readonly phone?: string;
           readonly email?: string;
           readonly role: UserRole;
@@ -208,7 +210,7 @@ export function createAuthFixture(options: FixtureOptions = {}) {
         state.user = {
           ...state.user,
           ...data,
-          id: randomUUID(),
+          id: data.id ?? randomUUID(),
           phone: data.phone ?? null,
           email: data.email ?? null,
           identityRecord: null,
