@@ -2,18 +2,20 @@ import {
   WebSocketGateway,
   WebSocketServer,
   OnGatewayInit,
+  OnGatewayConnection,
   SubscribeMessage,
   MessageBody,
   ConnectedSocket,
 } from '@nestjs/websockets';
 import { ForbiddenException, Logger, UseGuards } from '@nestjs/common';
-import { Server, Socket } from 'socket.io';
-import { WsAuthGuard } from '../../infrastructure/realtime/ws-auth.guard';
-import { PrismaService } from '../../infrastructure/database/prisma.service';
 
-interface AuthenticatedSocket extends Socket {
-  readonly user?: { readonly sub: string; readonly role: string };
-}
+import {
+  AuthenticatedSocket,
+  AuthenticatedNamespace,
+  WsAuthGuard,
+} from '../../infrastructure/realtime/ws-auth.guard';
+
+import { RoomAccessService } from '../../infrastructure/realtime/room-access.service';
 
 export interface RosterMemberPayload {
   readonly user_id: string;
@@ -34,16 +36,21 @@ export interface RosterFormedEventData {
   cors: { origin: '*' },
 })
 @UseGuards(WsAuthGuard)
-export class MatchmakingGateway implements OnGatewayInit {
+export class MatchmakingGateway implements OnGatewayInit, OnGatewayConnection {
   @WebSocketServer()
-  server!: Server;
+  server!: AuthenticatedNamespace;
 
   private readonly logger = new Logger(MatchmakingGateway.name);
 
-  constructor(private readonly prisma: PrismaService) {}
-
-  afterInit(): void {
-    this.logger.log('Matchmaking WebSocket Gateway initialized');
+  constructor(
+    private readonly auth: WsAuthGuard,
+    private readonly access: RoomAccessService,
+  ) {}
+  afterInit(server: AuthenticatedNamespace): void {
+    this.auth.configure(server);
+  }
+  async handleConnection(client: AuthenticatedSocket): Promise<void> {
+    await this.auth.accept(client);
   }
 
   @SubscribeMessage('join:user')
@@ -51,7 +58,7 @@ export class MatchmakingGateway implements OnGatewayInit {
     @ConnectedSocket() client: AuthenticatedSocket,
     @MessageBody() data: { userId: string },
   ): void {
-    if (!client.user || client.user.sub !== data.userId) {
+    if (!client.data.user || client.data.user.sub !== data.userId) {
       throw new ForbiddenException("Cannot subscribe to another user's room.");
     }
     const room = `user:${data.userId}`;
@@ -64,19 +71,8 @@ export class MatchmakingGateway implements OnGatewayInit {
     @ConnectedSocket() client: AuthenticatedSocket,
     @MessageBody() data: { bracketId: string },
   ): Promise<void> {
-    const user = client.user;
-    if (!user || user.role === 'ATHLETE' || user.role === 'SCOUT') {
-      throw new ForbiddenException('Only competition staff may subscribe to bracket events.');
-    }
-    if (user.role !== 'FEDERATION_ADMIN' && user.role !== 'SUPER_ADMIN') {
-      const bracket = await this.prisma.bracket.findUnique({
-        where: { id: data.bracketId },
-        select: { tournament: { select: { organizerId: true } } },
-      });
-      if (!bracket || bracket.tournament.organizerId !== user.sub) {
-        throw new ForbiddenException('You cannot subscribe to this bracket.');
-      }
-    }
+    if (!(await this.access.canJoin(client.data.user, 'bracket', data?.bracketId)))
+      throw new ForbiddenException('Cannot subscribe to this bracket.');
     const room = `bracket:${data.bracketId}`;
     void client.join(room);
     this.logger.debug(`Socket ${client.id} joined bracket room ${room}`);
@@ -92,10 +88,10 @@ export class MatchmakingGateway implements OnGatewayInit {
     };
 
     if (this.server) {
-    this.server.to(`bracket:${data.bracket_id}`).emit('ROSTER_FORMED', payload);
-    for (const member of data.roster) {
-      this.server.to(`user:${member.user_id}`).emit('ROSTER_FORMED', payload);
-    }
+      this.server
+        .to(`bracket:${data.bracket_id}`)
+        .to(data.roster.map((member) => `user:${member.user_id}`))
+        .emit('ROSTER_FORMED', payload);
     }
 
     this.logger.log(

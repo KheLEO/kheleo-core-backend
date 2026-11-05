@@ -6,8 +6,10 @@ import { AuthModule } from '../auth/auth.module';
 import { PassportModule } from '../passport/passport.module';
 import { ScoutsModule } from '../scouts/scouts.module';
 
+import { LeaderboardsModule } from '../leaderboards/leaderboards.module';
+
 @Module({
-  imports: [PrismaModule, AuthModule, PassportModule, ScoutsModule],
+  imports: [LeaderboardsModule, PrismaModule, AuthModule, PassportModule, ScoutsModule],
   controllers: [UsersController],
   providers: [UsersService],
   exports: [UsersService],

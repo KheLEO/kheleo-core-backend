@@ -1,5 +1,6 @@
 import {
   Injectable,
+  Optional,
   NotFoundException,
   ConflictException,
   ForbiddenException,
@@ -15,6 +16,8 @@ import { Prisma, SportPassportRecord, VerificationStatus } from '@prisma/client'
 import { runSerializableTransaction } from '../../common/database/serializable-transaction';
 import { assertAccountAccess } from '../../common/auth/account-access';
 import { AuthenticatedJwtUser } from '../../common/guards/jwt-auth.guard';
+
+import { LeaderboardsService } from '../leaderboards/leaderboards.service';
 
 const athletePassportSelect = {
   id: true,
@@ -65,7 +68,10 @@ type AthletePassportRecord = Prisma.AthleteProfileGetPayload<{
 
 @Injectable()
 export class PassportService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    @Optional() private readonly leaderboards?: LeaderboardsService,
+  ) {}
 
   /**
    * Retrieves the full Digital Sports Passport:
@@ -134,7 +140,11 @@ export class PassportService {
       locationLng: dto.locationLng,
       isScoutSearchable: dto.isScoutSearchable ?? undefined,
     };
-    const profile = await runSerializableTransaction(this.prisma, async (transaction) => {
+    const result = await runSerializableTransaction(this.prisma, async (transaction) => {
+      const previous = await transaction.athleteProfile.findUnique({
+        where: { userId },
+        select: { primarySport: true, state: true, district: true },
+      });
       const saved = await transaction.athleteProfile.upsert({
         where: { userId },
         update: metadata,
@@ -182,12 +192,14 @@ export class PassportService {
           data: { secondarySports },
         });
       }
-      return transaction.athleteProfile.findUniqueOrThrow({
+      const profile = await transaction.athleteProfile.findUniqueOrThrow({
         where: { userId },
         select: athletePassportSelect,
       });
+      return { profile, previous };
     });
-    return this.mapToAthletePassportDto(profile);
+    await this.leaderboards?.syncAthlete(userId, result.previous);
+    return this.mapToAthletePassportDto(result.profile);
   }
 
   async updatePassport(userId: string, dto: UpdatePassportDto): Promise<AthletePassportDto> {

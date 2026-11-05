@@ -9,9 +9,10 @@ import {
   ConnectedSocket,
 } from '@nestjs/websockets';
 import { ForbiddenException, Logger, UseGuards } from '@nestjs/common';
-import { Server, Socket } from 'socket.io';
-import { WsAuthGuard } from './ws-auth.guard';
-import { PrismaService } from '../database/prisma.service';
+
+import { WsAuthGuard, AuthenticatedSocket, AuthenticatedNamespace } from './ws-auth.guard';
+import { RoomAccessService } from './room-access.service';
+import { ScoutAlertPayload } from '../queues/queue-producer.service';
 
 export interface AutonomousMatchPausePayload {
   readonly event: 'MATCH_PAUSE_ALERT';
@@ -36,10 +37,6 @@ export interface GtiUpdatedPayload {
   readonly eliteBreached: boolean;
 }
 
-interface AuthenticatedSocket extends Socket {
-  readonly user?: { readonly sub: string; readonly role: string };
-}
-
 @WebSocketGateway({
   namespace: '/ws/events',
   cors: { origin: '*' },
@@ -47,52 +44,41 @@ interface AuthenticatedSocket extends Socket {
 @UseGuards(WsAuthGuard)
 export class WsEventGateway implements OnGatewayInit, OnGatewayConnection, OnGatewayDisconnect {
   @WebSocketServer()
-  server!: Server;
+  server!: AuthenticatedNamespace;
 
   private readonly logger = new Logger(WsEventGateway.name);
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly auth: WsAuthGuard,
+    private readonly access: RoomAccessService,
+  ) {}
 
-  afterInit(): void {
-    this.logger.log('WebSocket Gateway initialized');
+  afterInit(server: AuthenticatedNamespace): void {
+    this.auth.configure(server);
   }
-
-  handleConnection(client: Socket): void {
-    this.logger.debug(`Client connected: ${client.id}`);
+  async handleConnection(client: AuthenticatedSocket): Promise<void> {
+    await this.auth.accept(client);
   }
-
-  handleDisconnect(client: Socket): void {
-    this.logger.debug(`Client disconnected: ${client.id}`);
-  }
+  handleDisconnect(): void {}
 
   @SubscribeMessage('join:match')
   async handleJoinMatch(
     @ConnectedSocket() client: AuthenticatedSocket,
     @MessageBody() data: { matchId: string },
   ): Promise<void> {
-    if (!(await this.canJoinMatchRoom(client, data.matchId))) {
-      throw new ForbiddenException('Only competition staff may subscribe to match events.');
-    }
-    const room = `match:${data.matchId}`;
-    void client.join(room);
-    this.logger.debug(`${client.id} joined room ${room}`);
+    if (!(await this.access.canJoin(client.data.user, 'match', data?.matchId)))
+      throw new ForbiddenException(
+        'Only authorized competition staff may subscribe to match events',
+      );
+    await client.join(`match:${data.matchId}`);
   }
 
   @SubscribeMessage('join:athlete')
-  handleJoinAthlete(
+  async handleJoinAthlete(
     @ConnectedSocket() client: AuthenticatedSocket,
     @MessageBody() data: { athleteId: string },
-  ): void {
-    const privilegedRoles = new Set(['SCOUT', 'ORGANIZER', 'FEDERATION_ADMIN', 'SUPER_ADMIN']);
-    if (
-      !client.user ||
-      (client.user.sub !== data.athleteId && !privilegedRoles.has(client.user.role))
-    ) {
-      return;
-    }
-    const room = `athlete:${data.athleteId}`;
-    void client.join(room);
-    this.logger.debug(`${client.id} joined room ${room}`);
+  ): Promise<void> {
+    if (client.data.user?.sub === data?.athleteId) await client.join(`athlete:${data.athleteId}`);
   }
 
   @SubscribeMessage('join:tournament')
@@ -100,48 +86,23 @@ export class WsEventGateway implements OnGatewayInit, OnGatewayConnection, OnGat
     @ConnectedSocket() client: AuthenticatedSocket,
     @MessageBody() data: { tournamentId: string },
   ): Promise<void> {
-    if (!(await this.canJoinTournamentRoom(client, data.tournamentId))) {
-      throw new ForbiddenException('Only competition staff may subscribe to tournament events.');
-    }
-    const room = `tournament:${data.tournamentId}`;
-    void client.join(room);
-    this.logger.debug(`${client.id} joined room ${room}`);
+    if (!(await this.access.canJoin(client.data.user, 'tournament', data?.tournamentId)))
+      throw new ForbiddenException(
+        'Only the owning organizer or an administrator may subscribe to tournament events',
+      );
+    await client.join(`tournament:${data.tournamentId}`);
   }
 
-  private async canJoinTournamentRoom(
-    client: AuthenticatedSocket,
-    tournamentId: string,
-  ): Promise<boolean> {
-    const user = client.user;
-    if (!user) return false;
-    if (user.role === 'FEDERATION_ADMIN' || user.role === 'SUPER_ADMIN') return true;
-    if (user.role !== 'ORGANIZER') return false;
-    const tournament = await this.prisma.tournament.findUnique({
-      where: { id: tournamentId },
-      select: { organizerId: true },
-    });
-    return tournament?.organizerId === user.sub;
-  }
-
-  private async canJoinMatchRoom(
-    client: AuthenticatedSocket,
-    matchId: string,
-  ): Promise<boolean> {
-    const user = client.user;
-    if (!user) return false;
-    if (user.role === 'FEDERATION_ADMIN' || user.role === 'SUPER_ADMIN') return true;
-    const match = await this.prisma.match.findUnique({
-      where: { id: matchId },
-      select: {
-        umpireId: true,
-        bracket: { select: { tournament: { select: { organizerId: true } } } },
-      },
-    });
-    if (!match) return false;
-    return (
-      (user.role === 'ORGANIZER' && match.bracket.tournament.organizerId === user.sub) ||
-      (user.role === 'UMPIRE' && match.umpireId === user.sub)
-    );
+  @SubscribeMessage('join:bracket')
+  async handleJoinBracket(
+    @ConnectedSocket() client: AuthenticatedSocket,
+    @MessageBody() data: { bracketId: string },
+  ): Promise<void> {
+    if (!(await this.access.canJoin(client.data.user, 'bracket', data?.bracketId)))
+      throw new ForbiddenException(
+        'Only authorized competition staff may subscribe to bracket events',
+      );
+    await client.join(`bracket:${data.bracketId}`);
   }
 
   // ─── Server-side Broadcast Methods ──────────────────
@@ -152,23 +113,23 @@ export class WsEventGateway implements OnGatewayInit, OnGatewayConnection, OnGat
       return;
     }
 
-    if (payload.tournament_id) {
-      this.server.to(`tournament:${payload.tournament_id}`).emit('MATCH_PAUSE_ALERT', payload);
-      this.server.to(`organizer:${payload.tournament_id}`).emit('MATCH_PAUSE_ALERT', payload);
-      this.server.to(`umpire:${payload.tournament_id}`).emit('MATCH_PAUSE_ALERT', payload);
-    }
+    const rooms = [`athlete:${payload.athlete_id}`];
+    if (payload.tournament_id) rooms.push(`tournament:${payload.tournament_id}`);
+    if (payload.bracket_id) rooms.push(`bracket:${payload.bracket_id}`);
+    if (payload.match_id) rooms.push(`match:${payload.match_id}`);
+    this.server.to(rooms).emit('MATCH_PAUSE_ALERT', payload);
+  }
 
-    if (payload.bracket_id) {
-      this.server.to(`bracket:${payload.bracket_id}`).emit('MATCH_PAUSE_ALERT', payload);
-    }
-
-    if (payload.match_id) {
-      this.server.to(`match:${payload.match_id}`).emit('MATCH_PAUSE_ALERT', payload);
-    }
-
-    this.logger.warn(
-      `CRITICAL MATCH_PAUSE_ALERT autonomously broadcast for athlete ${payload.athlete_id}`,
-    );
+  broadcastScoutTalent(payload: ScoutAlertPayload): void {
+    this.server?.to('scouts').emit('SCOUT_TALENT_ALERT', {
+      alertId: payload.alertId,
+      athleteId: payload.athleteId,
+      gtiScore: payload.newGti,
+      sport: payload.sport,
+      district: payload.district,
+      state: payload.state,
+      tier: payload.tierClassification,
+    });
   }
 
   broadcastGtiUpdated(payload: GtiUpdatedPayload): void {

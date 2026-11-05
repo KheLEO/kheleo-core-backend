@@ -1,8 +1,11 @@
-import { Injectable, NotFoundException, ConflictException } from '@nestjs/common';
+import { Injectable, NotFoundException, ConflictException, Optional } from '@nestjs/common';
 import { PrismaService } from '../../infrastructure/database/prisma.service';
 import { UpdateUserDto } from './dto/update-user.dto';
 import { UserRole } from '@prisma/client';
 import { runSerializableTransaction } from '../../common/database/serializable-transaction';
+
+import { LeaderboardsService } from '../leaderboards/leaderboards.service';
+import { WsAuthGuard } from '../../infrastructure/realtime/ws-auth.guard';
 
 export interface UserResponse {
   readonly id: string;
@@ -26,7 +29,11 @@ const userResponseSelect = {
 
 @Injectable()
 export class UsersService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    @Optional() private readonly leaderboards?: LeaderboardsService,
+    @Optional() private readonly sockets?: WsAuthGuard,
+  ) {}
 
   async findById(id: string): Promise<UserResponse> {
     const user = await this.prisma.user.findUnique({
@@ -74,7 +81,23 @@ export class UsersService {
 
   async deactivate(id: string): Promise<UserResponse> {
     await this.findById(id);
-    return runSerializableTransaction(this.prisma, async (transaction) => {
+    const updated = await runSerializableTransaction(this.prisma, async (transaction) => {
+      const target = await transaction.user.findUnique({ where: { id } });
+      if (
+        target?.role === UserRole.SUPER_ADMIN &&
+        target.isActive &&
+        (await transaction.user.count({
+          where: {
+            role: UserRole.SUPER_ADMIN,
+            isActive: true,
+            OR: [
+              { identityRecord: null },
+              { identityRecord: { status: { notIn: ['REVOKED', 'FLAGGED_DUPLICATE'] } } },
+            ],
+          },
+        })) <= 1
+      )
+        throw new ConflictException('Cannot deactivate the last active super administrator');
       const user = await transaction.user.update({
         where: { id },
         data: { isActive: false },
@@ -86,5 +109,8 @@ export class UsersService {
       });
       return user;
     });
+    this.sockets?.disconnectUser(id);
+    await this.leaderboards?.syncAthlete(id);
+    return updated;
   }
 }

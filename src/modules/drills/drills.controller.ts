@@ -13,7 +13,7 @@ import {
 import { FastifyRequest } from 'fastify';
 import { DrillsService, DrillSubmissionResult } from './drills.service';
 import { SubmitDrillDto } from './dto/submit-drill.dto';
-import { DrillSignatureGuard } from './guards/drill-signature.guard';
+import { DrillRequest, DrillSignatureGuard } from './guards/drill-signature.guard';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { IdempotencyInterceptor } from '../../common/interceptors/idempotency.interceptor';
 
@@ -28,7 +28,7 @@ export class DrillsController {
   async submit(
     @Body() dto: SubmitDrillDto,
     @Headers('x-drill-signature') drillSignature: string | undefined,
-    @Req() req: FastifyRequest,
+    @Req() req: DrillRequest,
   ): Promise<DrillSubmissionResult> {
     const user = (req as FastifyRequest & { user?: { sub: string } }).user;
     if (!user) {
@@ -38,6 +38,11 @@ export class DrillsController {
       throw new ForbiddenException('Drill athlete_id must match the authenticated user.');
     }
 
-    return this.drillsService.submitDrill(user.sub, dto, drillSignature ?? '');
+    return this.drillsService.submitDrill(
+      user.sub,
+      dto,
+      drillSignature ?? '',
+      req.drillSignatureVersion,
+    );
   }
 }

@@ -18,6 +18,7 @@ export interface MatchmakingPayload {
 }
 
 export interface ScoutAlertPayload {
+  readonly alertId?: string;
   readonly athleteId: string;
   readonly newGti: number;
   readonly sport: string;
@@ -60,6 +61,7 @@ export class QueueProducerService {
 
   async enqueueScoutAlert(payload: ScoutAlertPayload): Promise<string> {
     const job = await this.scoutAlertQueue.add('hidden-talent', payload, {
+      ...(payload.alertId ? { jobId: `scout-${payload.alertId}` } : {}),
       attempts: 2,
       backoff: { type: 'fixed', delay: 5000 },
       removeOnComplete: 200,

@@ -132,6 +132,15 @@ export class AuthService {
           );
         }
 
+        await this.prisma.securityAuditLog.create({
+          data: {
+            userId: existingRecord.userId,
+            action: 'GOV_ID_DUPLICATE_ATTEMPT',
+            resource: 'identity_verification',
+            resourceId: existingRecord.id,
+            metadata: { outcome: 'BLOCKED_REGISTRATION' },
+          },
+        });
         this.logger.warn(
           `Anti-Reset Loophole Blocked on Registration: Gov ID hash match for existing user ${existingRecord.userId}`,
         );

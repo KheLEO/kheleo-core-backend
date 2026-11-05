@@ -1,26 +1,77 @@
 import {
-  Controller,
-  Post,
   Body,
+  Controller,
+  Get,
   HttpCode,
-  HttpStatus,
+  Param,
+  ParseUUIDPipe,
+  Patch,
+  Post,
+  Query,
+  Req,
   UseGuards,
   UseInterceptors,
 } from '@nestjs/common';
+import { HealthAlert, Match, UserRole } from '@prisma/client';
 import { SafetyService } from './safety.service';
-import { TelemetryWebhookDto, TelemetryResponseDto } from './dto/telemetry-webhook.dto';
-import { HmacTamperGuard } from '../../common/guards/hmac-tamper.guard';
+import {
+  SafetyAlertsQueryDto,
+  TelemetryResponseDto,
+  TelemetryWebhookDto,
+} from './dto/telemetry-webhook.dto';
+import { TelemetryAuthGuard, TelemetryRequest } from './telemetry-auth.guard';
 import { IdempotencyInterceptor } from '../../common/interceptors/idempotency.interceptor';
+import { AuthenticatedJwtUser, JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
+import { RolesGuard } from '../../common/guards/roles.guard';
+import { Roles } from '../../common/decorators/roles.decorator';
+import { CurrentUser } from '../../common/decorators/current-user.decorator';
+
+import { CursorPage } from '../../common/dto/cursor-page';
 
 @Controller('safety')
 export class SafetyController {
-  constructor(private readonly safetyService: SafetyService) {}
-
+  constructor(private readonly service: SafetyService) {}
   @Post('telemetry-webhook')
-  @HttpCode(HttpStatus.OK)
-  @UseGuards(HmacTamperGuard)
+  @HttpCode(200)
+  @UseGuards(TelemetryAuthGuard)
   @UseInterceptors(IdempotencyInterceptor)
-  async handleTelemetryWebhook(@Body() dto: TelemetryWebhookDto): Promise<TelemetryResponseDto> {
-    return this.safetyService.processTelemetry(dto);
+  async telemetry(
+    @Body() dto: TelemetryWebhookDto,
+    @Req() request: TelemetryRequest,
+  ): Promise<TelemetryResponseDto> {
+    return this.service.processTelemetry(dto, request.telemetrySource);
+  }
+
+  @Get('alerts')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.ORGANIZER, UserRole.UMPIRE, UserRole.SUPER_ADMIN)
+  async alerts(
+    @CurrentUser() actor: AuthenticatedJwtUser,
+    @Query() query: SafetyAlertsQueryDto,
+  ): Promise<CursorPage<HealthAlert>> {
+    return this.service.listAlerts(actor, query);
+  }
+
+  @Patch('alerts/:id/acknowledge')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.ORGANIZER, UserRole.UMPIRE, UserRole.SUPER_ADMIN)
+  @UseInterceptors(IdempotencyInterceptor)
+  async acknowledge(
+    @CurrentUser() actor: AuthenticatedJwtUser,
+    @Param('id', ParseUUIDPipe) id: string,
+  ): Promise<HealthAlert> {
+    return this.service.acknowledge(actor, id);
+  }
+
+  @Post('matches/:matchId/resume')
+  @HttpCode(200)
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.ORGANIZER, UserRole.UMPIRE, UserRole.SUPER_ADMIN)
+  @UseInterceptors(IdempotencyInterceptor)
+  async resume(
+    @CurrentUser() actor: AuthenticatedJwtUser,
+    @Param('matchId', ParseUUIDPipe) id: string,
+  ): Promise<Match> {
+    return this.service.resume(actor, id);
   }
 }

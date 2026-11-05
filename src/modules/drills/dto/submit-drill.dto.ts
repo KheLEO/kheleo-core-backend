@@ -1,31 +1,52 @@
-import { IsString, IsNumber, IsInt, IsOptional, Min, Max } from 'class-validator';
+import {
+  IsArray,
+  IsEnum,
+  IsInt,
+  IsNotEmpty,
+  IsNumber,
+  IsObject,
+  IsOptional,
+  IsString,
+  IsUUID,
+  Max,
+  Min,
+} from 'class-validator';
+import { SportType } from '@prisma/client';
+import { FieldAliases } from '../../../common/decorators/field-aliases.decorator';
 
 export class SubmitDrillDto {
   @IsOptional()
-  @IsString()
-  athlete_id?: string;
+  @IsUUID()
+  @FieldAliases('athleteId')
+  readonly athlete_id?: string;
+
+  @IsEnum(SportType)
+  readonly sport!: SportType;
 
   @IsString()
-  sport!: string;
-
-  @IsString()
-  drill_type!: string;
+  @IsNotEmpty()
+  readonly drill_type!: string;
 
   @IsNumber()
   @Min(0)
   @Max(100)
-  form_score!: number;
+  readonly form_score!: number;
 
   @IsInt()
   @Min(1)
-  frames_analyzed!: number;
+  @Max(100000)
+  readonly frames_analyzed!: number;
 
   @IsOptional()
-  flaw_flags?: string[] | Record<string, unknown>;
+  @IsArray()
+  @IsString({ each: true })
+  readonly flaw_flags?: string[];
 
   @IsOptional()
-  joint_angles_summary?: Record<string, unknown>;
+  @IsObject()
+  readonly joint_angles_summary?: Record<string, unknown>;
 
   @IsNumber()
-  timestamp!: number;
+  @Min(1)
+  readonly timestamp!: number;
 }

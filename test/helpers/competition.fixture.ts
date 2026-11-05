@@ -162,6 +162,7 @@ export function makeTournament(overrides: Partial<Tournament> = {}): Tournament 
     organizerId: TEST_USER_ID,
     name: 'Campus Cup',
     title: 'Campus Cup',
+    isFeatured: false,
     sport: SportType.CRICKET,
     status: TournamentStatus.REGISTRATION_OPEN,
     minGti: new Prisma.Decimal(0),

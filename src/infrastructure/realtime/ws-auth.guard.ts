@@ -1,68 +1,75 @@
 import { CanActivate, ExecutionContext, Injectable } from '@nestjs/common';
 import { WsException } from '@nestjs/websockets';
-import { ConfigService } from '@nestjs/config';
-import * as jwt from 'jsonwebtoken';
-import * as fs from 'node:fs';
-import { Socket } from 'socket.io';
+import { Namespace, Socket } from 'socket.io';
+import { JwtStrategy, JwtTokenPayload } from '../../modules/auth/strategies/jwt.strategy';
 
-interface JwtPayload {
-  sub: string;
-  role: string;
+type SocketEvents = Record<string, (...args: unknown[]) => void>;
+export interface SocketData {
+  user?: JwtTokenPayload;
 }
+export type AuthenticatedSocket = Socket<SocketEvents, SocketEvents, SocketEvents, SocketData>;
+export type AuthenticatedNamespace = Namespace<
+  SocketEvents,
+  SocketEvents,
+  SocketEvents,
+  SocketData
+>;
 
 @Injectable()
 export class WsAuthGuard implements CanActivate {
-  private readonly publicKey: string;
-  private readonly algorithm: 'RS256' | 'HS256';
+  private readonly namespaces = new Set<AuthenticatedNamespace>();
+  constructor(private readonly jwtStrategy: JwtStrategy) {}
 
-  constructor(private readonly configService: ConfigService) {
-    const keyPath = this.configService.get<string>('auth.jwtPublicKeyPath', './keys/public.pem');
-    const privateKeyPath = this.configService.get<string>(
-      'auth.jwtPrivateKeyPath',
-      './keys/private.pem',
-    );
-    const publicKeyExists = fs.existsSync(keyPath);
-    const privateKeyExists = fs.existsSync(privateKeyPath);
-    if (publicKeyExists !== privateKeyExists) {
-      throw new Error('Both JWT_PRIVATE_KEY_PATH and JWT_PUBLIC_KEY_PATH must exist.');
-    }
+  async authenticate(client: AuthenticatedSocket): Promise<JwtTokenPayload> {
+    const auth = client.handshake.auth as Readonly<Record<string, unknown>>;
+    const query = client.handshake.query.token;
+    const token =
+      auth.token ?? client.handshake.headers.authorization?.replace(/^Bearer\s+/i, '') ?? query;
+    if (typeof token !== 'string' || !token.trim())
+      throw new WsException('Missing authentication token');
+    const user = await this.jwtStrategy.authenticateToken(token);
+    client.data.user = user;
+    return user;
+  }
+
+  configure(server: AuthenticatedNamespace): void {
+    this.namespaces.add(server);
+    server.use((client, next) => {
+      void this.authenticate(client).then(
+        () => next(),
+        () => next(new Error('Unauthorized connection')),
+      );
+    });
+  }
+
+  async accept(client: AuthenticatedSocket): Promise<void> {
     try {
-      if (!publicKeyExists) {
-        throw new Error('JWT public key is not configured.');
-      }
-      const publicKey = fs.readFileSync(keyPath, 'utf-8');
-      this.publicKey = publicKey;
-      this.algorithm = 'RS256';
+      const user = await this.authenticate(client);
+      await client.join([`user:${user.sub}`, `role:${user.role}`, `athlete:${user.sub}`]);
+      if (['SCOUT', 'FEDERATION_ADMIN', 'SUPER_ADMIN'].includes(user.role))
+        await client.join('scouts');
+      const timer = setTimeout(
+        () => client.disconnect(true),
+        Math.max(0, user.exp * 1000 - Date.now()),
+      );
+      timer.unref();
+      client.once('disconnect', () => clearTimeout(timer));
     } catch {
-      const symmetricSecret = this.configService.get<string>('auth.identityPepper');
-      const isProduction =
-        this.configService.get<string>('app.nodeEnv', 'development') === 'production';
-      if (!symmetricSecret && isProduction) {
-        throw new Error('JWT public key or IDENTITY_PEPPER must be configured in production.');
-      }
-      this.publicKey = symmetricSecret ?? 'local-development-jwt-secret';
-      this.algorithm = 'HS256';
+      client.disconnect(true);
     }
   }
 
-  canActivate(context: ExecutionContext): boolean {
-    const client = context.switchToWs().getClient<Socket>();
-    const token =
-      client.handshake.auth?.['token'] ??
-      client.handshake.headers?.['authorization']?.replace('Bearer ', '');
+  disconnectUser(userId: string): void {
+    for (const namespace of this.namespaces) namespace.in(`user:${userId}`).disconnectSockets(true);
+  }
 
-    if (!token) {
-      throw new WsException('Missing authentication token');
-    }
-
+  async canActivate(context: ExecutionContext): Promise<boolean> {
+    const client = context.switchToWs().getClient<AuthenticatedSocket>();
     try {
-      const payload = jwt.verify(token, this.publicKey, {
-        algorithms: [this.algorithm],
-      }) as JwtPayload;
-
-      (client as Socket & { user: JwtPayload }).user = payload;
+      await this.authenticate(client);
       return true;
     } catch {
+      client.disconnect(true);
       throw new WsException('Invalid or expired token');
     }
   }

@@ -153,6 +153,7 @@ export function createAuthFixture(options: FixtureOptions = {}) {
     createdIdentities: [] as IdentityVerification[],
     profileWrites: [] as ProfileWrite[],
     dossiers: new Map<string, ScoutDossier>(),
+    auditLogs: [] as Prisma.SecurityAuditLogCreateInput[],
     profileQueries: [] as Prisma.AthleteProfileFindUniqueArgs[],
   };
   const findUser = (where: {
@@ -214,6 +215,16 @@ export function createAuthFixture(options: FixtureOptions = {}) {
           athleteProfile: null,
         };
         return state.user;
+      },
+    },
+    securityAuditLog: {
+      create: async ({
+        data,
+      }: {
+        data: Prisma.SecurityAuditLogCreateInput;
+      }): Promise<Prisma.SecurityAuditLogCreateInput> => {
+        state.auditLogs.push(data);
+        return data;
       },
     },
     identityVerification: {

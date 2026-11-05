@@ -4,10 +4,13 @@ import { TournamentsService } from './tournaments.service';
 import { PrismaModule } from '../../infrastructure/database/prisma.module';
 import { AuthModule } from '../auth/auth.module';
 
+import { MatchResultsController } from './match-results.controller';
+import { MatchResultsService } from './match-results.service';
+
 @Module({
   imports: [PrismaModule, AuthModule],
-  controllers: [TournamentsController],
-  providers: [TournamentsService],
+  controllers: [TournamentsController, MatchResultsController],
+  providers: [TournamentsService, MatchResultsService],
   exports: [TournamentsService],
 })
 export class TournamentsModule {}

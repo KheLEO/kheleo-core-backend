@@ -147,133 +147,89 @@ describe('Audit hardening regressions', () => {
 
   describe('Realtime authorization regressions', () => {
     it('rejects athlete subscriptions to competition rooms', async () => {
-      const gateway = new WsEventGateway({
-        tournament: { findUnique: async () => null },
-        match: { findUnique: async () => null },
-      } as never);
+      const f = await createSecurityFixture();
+      const gateway = new WsEventGateway(f.sockets, new RoomAccessService(f.prisma));
       const joins: string[] = [];
       const client = {
-        id: 'socket-athlete',
-        user: { sub: TEST_USER_ID, role: UserRole.ATHLETE },
+        data: { user: { sub: ATHLETE_ID, role: 'ATHLETE' } },
         join: (room: string) => {
           joins.push(room);
         },
-      } as never;
-
+      } as unknown as AuthenticatedSocket;
       await assert.rejects(
-        gateway.handleJoinTournament(client, { tournamentId: 'tournament-1' }),
+        gateway.handleJoinTournament(client, { tournamentId: TOURNAMENT_ID }),
         ForbiddenException,
       );
       await assert.rejects(
-        gateway.handleJoinMatch(client, { matchId: 'match-1' }),
+        gateway.handleJoinMatch(client, { matchId: MATCH_ID }),
         ForbiddenException,
       );
       assert.deepStrictEqual(joins, []);
     });
-
     it('rejects an organizer from another organizer’s tournament room', async () => {
-      const gateway = new WsEventGateway({
-        tournament: {
-          findUnique: async () => ({ organizerId: 'different-organizer' }),
-        },
-        match: { findUnique: async () => null },
-      } as never);
+      const f = await createSecurityFixture();
+      const gateway = new WsEventGateway(f.sockets, new RoomAccessService(f.prisma));
       const client = {
-        id: 'socket-organizer',
-        user: { sub: TEST_USER_ID, role: UserRole.ORGANIZER },
+        data: { user: { sub: TEST_USER_ID, role: 'ORGANIZER' } },
         join: () => undefined,
-      } as never;
-
+      } as unknown as AuthenticatedSocket;
       await assert.rejects(
-        gateway.handleJoinTournament(client, { tournamentId: 'tournament-1' }),
+        gateway.handleJoinTournament(client, { tournamentId: TOURNAMENT_ID }),
         ForbiddenException,
       );
     });
-
     it('allows an assigned umpire to join a match room', async () => {
-      const gateway = new WsEventGateway({
-        tournament: { findUnique: async () => null },
-        match: {
-          findUnique: async () => ({
-            umpireId: TEST_USER_ID,
-            bracket: { tournament: { organizerId: 'different-organizer' } },
-          }),
-        },
-      } as never);
+      const f = await createSecurityFixture();
+      const gateway = new WsEventGateway(f.sockets, new RoomAccessService(f.prisma));
       const joins: string[] = [];
       const client = {
-        id: 'socket-umpire',
-        user: { sub: TEST_USER_ID, role: UserRole.UMPIRE },
-        join: (room: string) => joins.push(room),
-      } as never;
-
-      await gateway.handleJoinMatch(client, { matchId: 'match-1' });
-      assert.deepStrictEqual(joins, ['match:match-1']);
+        data: { user: { sub: UMPIRE_ID, role: 'UMPIRE' } },
+        join: (room: string) => {
+          joins.push(room);
+        },
+      } as unknown as AuthenticatedSocket;
+      await gateway.handleJoinMatch(client, { matchId: MATCH_ID });
+      assert.deepStrictEqual(joins, [`match:${MATCH_ID}`]);
     });
-
-    it('does not globally broadcast sensitive match-pause events', () => {
-      const gateway = new WsEventGateway({
-        tournament: { findUnique: async () => null },
-        match: { findUnique: async () => null },
-      } as never);
-      const emittedRooms: string[] = [];
-      let globalBroadcasts = 0;
+    it('does not globally broadcast sensitive match-pause events', async () => {
+      const f = await createSecurityFixture();
+      const gateway = new WsEventGateway(f.sockets, new RoomAccessService(f.prisma));
+      const rooms: string[] = [];
+      let global = 0;
       gateway.server = {
-        to: (room: string) => ({
-          emit: () => emittedRooms.push(room),
-        }),
-        emit: () => {
-          globalBroadcasts += 1;
-        },
-      } as never;
-
+        to: (targets: string[]) => ({ emit: () => rooms.push(...targets) }),
+        emit: () => global++,
+      } as unknown as AuthenticatedNamespace;
       gateway.broadcastAutonomousMatchPause({
-        event: 'MATCH_PAUSE_ALERT',
-        severity: 'CRITICAL',
-        athlete_id: TEST_USER_ID,
-        athlete_name: 'Athlete',
-        vitals: { heart_rate: 200, spo2: 88, skin_temperature: 40 },
-        directive: 'MANDATORY REST',
-        tournament_id: 'tournament-1',
-        bracket_id: 'bracket-1',
-        match_id: 'match-1',
+        ...medicalEvent,
+        tournament_id: TOURNAMENT_ID,
+        bracket_id: BRACKET_ID,
       });
-
-      assert.strictEqual(globalBroadcasts, 0);
-      assert.deepStrictEqual(emittedRooms, [
-        'tournament:tournament-1',
-        'organizer:tournament-1',
-        'umpire:tournament-1',
-        'bracket:bracket-1',
-        'match:match-1',
-      ]);
+      assert.strictEqual(global, 0);
+      assert.deepStrictEqual(
+        new Set(rooms),
+        new Set([
+          `athlete:${ATHLETE_ID}`,
+          `tournament:${TOURNAMENT_ID}`,
+          `bracket:${BRACKET_ID}`,
+          `match:${MATCH_ID}`,
+        ]),
+      );
     });
-
     it('restricts matchmaking bracket subscriptions to the tournament owner', async () => {
-      const gateway = new MatchmakingGateway({
-        bracket: {
-          findUnique: async () => ({
-            tournament: { organizerId: 'different-organizer' },
-          }),
-        },
-      } as never);
-      const athlete = {
-        id: 'socket-athlete',
-        user: { sub: TEST_USER_ID, role: UserRole.ATHLETE },
-        join: () => undefined,
-      } as never;
-      const organizer = {
-        id: 'socket-organizer',
-        user: { sub: TEST_USER_ID, role: UserRole.ORGANIZER },
-        join: () => undefined,
-      } as never;
-
+      const f = await createSecurityFixture();
+      const gateway = new MatchmakingGateway(f.sockets, new RoomAccessService(f.prisma));
+      const client = (role: string): AuthenticatedSocket =>
+        ({
+          data: { user: { sub: TEST_USER_ID, role } },
+          join: () => undefined,
+        }) as unknown as AuthenticatedSocket;
       await assert.rejects(
-        gateway.handleJoinBracket(athlete, { bracketId: 'bracket-1' }),
+        gateway.handleJoinBracket(client('ATHLETE'), { bracketId: BRACKET_ID }),
         ForbiddenException,
       );
       await assert.rejects(
-        gateway.handleJoinBracket(organizer, { bracketId: 'bracket-1' }),
+        gateway.handleJoinBracket(client('ORGANIZER'), { bracketId: BRACKET_ID }),
         ForbiddenException,
       );
     });
@@ -864,6 +820,8 @@ describe('Phase 2 auth and frontend HTTP contracts', () => {
         flawFlags: [],
         jointAnglesSummary: {},
         signatureHash: 'private-signature',
+        signatureVersion: 'LEGACY',
+        metadataVerified: false,
         createdAt: new Date(),
       });
       fixture.state.user.healthAlerts.push({
@@ -877,6 +835,10 @@ describe('Phase 2 auth and frontend HTTP contracts', () => {
         skinTemperature: 40,
         triggerReason: 'Private telemetry',
         matchPaused: true,
+        matchId: null,
+        acknowledgedAt: null,
+        acknowledgedById: null,
+        source: 'DEVICE_HMAC',
         createdAt: new Date(),
       });
       const response = await app.inject({
@@ -1796,5 +1758,437 @@ describe('Phase 3 organizer CRUD, transactional eligibility, and spatial regress
     assert.strictEqual(box.allLongitudes, true);
     assert.strictEqual(box.maxLat, 90);
     assert.ok(haversineDistance({ lat: 0, lng: 179.9 }, 0, -179.9) < 25);
+  });
+});
+
+// Phase 4 uses actual HTTP controllers and Socket.IO transports with explicit dependency doubles.
+import {
+  createSecurityFixture,
+  createSecurityApp,
+  ATHLETE_ID,
+  OPPONENT_ID,
+  ORGANIZER_ID,
+  UMPIRE_ID,
+  SUPER_ID,
+  SCOUT_ID,
+  MATCH_ID,
+} from './helpers/security-gti.fixture';
+import { createSocketFixture, deadline } from './helpers/socket.fixture';
+import { AutonomousMatchPausePayload } from '../src/infrastructure/realtime/ws-event.gateway';
+import {
+  AuthenticatedNamespace,
+  AuthenticatedSocket,
+} from '../src/infrastructure/realtime/ws-auth.guard';
+import { RoomAccessService } from '../src/infrastructure/realtime/room-access.service';
+import { AdminService } from '../src/modules/admin/admin.service';
+import { HealthService } from '../src/modules/health/health.service';
+import { sign as signSocketToken } from 'jsonwebtoken';
+
+const medicalEvent: AutonomousMatchPausePayload = {
+  event: 'MATCH_PAUSE_ALERT',
+  severity: 'CRITICAL',
+  athlete_id: ATHLETE_ID,
+  athlete_name: 'Private athlete',
+  vitals: { heart_rate: 205, spo2: 88, skin_temperature: 40 },
+  directive: 'MANDATORY REST',
+  match_id: MATCH_ID,
+};
+
+describe('Phase 4 authenticated sockets and administrative controls', () => {
+  it('Probe 5: rejects anonymous and invalid handshakes on both namespaces before any medical delivery', async () => {
+    const f = await createSecurityFixture();
+    const sockets = await createSocketFixture(f);
+    try {
+      for (const path of ['/ws/events', '/ws/matchmaking'])
+        for (const token of [undefined, 'invalid-token']) {
+          const anonymous = sockets.client(path, token);
+          let received = 0;
+          anonymous.on('MATCH_PAUSE_ALERT', () => {
+            received++;
+          });
+          await deadline(
+            new Promise<void>((resolve, reject) => {
+              anonymous.once('connect_error', () => resolve());
+              anonymous.once('connect', () => reject(new Error('Anonymous socket connected')));
+              anonymous.connect();
+            }),
+          );
+          assert.strictEqual(anonymous.connected, false);
+          sockets.events.broadcastAutonomousMatchPause(medicalEvent);
+          assert.strictEqual(received, 0);
+          assert.strictEqual(sockets.ioServer.of(path).sockets.size, 0);
+        }
+      let disconnects = 0;
+      const fake = {
+        handshake: { auth: {}, headers: {}, query: {} },
+        data: {},
+        disconnect: (close: boolean) => {
+          assert.strictEqual(close, true);
+          disconnects++;
+        },
+      } as unknown as AuthenticatedSocket;
+      await sockets.events.handleConnection(fake);
+      await sockets.matchmaking.handleConnection(fake);
+      assert.strictEqual(disconnects, 2);
+    } finally {
+      await sockets.close();
+    }
+  });
+
+  it('authenticates auth/header/query tokens, attaches DB roles and auto rooms, and routes scout alerts only to scouts', async () => {
+    const f = await createSecurityFixture();
+    const sockets = await createSocketFixture(f);
+    try {
+      for (const mechanism of ['auth', 'header', 'query'] as const) {
+        const client = sockets.client('/ws/events', f.token(SCOUT_ID), mechanism);
+        await sockets.connect(client);
+        const server = sockets.serverSocket(client);
+        assert.strictEqual(server.data.user?.sub, SCOUT_ID);
+        assert.ok(server.rooms.has('scouts'));
+        assert.ok(server.rooms.has('role:SCOUT'));
+        assert.ok(server.rooms.has(`user:${SCOUT_ID}`));
+        client.disconnect();
+      }
+      const scout = sockets.client('/ws/events', f.token(SCOUT_ID));
+      const athlete = sockets.client('/ws/events', f.token());
+      await sockets.connect(scout);
+      await sockets.connect(athlete);
+      let athleteAlerts = 0;
+      athlete.on('SCOUT_TALENT_ALERT', () => {
+        athleteAlerts++;
+      });
+      const received = deadline(
+        new Promise<unknown>((resolve) => scout.once('SCOUT_TALENT_ALERT', resolve)),
+      );
+      sockets.events.broadcastScoutTalent({
+        athleteId: ATHLETE_ID,
+        newGti: 90,
+        sport: 'CRICKET',
+        district: 'Pune',
+        state: 'Maharashtra',
+        tierClassification: 'RURAL',
+      });
+      await received;
+      assert.strictEqual(athleteAlerts, 0);
+      const forged = sockets.client(
+        '/ws/events',
+        signSocketToken({ sub: ATHLETE_ID, role: 'SUPER_ADMIN' }, TEST_SECRET, { expiresIn: 60 }),
+      );
+      await sockets.connect(forged);
+      assert.strictEqual(sockets.serverSocket(forged).rooms.has('scouts'), false);
+      assert.strictEqual(sockets.serverSocket(forged).data.user?.role, 'ATHLETE');
+    } finally {
+      await sockets.close();
+    }
+  });
+
+  it('blocks arbitrary match subscriptions and delivers a safety alert once to an authorized socket in overlapping rooms', async () => {
+    const f = await createSecurityFixture();
+    const sockets = await createSocketFixture(f);
+    try {
+      const own = sockets.client('/ws/events', f.token());
+      const opponent = sockets.client('/ws/events', f.token(OPPONENT_ID));
+      const scout = sockets.client('/ws/events', f.token(SCOUT_ID));
+      await sockets.connect(own);
+      await sockets.connect(opponent);
+      await sockets.connect(scout);
+      const ownServer = sockets.serverSocket(own),
+        scoutServer = sockets.serverSocket(scout);
+      await assert.rejects(
+        sockets.events.handleJoinMatch(scoutServer, { matchId: MATCH_ID }),
+        ForbiddenException,
+      );
+      assert.strictEqual(scoutServer.rooms.has(`match:${MATCH_ID}`), false);
+      await sockets.events.handleJoinAthlete(scoutServer, { athleteId: ATHLETE_ID });
+      assert.strictEqual(scoutServer.rooms.has(`athlete:${ATHLETE_ID}`), false);
+      await assert.rejects(
+        sockets.events.handleJoinMatch(ownServer, { matchId: MATCH_ID }),
+        ForbiddenException,
+      );
+      const staff = sockets.client('/ws/events', f.token(ORGANIZER_ID));
+      await sockets.connect(staff);
+      const staffServer = sockets.serverSocket(staff);
+      await sockets.events.handleJoinMatch(staffServer, { matchId: MATCH_ID });
+      await sockets.events.handleJoinBracket(staffServer, { bracketId: BRACKET_ID });
+      assert.strictEqual(staffServer.rooms.has(`match:${MATCH_ID}`), true);
+      let staffEvents = 0;
+      staff.on('MATCH_PAUSE_ALERT', () => {
+        staffEvents++;
+      });
+      const staffReceived = deadline(
+        new Promise<unknown>((resolve) => staff.once('MATCH_PAUSE_ALERT', resolve)),
+      );
+      let ownEvents = 0,
+        scoutEvents = 0,
+        opponentEvents = 0;
+      own.on('MATCH_PAUSE_ALERT', () => {
+        ownEvents++;
+      });
+      scout.on('MATCH_PAUSE_ALERT', () => {
+        scoutEvents++;
+      });
+      opponent.on('MATCH_PAUSE_ALERT', () => {
+        opponentEvents++;
+      });
+      const received = deadline(
+        new Promise<unknown>((resolve) => own.once('MATCH_PAUSE_ALERT', resolve)),
+      );
+      sockets.events.broadcastAutonomousMatchPause(medicalEvent);
+      await Promise.all([received, staffReceived]);
+      assert.strictEqual(staffEvents, 1);
+      // A server roundtrip is a deterministic delivery barrier, without timing sleeps.
+      const ack = deadline(new Promise<void>((resolve) => own.once('barrier', () => resolve())));
+      ownServer.emit('barrier');
+      await ack;
+      assert.strictEqual(ownEvents, 1);
+      assert.strictEqual(scoutEvents, 0);
+      assert.strictEqual(opponentEvents, 0);
+    } finally {
+      await sockets.close();
+    }
+  });
+
+  it('uses Socket.IO room unions so ROSTER_FORMED reaches an overlapping user/bracket subscriber once', async () => {
+    const f = await createSecurityFixture();
+    const sockets = await createSocketFixture(f);
+    try {
+      const client = sockets.client('/ws/matchmaking', f.token());
+      await sockets.connect(client);
+      const server = sockets.serverSocket(client, '/ws/matchmaking');
+      await server.join('bracket:fixture');
+      let events = 0;
+      client.on('ROSTER_FORMED', () => {
+        events++;
+      });
+      const received = deadline(
+        new Promise<unknown>((resolve) => client.once('ROSTER_FORMED', resolve)),
+      );
+      sockets.matchmaking.emitRosterFormed({
+        team_id: 'team',
+        team_name: 'Team',
+        bracket_id: 'fixture',
+        roster: [{ user_id: ATHLETE_ID, name: 'Athlete', assigned_role: 'BATSMAN', gti: 90 }],
+      });
+      await received;
+      const barrier = deadline(
+        new Promise<void>((resolve) => client.once('barrier', () => resolve())),
+      );
+      server.emit('barrier');
+      await barrier;
+      assert.strictEqual(events, 1);
+    } finally {
+      await sockets.close();
+    }
+  });
+
+  it('rejects deactivated/revoked accounts during handshakes and disconnects existing rooms on admin status changes', async () => {
+    const f = await createSecurityFixture();
+    const sockets = await createSocketFixture(f);
+    try {
+      const client = sockets.client('/ws/events', f.token());
+      await sockets.connect(client);
+      const disconnected = deadline(
+        new Promise<void>((resolve) => client.once('disconnect', () => resolve())),
+      );
+      const admin = new AdminService(
+        f.prisma,
+        new HealthService(f.prisma, f.redis),
+        f.services.leaderboards,
+        sockets.auth,
+      );
+      await admin.updateUser({ sub: SUPER_ID, role: 'SUPER_ADMIN' }, ATHLETE_ID, {
+        isActive: false,
+      });
+      await disconnected;
+      const blocked = sockets.client('/ws/events', f.token());
+      await deadline(
+        new Promise<void>((resolve, reject) => {
+          blocked.once('connect_error', () => resolve());
+          blocked.once('connect', () => reject(new Error('Deactivated account connected')));
+          blocked.connect();
+        }),
+      );
+      f.state.tables.user.get(ATHLETE_ID)!.isActive = true;
+      f.state.tables.identityVerification.get(ATHLETE_ID)!.status = 'REVOKED';
+      const revoked = sockets.client('/ws/matchmaking', f.token());
+      await deadline(
+        new Promise<void>((resolve, reject) => {
+          revoked.once('connect_error', () => resolve());
+          revoked.once('connect', () => reject(new Error('Revoked account connected')));
+          revoked.connect();
+        }),
+      );
+    } finally {
+      await sockets.close();
+    }
+  });
+
+  it('exposes dashboard KPIs only to administrators and bounds management pagination', async () => {
+    const f = await createSecurityFixture();
+    const app = await createSecurityApp(f);
+    try {
+      const unauth = await app.inject({ method: 'GET', url: '/api/v1/admin/dashboard' });
+      assert.strictEqual(unauth.statusCode, 401);
+      const denied = await app.inject({
+        method: 'GET',
+        url: '/api/v1/admin/dashboard',
+        headers: { authorization: `Bearer ${f.token()}` },
+      });
+      assert.strictEqual(denied.statusCode, 403);
+      const headers = { authorization: `Bearer ${f.token(SUPER_ID)}` };
+      const response = await app.inject({ method: 'GET', url: '/api/v1/admin/dashboard', headers });
+      assert.strictEqual(response.statusCode, 200, response.body);
+      const body = response.json<{
+        verifiedAthletes: number;
+        activeTournaments: number;
+        organizers: number;
+        scouts: number;
+        verifiedDrills: number;
+        criticalMatchPauses: number;
+        health: { db: string; redis: string };
+      }>();
+      assert.strictEqual(body.verifiedAthletes, 2);
+      assert.strictEqual(body.activeTournaments, 1);
+      assert.strictEqual(body.organizers, 1);
+      assert.strictEqual(body.scouts, 1);
+      assert.strictEqual(body.verifiedDrills, 0);
+      assert.strictEqual(body.criticalMatchPauses, 0);
+      assert.strictEqual(body.health.db, 'ok');
+      assert.strictEqual(body.health.redis, 'ok');
+      const users = await app.inject({
+        method: 'GET',
+        url: '/api/v1/admin/users?limit=2',
+        headers,
+      });
+      assert.strictEqual(users.statusCode, 200, users.body);
+      const page = users.json<{ data: unknown[]; nextCursor: string }>();
+      assert.strictEqual(page.data.length, 2);
+      assert.ok(page.nextCursor);
+      assert.strictEqual(
+        (await app.inject({ method: 'GET', url: '/api/v1/admin/users?limit=101', headers }))
+          .statusCode,
+        400,
+      );
+      assert.strictEqual(
+        (
+          await app.inject({
+            method: 'GET',
+            url: '/api/v1/admin/audit-logs',
+            headers: { authorization: `Bearer ${f.token(ORGANIZER_ID)}` },
+          })
+        ).statusCode,
+        403,
+      );
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('audits user status changes, requires bound identity evidence, and prevents federation privilege escalation or last-admin removal', async () => {
+    const f = await createSecurityFixture();
+    const app = await createSecurityApp(f);
+    const headers = {
+      authorization: `Bearer ${f.token(SUPER_ID)}`,
+      'idempotency-key': randomUUID(),
+    };
+    try {
+      const changed = await app.inject({
+        method: 'PATCH',
+        url: `/api/v1/admin/users/${ATHLETE_ID}/status`,
+        headers,
+        payload: { isActive: false, verificationStatus: 'REVOKED' },
+      });
+      assert.strictEqual(changed.statusCode, 200, changed.body);
+      assert.strictEqual(f.user().isActive, false);
+      assert.strictEqual(f.user().identityRecord?.status, 'REVOKED');
+      assert.strictEqual(f.state.tables.securityAuditLog.size, 1);
+      for (const payload of [
+        { role: null },
+        { verificationStatus: null },
+        { isActive: null },
+        { isActive: 'false' },
+      ]) {
+        const invalid = await app.inject({
+          method: 'PATCH',
+          url: `/api/v1/admin/users/${OPPONENT_ID}/status`,
+          headers: { ...headers, 'idempotency-key': randomUUID() },
+          payload,
+        });
+        assert.strictEqual(invalid.statusCode, 400, invalid.body);
+      }
+      const last = await app.inject({
+        method: 'PATCH',
+        url: `/api/v1/admin/users/${SUPER_ID}/status`,
+        headers: { ...headers, 'idempotency-key': randomUUID() },
+        payload: { isActive: false },
+      });
+      assert.strictEqual(last.statusCode, 409, last.body);
+      f.state.tables.identityVerification.delete(OPPONENT_ID);
+      const invented = await app.inject({
+        method: 'PATCH',
+        url: `/api/v1/admin/users/${OPPONENT_ID}/status`,
+        headers: { ...headers, 'idempotency-key': randomUUID() },
+        payload: { verificationStatus: 'VERIFIED' },
+      });
+      assert.strictEqual(invented.statusCode, 400, invented.body);
+      f.state.tables.user.get(ORGANIZER_ID)!.role = 'FEDERATION_ADMIN';
+      const escalated = await app.inject({
+        method: 'PATCH',
+        url: `/api/v1/admin/users/${OPPONENT_ID}/status`,
+        headers: {
+          authorization: `Bearer ${f.token(ORGANIZER_ID)}`,
+          'idempotency-key': randomUUID(),
+        },
+        payload: { role: 'SUPER_ADMIN' },
+      });
+      assert.strictEqual(escalated.statusCode, 403, escalated.body);
+      const audit = await app.inject({
+        method: 'GET',
+        url: '/api/v1/admin/audit-logs?action=ADMIN_USER_STATUS_CHANGED',
+        headers,
+      });
+      assert.strictEqual(audit.statusCode, 200, audit.body);
+      assert.strictEqual(audit.json<{ data: unknown[] }>().data.length, 1);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('supports global tournament moderation and preserves an immutable administrative event for each action', async () => {
+    const f = await createSecurityFixture();
+    const app = await createSecurityApp(f);
+    const id = [...f.state.tables.tournament.keys()][0]!;
+    f.state.tables.tournament.get(id)!.status = 'DRAFT';
+    try {
+      for (const [action, status, featured] of [
+        ['APPROVE', 'REGISTRATION_OPEN', false],
+        ['FEATURE', 'REGISTRATION_OPEN', true],
+        ['SUSPEND', 'SUSPENDED', false],
+        ['CLOSE', 'COMPLETED', false],
+      ] as const) {
+        const response = await app.inject({
+          method: 'PATCH',
+          url: `/api/v1/admin/tournaments/${id}/status`,
+          headers: {
+            authorization: `Bearer ${f.token(SUPER_ID)}`,
+            'idempotency-key': randomUUID(),
+          },
+          payload: { action },
+        });
+        assert.strictEqual(response.statusCode, 200, response.body);
+        assert.strictEqual(f.state.tables.tournament.get(id)!.status, status);
+        assert.strictEqual(f.state.tables.tournament.get(id)!.isFeatured, featured);
+      }
+      const response = await app.inject({
+        method: 'GET',
+        url: '/api/v1/admin/tournaments?status=COMPLETED',
+        headers: { authorization: `Bearer ${f.token(SUPER_ID)}` },
+      });
+      assert.strictEqual(response.statusCode, 200, response.body);
+      assert.strictEqual(response.json<{ data: unknown[] }>().data.length, 1);
+      assert.strictEqual(f.state.tables.securityAuditLog.size, 4);
+    } finally {
+      await app.close();
+    }
   });
 });

@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../../infrastructure/database/prisma.service';
 
 export interface DistrictHeatmapRecord {
+  readonly state: string;
   readonly district: string;
   readonly total_athletes: number;
   readonly average_gti: number;
@@ -26,6 +27,7 @@ export class HeatmapsService {
       // 1. Attempt High-Performance PostGIS Spatial Aggregation
       const rawResults = await this.prisma.$queryRaw<
         Array<{
+          state: string;
           district: string;
           total_athletes: number | bigint;
           average_gti: number | string | null;
@@ -34,9 +36,9 @@ export class HeatmapsService {
         }>
       >`
         SELECT 
-          district,
+          state, district,
           COUNT(id)::int AS total_athletes,
-          ROUND(AVG(COALESCE(gti, current_gti, 0))::numeric, 2)::float AS average_gti,
+          ROUND(AVG(COALESCE(NULLIF(gti, 0), current_gti, 0))::numeric, 2)::float AS average_gti,
           ROUND((COUNT(CASE WHEN UPPER(gender) = 'FEMALE' THEN 1 END)::numeric / NULLIF(COUNT(id), 0)::numeric) * 100, 2)::float AS female_participation_pct,
           CASE 
             WHEN COUNT(location) > 0 THEN ST_AsGeoJSON(ST_Centroid(ST_Collect(location)))
@@ -45,8 +47,8 @@ export class HeatmapsService {
           END AS centroid
         FROM athlete_profiles
         WHERE district IS NOT NULL AND district <> ''
-        GROUP BY district
-        ORDER BY total_athletes DESC
+        GROUP BY state, district
+        ORDER BY total_athletes DESC, state, district
         LIMIT 500;
       `;
 
@@ -61,6 +63,7 @@ export class HeatmapsService {
         }
 
         return {
+          state: r.state,
           district: r.district,
           total_athletes: Number(r.total_athletes),
           average_gti: Number(r.average_gti ?? 0),
@@ -71,8 +74,15 @@ export class HeatmapsService {
 
       return {
         success: true,
-        count: formatted.length,
-        data: formatted,
+        count: Math.min(500, formatted.length),
+        data: formatted
+          .sort(
+            (a, b) =>
+              b.total_athletes - a.total_athletes ||
+              a.state.localeCompare(b.state) ||
+              a.district.localeCompare(b.district),
+          )
+          .slice(0, 500),
       };
     } catch (sqlError) {
       this.logger.warn(
@@ -82,6 +92,8 @@ export class HeatmapsService {
       const districtMap = new Map<
         string,
         {
+          state: string;
+          district: string;
           total: number;
           femaleCount: number;
           gtiSum: number;
@@ -96,6 +108,7 @@ export class HeatmapsService {
           where: { district: { not: '' } },
           select: {
             id: true,
+            state: true,
             district: true,
             gender: true,
             gti: true,
@@ -110,8 +123,11 @@ export class HeatmapsService {
 
         for (const profile of profiles) {
           const district = profile.district || 'UNKNOWN';
-          if (!districtMap.has(district)) {
-            districtMap.set(district, {
+          const key = JSON.stringify([profile.state, district]);
+          if (!districtMap.has(key)) {
+            districtMap.set(key, {
+              state: profile.state,
+              district,
               total: 0,
               femaleCount: 0,
               gtiSum: 0,
@@ -120,7 +136,7 @@ export class HeatmapsService {
             });
           }
 
-          const entry = districtMap.get(district)!;
+          const entry = districtMap.get(key)!;
           entry.total += 1;
           if (profile.gender?.toUpperCase() === 'FEMALE') {
             entry.femaleCount += 1;
@@ -140,7 +156,7 @@ export class HeatmapsService {
       } while (cursorId);
 
       const formatted: DistrictHeatmapRecord[] = Array.from(districtMap.entries()).map(
-        ([district, stats]) => {
+        ([_key, stats]) => {
           const avgGti = stats.total > 0 ? Number((stats.gtiSum / stats.total).toFixed(2)) : 0;
           const femalePct =
             stats.total > 0 ? Number(((stats.femaleCount / stats.total) * 100).toFixed(2)) : 0;
@@ -156,7 +172,8 @@ export class HeatmapsService {
           }
 
           return {
-            district,
+            state: stats.state,
+            district: stats.district,
             total_athletes: stats.total,
             average_gti: avgGti,
             female_participation_pct: femalePct,

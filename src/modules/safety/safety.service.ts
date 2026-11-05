@@ -1,178 +1,275 @@
-import { Injectable, Logger, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
+import {
+  AlertSeverity,
+  HealthAlert,
+  Match,
+  MatchStatus,
+  Prisma,
+  TelemetrySource,
+  UserRole,
+} from '@prisma/client';
 import { PrismaService } from '../../infrastructure/database/prisma.service';
 import { WsEventGateway } from '../../infrastructure/realtime/ws-event.gateway';
-import { TelemetryWebhookDto, TelemetryResponseDto } from './dto/telemetry-webhook.dto';
-import { AlertSeverity, MatchStatus } from '@prisma/client';
+import { QueueProducerService } from '../../infrastructure/queues/queue-producer.service';
+import {
+  TelemetryWebhookDto,
+  TelemetryResponseDto,
+  SafetyAlertsQueryDto,
+} from './dto/telemetry-webhook.dto';
+import { runSerializableTransaction } from '../../common/database/serializable-transaction';
+import { assertAccountAccess } from '../../common/auth/account-access';
+import { AuthenticatedJwtUser } from '../../common/guards/jwt-auth.guard';
+import {
+  assertMatchOperator,
+  matchContextSelect,
+  matchParticipants,
+} from '../../common/competition/match-access';
+
+import { CursorPage } from '../../common/dto/cursor-page';
 
 @Injectable()
 export class SafetyService {
-  private readonly logger = new Logger(SafetyService.name);
-
   constructor(
     private readonly prisma: PrismaService,
     private readonly wsGateway: WsEventGateway,
+    private readonly queue: QueueProducerService,
   ) {}
 
-  async processTelemetry(dto: TelemetryWebhookDto): Promise<TelemetryResponseDto> {
-    const { heart_rate, spo2, skin_temperature, athlete_id, tournament_id, bracket_id, match_id } =
-      dto;
-
-    // 1. Evaluate Critical Thresholds: HR > 195 OR SpO2 < 90% OR Temp > 39.5°C
-    const isCritical = heart_rate > 195 || spo2 < 90 || skin_temperature > 39.5;
-
-    // 2. Evaluate Warning Thresholds: HR > 185 OR SpO2 < 93% OR Temp > 38.5°C
-    const isWarning = !isCritical && (heart_rate > 185 || spo2 < 93 || skin_temperature > 38.5);
-
-    if (isCritical) {
-      const breachReasons: string[] = [];
-      if (heart_rate > 195) breachReasons.push(`Heart Rate (${heart_rate} bpm > 195 bpm)`);
-      if (spo2 < 90) breachReasons.push(`SpO2 (${spo2}% < 90%)`);
-      if (skin_temperature > 39.5) breachReasons.push(`Skin Temp (${skin_temperature}°C > 39.5°C)`);
-      const triggerReason = `CRITICAL BIOMETRIC EXTREME: ${breachReasons.join(', ')}`;
-
-      // Resolve athlete name for umpire/organizer heads-up
-      const athlete = await this.resolveAthlete(athlete_id);
-      const athleteName = athlete.email || athlete.phone || `Athlete ${athlete_id.slice(0, 8)}`;
-
-      // Log entry in HealthAlert with match_paused = true
-      const alertData = {
-        athleteId: athlete.userId,
-        tournamentId: tournament_id || null,
-        bracketId: bracket_id || null,
-        severity: AlertSeverity.CRITICAL,
-        heartRate: heart_rate,
-        spo2,
-        skinTemperature: skin_temperature,
-        triggerReason,
-        matchPaused: true,
-      };
-
-      if (match_id) {
-        await this.prisma.$transaction(async (transaction) => {
-          const match = await transaction.match.findUnique({
-            where: { id: match_id },
-            select: {
-              bracketId: true,
-              status: true,
-              bracket: { select: { tournamentId: true } },
-            },
-          });
-          const pausableStatuses: readonly MatchStatus[] = [MatchStatus.WARMUP, MatchStatus.LIVE];
-          if (
-            !match ||
-            (bracket_id !== undefined && match.bracketId !== bracket_id) ||
-            (tournament_id !== undefined && match.bracket.tournamentId !== tournament_id) ||
-            !pausableStatuses.includes(match.status)
-          ) {
-            throw new NotFoundException(
-              'Telemetry match context does not match an active tournament match.',
-            );
-          }
-          await transaction.match.update({
-            where: { id: match_id },
-            data: {
-              status: MatchStatus.PAUSED_SAFETY,
-              pauseReason: triggerReason,
-              pausedAt: new Date(),
-            },
-          });
-          await transaction.healthAlert.create({ data: alertData });
+  async processTelemetry(
+    dto: TelemetryWebhookDto,
+    source: TelemetrySource = TelemetrySource.DEVICE_HMAC,
+  ): Promise<TelemetryResponseDto> {
+    const timestamp = dto.timestamp > 1e11 ? dto.timestamp : dto.timestamp * 1000;
+    if (!Number.isFinite(timestamp) || Math.abs(Date.now() - timestamp) > 300000)
+      throw new BadRequestException('Telemetry timestamp must be within 300 seconds');
+    const critical = dto.heart_rate > 195 || dto.spo2 < 90 || dto.skin_temperature > 39.5;
+    const warning =
+      !critical && (dto.heart_rate > 185 || dto.spo2 < 93 || dto.skin_temperature > 38.5);
+    const severity = critical
+      ? AlertSeverity.CRITICAL
+      : warning
+        ? AlertSeverity.WARNING
+        : AlertSeverity.NORMAL;
+    const reason = critical ? 'CRITICAL BIOMETRIC EXTREME' : 'WARNING BIOMETRIC ELEVATION';
+    const result = await runSerializableTransaction(this.prisma, async (tx) => {
+      const profile = await tx.athleteProfile.findUnique({
+        where: { userId: dto.athlete_id },
+        include: { user: { include: { identityRecord: true } } },
+      });
+      if (!profile || profile.user.role !== UserRole.ATHLETE)
+        throw new NotFoundException('Athlete profile not found');
+      assertAccountAccess(profile.user);
+      let tournamentId = dto.tournament_id;
+      let bracketId = dto.bracket_id;
+      let paused = false;
+      if (dto.match_id) {
+        const match = await tx.match.findUnique({
+          where: { id: dto.match_id },
+          select: matchContextSelect,
         });
-      } else {
-        await this.prisma.healthAlert.create({ data: alertData });
+        if (
+          !match ||
+          !matchParticipants(match).includes(dto.athlete_id) ||
+          (bracketId && bracketId !== match.bracketId) ||
+          (tournamentId && tournamentId !== match.bracket.tournamentId)
+        )
+          throw new BadRequestException(
+            'Telemetry athlete or context does not belong to this match',
+          );
+        const active: readonly MatchStatus[] = ['WARMUP', 'LIVE', 'PAUSED_SAFETY'];
+        if (!active.includes(match.status)) throw new ConflictException('Match is not active');
+        bracketId = match.bracketId;
+        tournamentId = match.bracket.tournamentId;
+        paused = critical && match.status !== MatchStatus.PAUSED_SAFETY;
+        if (paused)
+          await tx.match.update({
+            where: { id: match.id },
+            data: { status: MatchStatus.PAUSED_SAFETY, pauseReason: reason, pausedAt: new Date() },
+          });
+      } else if (bracketId || tournamentId) {
+        const registration = await tx.registration.findFirst({
+          where: {
+            status: 'CONFIRMED',
+            ...(bracketId ? { bracketId } : {}),
+            bracket: { ...(tournamentId ? { tournamentId } : {}) },
+            OR: [
+              { userId: dto.athlete_id },
+              {
+                team: {
+                  members: {
+                    some: {
+                      OR: [{ userId: dto.athlete_id }, { athlete: { userId: dto.athlete_id } }],
+                    },
+                  },
+                },
+              },
+            ],
+          },
+          include: { bracket: true },
+        });
+        if (!registration)
+          throw new BadRequestException('Athlete is not registered in this context');
+        bracketId = registration.bracketId;
+        tournamentId = registration.bracket.tournamentId;
       }
-
-      // Instantly broadcast MATCH_PAUSE_ALERT WebSocket event
+      const day = new Date(timestamp);
+      day.setUTCHours(0, 0, 0, 0);
+      await tx.wearableSession.upsert({
+        where: { athleteId_sessionDate: { athleteId: dto.athlete_id, sessionDate: day } },
+        create: { athleteId: dto.athlete_id, sessionDate: day, source },
+        update: { observedAt: new Date() },
+      });
+      const since = new Date(day);
+      since.setUTCDate(since.getUTCDate() - 29);
+      const sessions = await tx.wearableSession.count({
+        where: { athleteId: dto.athlete_id, sessionDate: { gte: since, lte: day } },
+      });
+      const score = Math.min(100, sessions * 5);
+      await tx.athleteProfile.update({
+        where: { id: profile.id },
+        data: { trainingConsistencyScore: score, wearableScore: new Prisma.Decimal(score) },
+      });
+      if (severity !== AlertSeverity.NORMAL)
+        await tx.healthAlert.create({
+          data: {
+            athleteId: dto.athlete_id,
+            matchId: dto.match_id,
+            tournamentId,
+            bracketId,
+            severity,
+            heartRate: dto.heart_rate,
+            spo2: dto.spo2,
+            skinTemperature: dto.skin_temperature,
+            triggerReason: reason,
+            matchPaused: paused,
+            source,
+          },
+        });
+      return {
+        paused,
+        tournamentId,
+        bracketId,
+        name: profile.user.email ?? profile.user.phone ?? `Athlete ${dto.athlete_id.slice(0, 8)}`,
+      };
+    });
+    if (result.paused)
       this.wsGateway.broadcastAutonomousMatchPause({
         event: 'MATCH_PAUSE_ALERT',
         severity: 'CRITICAL',
-        athlete_id,
-        athlete_name: athleteName,
+        athlete_id: dto.athlete_id,
+        athlete_name: result.name,
         vitals: {
-          heart_rate,
-          spo2,
-          skin_temperature,
+          heart_rate: dto.heart_rate,
+          spo2: dto.spo2,
+          skin_temperature: dto.skin_temperature,
         },
         directive: 'MANDATORY REST: PAUSE TOURNAMENT MATCH IMMEDIATELY',
-        tournament_id,
-        bracket_id,
-        match_id,
+        tournament_id: result.tournamentId,
+        bracket_id: result.bracketId,
+        match_id: dto.match_id,
       });
-
-      this.logger.error(
-        `AUTONOMOUS MATCH PAUSE TRIGGERED: Athlete=${athlete_id}, HR=${heart_rate}, SpO2=${spo2}, Temp=${skin_temperature}`,
-      );
-
-      return {
-        alert_triggered: true,
-        status: 'MATCH_PAUSED',
-        message: 'MANDATORY REST: PAUSE TOURNAMENT MATCH IMMEDIATELY',
-      };
-    }
-
-    if (isWarning) {
-      const breachReasons: string[] = [];
-      if (heart_rate > 185) breachReasons.push(`Heart Rate (${heart_rate} bpm > 185 bpm)`);
-      if (spo2 < 93) breachReasons.push(`SpO2 (${spo2}% < 93%)`);
-      if (skin_temperature > 38.5) breachReasons.push(`Skin Temp (${skin_temperature}°C > 38.5°C)`);
-      const triggerReason = `WARNING BIOMETRIC ELEVATION: ${breachReasons.join(', ')}`;
-
-      const athlete = await this.resolveAthlete(athlete_id);
-
-      await this.prisma.healthAlert.create({
-        data: {
-          athleteId: athlete.userId,
-          tournamentId: tournament_id || null,
-          bracketId: bracket_id || null,
-          severity: AlertSeverity.WARNING,
-          heartRate: heart_rate,
-          spo2,
-          skinTemperature: skin_temperature,
-          triggerReason,
-          matchPaused: false,
-        },
-      });
-
-      this.logger.warn(`Telemetry Warning: Athlete=${athlete_id}, Reason=${triggerReason}`);
-
-      return {
-        alert_triggered: true,
-        status: 'WARNING',
-        message: triggerReason,
-      };
-    }
-
+    await this.queue.enqueueGtiRecalculation({
+      athleteId: dto.athlete_id,
+      trigger: 'WEARABLE_SYNC',
+    });
     return {
-      alert_triggered: false,
-      status: 'NORMAL',
+      alert_triggered: critical || warning,
+      status: result.paused
+        ? 'MATCH_PAUSED'
+        : critical
+          ? 'CRITICAL_ALERT'
+          : warning
+            ? 'WARNING'
+            : 'NORMAL',
+      ...(critical || warning ? { message: reason } : {}),
     };
   }
 
-  private async resolveAthlete(
-    athleteId: string,
-  ): Promise<{ userId: string; email: string | null; phone: string | null }> {
-    const user = await this.prisma.user.findUnique({
-      where: { id: athleteId },
-      select: { id: true, email: true, phone: true },
-    });
-    if (user) {
-      return { userId: user.id, email: user.email, phone: user.phone };
-    }
-
-    const profile = await this.prisma.athleteProfile.findUnique({
-      where: { id: athleteId },
-      select: {
-        userId: true,
-        user: { select: { email: true, phone: true } },
-      },
-    });
-    if (!profile) {
-      throw new NotFoundException(`Athlete ${athleteId} was not found.`);
-    }
-    return {
-      userId: profile.userId,
-      email: profile.user.email,
-      phone: profile.user.phone,
+  async listAlerts(
+    actor: AuthenticatedJwtUser,
+    query: SafetyAlertsQueryDto,
+  ): Promise<CursorPage<HealthAlert>> {
+    const where: Prisma.HealthAlertWhereInput = {
+      ...(query.tournament_id ? { tournamentId: query.tournament_id } : {}),
+      ...(query.bracket_id ? { bracketId: query.bracket_id } : {}),
+      ...(query.severity ? { severity: query.severity } : {}),
+      ...(actor.role === UserRole.SUPER_ADMIN
+        ? {}
+        : actor.role === UserRole.ORGANIZER
+          ? { tournament: { organizerId: actor.sub } }
+          : { match: { umpireId: actor.sub } }),
     };
+    const rows = await this.prisma.healthAlert.findMany({
+      where,
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      take: query.limit + 1,
+      ...(query.cursor ? { cursor: { id: query.cursor }, skip: 1 } : {}),
+    });
+    return {
+      data: rows.slice(0, query.limit),
+      nextCursor: rows.length > query.limit ? rows[query.limit - 1].id : null,
+    };
+  }
+
+  async acknowledge(actor: AuthenticatedJwtUser, id: string): Promise<HealthAlert> {
+    return runSerializableTransaction(this.prisma, async (tx) => {
+      const alert = await tx.healthAlert.findUnique({
+        where: { id },
+        include: { tournament: true, match: { select: matchContextSelect } },
+      });
+      if (!alert) throw new NotFoundException('Safety alert not found');
+      assertMatchOperator(actor, alert.tournament?.organizerId ?? '', alert.match ?? undefined);
+      if (alert.acknowledgedAt) return alert;
+      const updated = await tx.healthAlert.update({
+        where: { id },
+        data: { acknowledgedAt: new Date(), acknowledgedById: actor.sub },
+      });
+      await tx.securityAuditLog.create({
+        data: {
+          userId: actor.sub,
+          action: 'SAFETY_ALERT_ACKNOWLEDGED',
+          resource: 'health_alert',
+          resourceId: id,
+        },
+      });
+      return updated;
+    });
+  }
+
+  async resume(actor: AuthenticatedJwtUser, matchId: string): Promise<Match> {
+    return runSerializableTransaction(this.prisma, async (tx) => {
+      const match = await tx.match.findUnique({
+        where: { id: matchId },
+        select: matchContextSelect,
+      });
+      if (!match) throw new NotFoundException('Match not found');
+      assertMatchOperator(actor, match.bracket.tournament.organizerId, match);
+      if (match.status !== MatchStatus.PAUSED_SAFETY)
+        throw new ConflictException('Match is not paused for safety');
+      if (
+        await tx.healthAlert.count({
+          where: { matchId, severity: AlertSeverity.CRITICAL, acknowledgedAt: null },
+        })
+      )
+        throw new ConflictException('Acknowledge outstanding critical alerts before resuming');
+      const updated = await tx.match.update({
+        where: { id: matchId },
+        data: { status: MatchStatus.LIVE, pauseReason: null, pausedAt: null },
+      });
+      await tx.securityAuditLog.create({
+        data: {
+          userId: actor.sub,
+          action: 'SAFETY_MATCH_RESUMED',
+          resource: 'match',
+          resourceId: matchId,
+        },
+      });
+      return updated;
+    });
   }
 }

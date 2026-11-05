@@ -103,8 +103,8 @@ The default API base URL is `http://localhost:3000/api/v1`. Interactive OpenAPI 
 | `JWT_PUBLIC_KEY_PATH`           | RSA public key path                                       | `./keys/public.pem`                              |
 | `JWT_ACCESS_EXPIRY`             | Access-token lifetime in seconds or s/m/h/d/w duration    | `15m`                                            |
 | `JWT_REFRESH_EXPIRY`            | Opaque refresh-token lifetime in the same duration format | `7d`                                             |
-| `SUPABASE_JWT_SECRET`           | Optional additional HS256 JWT verification authority     | Empty                                            |
-| `ADMIN_INVITE_CODE`             | Required invitation for SUPER_ADMIN registration         | Empty                                            |
+| `SUPABASE_JWT_SECRET`           | Optional additional HS256 JWT verification authority      | Empty                                            |
+| `ADMIN_INVITE_CODE`             | Required invitation for SUPER_ADMIN registration          | Empty                                            |
 | `IDENTITY_PEPPER`               | Secret pepper for government-ID hashes and HS256 fallback | Required in production if no RSA pair is present |
 | `IDENTITY_SALT_VERSION`         | Government-ID hash domain version                         | `1`                                              |
 | `DRILL_HMAC_SECRET`             | Shared secret for signed drill submissions                | Required in production                           |
@@ -122,17 +122,17 @@ openssl rsa -pubout -in keys/private.pem -out keys/public.pem
 
 ## Commands
 
-| Command                | Purpose                                      |
-| ---------------------- | -------------------------------------------- |
-| `pnpm start:dev`       | Start the API in watch mode                  |
-| `pnpm start:debug`     | Start watch mode with the Node debugger      |
-| `pnpm build`           | Compile the NestJS application to `dist/`    |
-| `pnpm start:prod`      | Run the compiled application                 |
-| `pnpm format`          | Format TypeScript files under `src/`         |
-| `pnpm prisma:generate` | Generate Prisma Client                       |
-| `pnpm prisma:migrate`  | Create/apply a development migration         |
-| `pnpm prisma:deploy`   | Apply committed migrations                   |
-| `pnpm test`            | Run the seven project spec suites            |
+| Command                | Purpose                                   |
+| ---------------------- | ----------------------------------------- |
+| `pnpm start:dev`       | Start the API in watch mode               |
+| `pnpm start:debug`     | Start watch mode with the Node debugger   |
+| `pnpm build`           | Compile the NestJS application to `dist/` |
+| `pnpm start:prod`      | Run the compiled application              |
+| `pnpm format`          | Format TypeScript files under `src/`      |
+| `pnpm prisma:generate` | Generate Prisma Client                    |
+| `pnpm prisma:migrate`  | Create/apply a development migration      |
+| `pnpm prisma:deploy`   | Apply committed migrations                |
+| `pnpm test`            | Run the seven project spec suites         |
 
 Run `pnpm build` before `pnpm start:prod`. The build emits `dist/main.js` and a compatibility shim at `dist/src/main.js`; both entrypoints start the same application. Build output excludes tests and audit evidence.
 
@@ -199,68 +199,88 @@ The global validation pipe rejects unknown request fields. Successful controller
 
 All routes below are under `/api/v1`.
 
-| Method and route                                                          | Access                                                   | Purpose                                                                  |
-| ------------------------------------------------------------------------- | -------------------------------------------------------- | ------------------------------------------------------------------------ |
-| `GET /health`                                                            | Public                                                   | Check database and Redis readiness                                      |
-| `POST /auth/register`                                                     | Public + idempotency key                                 | Register an athlete or recover the matching permanent profile            |
-| `POST /auth/login`                                                        | Public + idempotency key                                 | Authenticate with verified contact and government ID                     |
-| `POST /auth/verify-government-id`                                         | JWT + idempotency key                                    | Bind a government ID to the current user                                 |
-| `POST /auth/verify-gov-id`                                                | JWT + idempotency key                                    | Alias supporting idType/idNumber, id_type/id_number, or gov_id            |
-| `POST /auth/refresh`                                                      | Public + idempotency key                                 | Rotate a refresh token                                                   |
-| `GET /auth/me`                                                            | JWT                                                      | Return the current JWT identity                                          |
-| `GET /users/profile`                                                     | JWT                                                      | Return or initialize the authenticated user's passport                   |
-| `POST /users/profile`                                                    | JWT + idempotency key                                    | Upsert the authenticated user's passport and sport roles                  |
-| `PATCH /users/profile`                                                   | JWT + idempotency key                                    | Patch the authenticated user's passport                                  |
-| `GET /users/:id/dossier`                                                  | Owner, scout, organizer, federation admin, or super admin | Return bounded scout dossier summaries                                  |
-| `GET /users/:id`                                                          | Owner or super admin                                     | Return user/contact data                                                 |
-| `PATCH /users/:id`                                                        | Owner or super admin + idempotency key                   | Update contact data                                                      |
-| `DELETE /users/:id`                                                       | Owner or super admin + idempotency key                   | Deactivate an account                                                    |
-| `GET /passport/:userId`                                                   | Owner, scout, federation admin, or super admin           | Return an athlete passport                                               |
-| `POST /passport/:userId`                                                  | Owner or super admin + idempotency key                   | Create an athlete passport                                               |
-| `PATCH /passport/:userId`                                                 | Owner or super admin + idempotency key                   | Update passport metadata                                                 |
-| `POST /passport/:userId/sports`                                           | Owner or super admin + idempotency key                   | Add or update a sport record                                             |
-| `GET /passport/:userId/sports`                                            | Owner, scout, federation admin, or super admin           | List sport records with `limit` and `cursor_id`; respect scout opt-out   |
-| `GET /tournaments/nearby`                                                 | Public                                                   | Find open tournaments by `lat`, `lng`, and `radius_km`                   |
-| `GET /tournaments`                                                       | Public                                                   | List by sport, status, organizer_id, cursor_id, and limit                 |
-| `GET /tournaments/:id`                                                    | Public                                                   | Return tournament details and brackets                                   |
-| `POST /tournaments`                                                       | Organizer/admin + idempotency key                        | Create an open tournament                                                |
-| `PATCH /tournaments/:id`                                                  | Owning organizer or federation/super admin + idempotency key | Update tournament metadata and registration dates                    |
-| `DELETE /tournaments/:id`                                                 | Owning organizer or federation/super admin + idempotency key | Delete a tournament                                                   |
-| `GET /tournaments/:tournamentId/brackets`                                 | Public                                                   | List brackets with cursor pagination                                     |
-| `POST /tournaments/:tournamentId/brackets`                                | Organizer/admin + idempotency key                        | Create a bracket                                                         |
-| `PATCH /tournaments/:tournamentId/brackets/:bracketId`                     | Owning organizer or federation/super admin + idempotency key | Update a bracket                                                      |
-| `DELETE /tournaments/:tournamentId/brackets/:bracketId`                    | Owning organizer or federation/super admin + idempotency key | Delete a bracket                                                      |
-| `POST /tournaments/:tournamentId/brackets/:bracketId/register`            | JWT + idempotency key                                    | Register after GTI anti-sandbagging checks                               |
-| `POST /tournaments/:tournamentId/brackets/:bracketId/free-agents/join`    | JWT + idempotency key                                    | Join the role-balanced pool                                              |
-| `DELETE /tournaments/:tournamentId/brackets/:bracketId/free-agents/leave` | JWT + idempotency key                                    | Leave a queued pool entry                                                |
-| `GET /tournaments/:tournamentId/brackets/:bracketId/free-agents/status`   | JWT                                                      | Return queue position or formed roster                                   |
-| `POST /drills/submit`                                                     | JWT + drill HMAC + idempotency key                       | Store derived drill metrics and enqueue GTI recalculation                |
-| `POST /safety/telemetry-webhook`                                          | Device HMAC + idempotency key                            | Evaluate wearable telemetry                                              |
-| `POST /gti/recalculate/:athleteId`                                        | Athlete self or federation/super admin + idempotency key | Recalculate GTI                                                          |
-| `GET /gti/rank/:sport/:athleteId`                                         | Public                                                   | Return global or district leaderboard rank                               |
-| `GET /scouts/feed`                                                        | Scout/federation/super admin                             | Return cursor-paginated prospects                                        |
-| `GET /scouts/alerts`                                                      | Scout/federation/super admin                             | Return up to 50 recent alerts                                            |
-| `PATCH /scouts/alerts/:id/acknowledge`                                    | Scout/federation/super admin + idempotency key           | Acknowledge an alert                                                     |
-| `POST /scouts/dossiers/:athleteId/outreach`                               | Scout/federation/super admin + idempotency key           | Create or update trial/scholarship outreach notes                        |
-| `GET /heatmaps/regional`                                                  | Public                                                   | Return district density, average GTI, female participation, and centroid |
+| Method and route                                                          | Access                                                       | Purpose                                                                  |
+| ------------------------------------------------------------------------- | ------------------------------------------------------------ | ------------------------------------------------------------------------ |
+| `GET /health`                                                             | Public                                                       | Check database and Redis readiness                                       |
+| `POST /auth/register`                                                     | Public + idempotency key                                     | Register an athlete or recover the matching permanent profile            |
+| `POST /auth/login`                                                        | Public + idempotency key                                     | Authenticate with verified contact and government ID                     |
+| `POST /auth/verify-government-id`                                         | JWT + idempotency key                                        | Bind a government ID to the current user                                 |
+| `POST /auth/verify-gov-id`                                                | JWT + idempotency key                                        | Alias supporting idType/idNumber, id_type/id_number, or gov_id           |
+| `POST /auth/refresh`                                                      | Public + idempotency key                                     | Rotate a refresh token                                                   |
+| `GET /auth/me`                                                            | JWT                                                          | Return the current JWT identity                                          |
+| `GET /users/profile`                                                      | JWT                                                          | Return or initialize the authenticated user's passport                   |
+| `POST /users/profile`                                                     | JWT + idempotency key                                        | Upsert the authenticated user's passport and sport roles                 |
+| `PATCH /users/profile`                                                    | JWT + idempotency key                                        | Patch the authenticated user's passport                                  |
+| `GET /users/:id/dossier`                                                  | Owner, scout, organizer, federation admin, or super admin    | Return bounded scout dossier summaries                                   |
+| `GET /users/:id`                                                          | Owner or super admin                                         | Return user/contact data                                                 |
+| `PATCH /users/:id`                                                        | Owner or super admin + idempotency key                       | Update contact data                                                      |
+| `DELETE /users/:id`                                                       | Owner or super admin + idempotency key                       | Deactivate an account                                                    |
+| `GET /passport/:userId`                                                   | Owner, scout, federation admin, or super admin               | Return an athlete passport                                               |
+| `POST /passport/:userId`                                                  | Owner or super admin + idempotency key                       | Create an athlete passport                                               |
+| `PATCH /passport/:userId`                                                 | Owner or super admin + idempotency key                       | Update passport metadata                                                 |
+| `POST /passport/:userId/sports`                                           | Owner or super admin + idempotency key                       | Add or update a sport record                                             |
+| `GET /passport/:userId/sports`                                            | Owner, scout, federation admin, or super admin               | List sport records with `limit` and `cursor_id`; respect scout opt-out   |
+| `GET /tournaments/nearby`                                                 | Public                                                       | Find open tournaments by `lat`, `lng`, and `radius_km`                   |
+| `GET /tournaments`                                                        | Public                                                       | List by sport, status, organizer_id, cursor_id, and limit                |
+| `GET /tournaments/:id`                                                    | Public                                                       | Return tournament details and brackets                                   |
+| `POST /tournaments`                                                       | Organizer/admin + idempotency key                            | Create an open tournament                                                |
+| `PATCH /tournaments/:id`                                                  | Owning organizer or federation/super admin + idempotency key | Update tournament metadata and registration dates                        |
+| `DELETE /tournaments/:id`                                                 | Owning organizer or federation/super admin + idempotency key | Delete a tournament                                                      |
+| `GET /tournaments/:tournamentId/brackets`                                 | Public                                                       | List brackets with cursor pagination                                     |
+| `POST /tournaments/:tournamentId/brackets`                                | Organizer/admin + idempotency key                            | Create a bracket                                                         |
+| `PATCH /tournaments/:tournamentId/brackets/:bracketId`                    | Owning organizer or federation/super admin + idempotency key | Update a bracket                                                         |
+| `DELETE /tournaments/:tournamentId/brackets/:bracketId`                   | Owning organizer or federation/super admin + idempotency key | Delete a bracket                                                         |
+| `POST /tournaments/:tournamentId/brackets/:bracketId/register`            | JWT + idempotency key                                        | Register after GTI anti-sandbagging checks                               |
+| `POST /tournaments/:tournamentId/brackets/:bracketId/free-agents/join`    | JWT + idempotency key                                        | Join the role-balanced pool                                              |
+| `DELETE /tournaments/:tournamentId/brackets/:bracketId/free-agents/leave` | JWT + idempotency key                                        | Leave a queued pool entry                                                |
+| `GET /tournaments/:tournamentId/brackets/:bracketId/free-agents/status`   | JWT                                                          | Return queue position or formed roster                                   |
+| `POST /drills/submit`                                                     | JWT + drill HMAC + idempotency key                           | Store derived drill metrics and enqueue GTI recalculation                |
+| `POST /safety/telemetry-webhook`                                          | Athlete JWT or device HMAC + idempotency key                 | Evaluate wearable telemetry                                              |
+| `POST /gti/recalculate/:athleteId`                                        | Athlete self or federation/super admin + idempotency key     | Recalculate GTI                                                          |
+| `GET /gti/rank/:sport/:athleteId`                                         | Public                                                       | Return global or district leaderboard rank                               |
+| `GET /scouts/feed`                                                        | Scout/federation/super admin                                 | Return cursor-paginated prospects                                        |
+| `GET /scouts/alerts`                                                      | Scout/federation/super admin                                 | Return up to 50 recent alerts                                            |
+| `PATCH /scouts/alerts/:id/acknowledge`                                    | Scout/federation/super admin + idempotency key               | Acknowledge an alert                                                     |
+| `POST /scouts/dossiers/:athleteId/outreach`                               | Scout/federation/super admin + idempotency key               | Create or update trial/scholarship outreach notes                        |
+| `GET /heatmaps/regional`                                                  | Public                                                       | Return district density, average GTI, female participation, and centroid |
 
-Use Swagger for the authoritative request and response schemas.
+Additional Phase 4 routes:
+
+| Method and route                                                            | Access                                                           | Purpose                                                              |
+| --------------------------------------------------------------------------- | ---------------------------------------------------------------- | -------------------------------------------------------------------- |
+| `GET /safety/alerts`                                                        | Owning organizer, assigned umpire, super admin                   | Filter by tournament_id, bracket_id, severity, cursor, limit         |
+| `PATCH /safety/alerts/:id/acknowledge`                                      | Same + idempotency key                                           | Acknowledge a safety alert                                           |
+| `POST /safety/matches/:matchId/resume`                                      | Same + idempotency key                                           | Resume after all critical alerts are acknowledged                    |
+| `POST /tournaments/:tournamentId/brackets/:bracketId/matches/record-result` | Owning organizer, assigned umpire, super admin + idempotency key | Record verified participants and winners                             |
+| `GET /gti/leaderboards`                                                     | Public, opted-in active verified athletes only                   | sport, scope=NATIONAL/STATE/DISTRICT, state, district, cursor, limit |
+| `GET /admin/dashboard`                                                      | Federation/super admin                                           | KPIs and dependency health                                           |
+| `GET /admin/users`, `PATCH /admin/users/:id/status`                         | Federation/super admin; mutation needs idempotency key           | Paginated role/verification management                               |
+| `GET /admin/tournaments`, `PATCH /admin/tournaments/:id/status`             | Federation/super admin; mutation needs idempotency key           | Global moderation                                                    |
+| `GET /admin/audit-logs`                                                     | Federation/super admin                                           | Append-only integrity snapshots                                      |
+
+Admin user status bodies accept `isActive`, `role`, and `verificationStatus`. Approval requires an existing government identity record; the API cannot invent identity evidence. Federation admins cannot grant administrator roles or manage federation/super administrators. The last active super administrator is protected. Tournament moderation bodies accept `action: APPROVE | FEATURE | SUSPEND | CLOSE`; FEATURE also accepts `featured` (default true). Suspension stores `SUSPENDED`, blocks organizer edits and participation, and removes featured status. APPROVE requires a draft or suspended tournament whose registration deadline is still open. Management lists accept `cursor` and `limit` (1–100); users also accept role/verificationStatus, tournaments status, and audit logs action/resource/userId.
+
+Use Swagger together with the contracts above for request schemas.
 
 ## Signed ingestion
 
 ### Drill submissions
 
-`POST /drills/submit` requires a JWT, `Idempotency-Key`, and a lowercase or uppercase 64-character hexadecimal `X-Drill-Signature`. The HMAC-SHA256 input is:
+`POST /drills/submit` requires a JWT, `Idempotency-Key`, and a 64-character hexadecimal `X-Drill-Signature`. Headers are trimmed and normalized to lowercase before persistence and replay checks. Sign with `DRILL_HMAC_SECRET` using:
 
 ```text
-<authenticated-user-id>:<drill_type>:<form_score>:<timestamp>
+<authenticated-user-id>:<sport>:<drill_type>:<form_score>:<frames_analyzed>:<JSON.stringify(flaw_flags ?? [])>:<timestamp>
 ```
 
-Sign with `DRILL_HMAC_SECRET`. The timestamp may be Unix seconds or milliseconds and must be within 300 seconds of server time. If `athlete_id` is supplied, it must equal the authenticated user's ID.
+Send `X-Drill-Signed-Fields: full` to prohibit legacy downgrade. This format requires an empty/omitted joint summary. For joint summaries, use `full-v2`: HMAC the recursively key-sorted canonical JSON object with keys `athlete_id, sport, drill_type, form_score, frames_analyzed, flaw_flags, joint_angles_summary, timestamp`, retaining array order and defaulting flags to `[]` and joints to `{}`. The stored signature version distinguishes FULL/FULL_V2 from LEGACY.
+
+The timestamp may be Unix seconds or milliseconds and must be within 300 seconds. Athlete identity must match the JWT, sport must be a SportType, frames must be integer 1–18000, flags must be strings, and joints must be an object. Bowling/batting/wicket, smash/drop, and strike/dribble must match Cricket, Badminton, and Football respectively.
+
+For compatibility, four-field `<user-id>:<drill_type>:<form_score>:<timestamp>` signatures remain accepted under these bounds without the full-signing header. They authenticate the identity, drill, and score; they cannot authenticate added metadata. These records store `metadataVerified=false` and do not count as fully verified drills in admin KPIs. Migrate signers to full/full-v2 for metadata integrity.
 
 ### Safety telemetry
 
-`POST /safety/telemetry-webhook` requires `Idempotency-Key` and a hexadecimal `X-Device-Signature` containing the HMAC-SHA256 of the JSON request body, signed with `TELEMETRY_SERVICE_HMAC_SECRET`. The body timestamp is required at runtime and must be within 300 seconds of server time.
+`POST /safety/telemetry-webhook` requires `Idempotency-Key` plus either an athlete JWT matching `athlete_id`, or `X-Device-Signature` containing the HMAC-SHA256 of the JSON request body signed with `TELEMETRY_SERVICE_HMAC_SECRET`. The required timestamp must be within 300 seconds. Bounds are heart_rate 20–260, spo2 50–100, and skin_temperature 25–45. JWT telemetry is an authenticated self-report, not hardware attestation; the stored session/alert source records this distinction.
 
 Telemetry levels are evaluated as follows:
 
@@ -270,7 +290,7 @@ Telemetry levels are evaluated as follows:
 | Warning  | Heart rate `> 185`, SpO2 `< 93`, or skin temperature `> 38.5`, when no critical condition exists |
 | Normal   | No threshold is breached                                                                         |
 
-Critical telemetry creates a `HealthAlert` with `matchPaused = true`. When a valid active `match_id` is supplied, the match moves to `PAUSED_SAFETY`; the service then broadcasts `MATCH_PAUSE_ALERT`.
+Critical telemetry with an active match checks actual roster membership and supplied parent context before moving WARMUP/LIVE to PAUSED_SAFETY. Missing parent IDs are filled from the match. Only a real transition records matchPaused=true and emits MATCH_PAUSE_ALERT. Standalone critical telemetry records a CRITICAL_ALERT without inventing a paused match. Context without match_id requires confirmed registration. Resume requires owning organizer/assigned umpire/super-admin authority and acknowledgement of all outstanding critical alerts; acknowledgement is an operational record, not medical clearance.
 
 ## GTI and talent discovery
 
@@ -282,16 +302,22 @@ GTI = 0.35 × biomechanical score
     + 0.40 × verified match-performance score
 ```
 
-Recalculation persists GTI history and updates global and district Redis sorted sets. An unacknowledged scout alert is created when an athlete reaches GTI 85 or higher and is rural, underrepresented, or classified as `RURAL`, `TIER_3`, or `TIER_2`.
+Component reads and composite/history writes run in one serializable transaction; recalculation never writes component snapshots back. Wearable consistency awards five points per distinct UTC monitored day in the last 30 days, capped at 100. Repeated packets on the same day cannot inflate the score. Drill submissions maintain the running biomechanical average inside a serializable transaction.
+
+Verified result bodies contain winnerAthleteIds, participantAthleteIds, and optional matchId. With a match, full rosters and a complete winning team must agree with the active unpaused match. Without a match, owner/super-admin reports require confirmed bracket registration. Counters update per sport; primary-sport performance is `min(100, 80 * winCount/totalMatches + 5 * min(winStreak,4)) * bracket.maxGti/100`. A durable result ledger prevents replaying the same match or idempotency key after cache expiry. A bracket in an IN_PROGRESS tournament is required.
+
+GTI jobs follow DRILL_SUBMISSION, WEARABLE_SYNC, and MATCH_COMPLETED. GTI responses and history retain evidence/provisional fields. The gti-v2 calculation verifies stored drill, wearable-session, and sport-specific match-result evidence inside the transaction; missing evidence marks the composite provisional and blocks scout outreach. A new unacknowledged scout alert is created for fully evidenced, active, verified, opted-in athletes at GTI >=85 in rural/underrepresented or RURAL/TIER_3/TIER_2 categories. ScoutAlertsProcessor consumes scout-alerts and checks current visibility/account/score before emitting.
+
+Redis stores global, state, legacy district, and state-qualified district ZSETs. Membership tracking removes old sport/geography keys after profile changes or opt-out/deactivation. Leaderboards return rank, athleteId, district, state, sport, gti, biomechanicalScore, wearableScore, matchPerformanceScore, nextCursor, and source (redis/database). State is required for STATE/DISTRICT scope and district for DISTRICT scope. Cursors are bound to scope. Cache pages validate current eligibility/scores and fall back to a database window query when unavailable/incomplete/stale. Heatmaps group by state and district and use current_gti when gti is zero.
 
 ## Realtime events
 
-Socket.IO clients authenticate using `auth.token` or an `Authorization: Bearer <token>` handshake header.
+Both namespaces authenticate the handshake before connection using auth.token, an Authorization Bearer header, or query.token. JWT algorithms/keys and account state match HTTP authentication. Invalid clients are rejected/disconnected immediately; token expiry and account status changes disconnect established clients. Authenticated sockets automatically join user:<sub>, athlete:<sub>, and role:<role>; scouts and federation/super admins additionally join scouts. Competition-room subscriptions require owning organizer, assigned umpire, or administrator authority; athletes receive their own events through their personal room. Athlete-room subscriptions are self-only. Safety emits only to the authorized competition and affected-athlete room union; there is no namespace-wide medical broadcast. Roster events also use a room union for one delivery per socket.
 
-| Namespace         | Client subscriptions                            | Server events                                            |
-| ----------------- | ----------------------------------------------- | -------------------------------------------------------- |
-| `/ws/matchmaking` | `join:user`, `join:bracket`                     | `ROSTER_FORMED`                                          |
-| `/ws/events`      | `join:match`, `join:athlete`, `join:tournament` | `MATCH_PAUSE_ALERT`, `GTI_UPDATED`, `SCOUT_TALENT_ALERT` |
+| Namespace         | Client subscriptions                                            | Server events                                            |
+| ----------------- | --------------------------------------------------------------- | -------------------------------------------------------- |
+| `/ws/matchmaking` | `join:user`, `join:bracket`                                     | `ROSTER_FORMED`                                          |
+| `/ws/events`      | `join:match`, `join:athlete`, `join:tournament`, `join:bracket` | `MATCH_PAUSE_ALERT`, `GTI_UPDATED`, `SCOUT_TALENT_ALERT` |
 
 Redis backs the Socket.IO adapter so events can fan out across application instances.
 
@@ -305,6 +331,10 @@ Pool leave uses a conditional QUEUED-to-CANCELLED update, so a worker claim cann
 
 Nearby results remain a flat array ordered by unrounded distance, then UUID. Pass the last returned UUID as `cursor` with the same search coordinates, radius, and sport; an invalid or out-of-search cursor returns 400. PostGIS computes the cursor distance before applying this ordering. The Haversine fallback scans SQL bounding-box pages (including antimeridian and pole handling), calculates distances, and retains only the nearest requested results in memory. Its spherical distances are approximate compared with PostGIS geography distances.
 
+## Audit persistence
+
+Apply `20261105020000_security_measured_gti_admin` with `pnpm prisma:deploy`. It adds wearable sessions, verified results, drill signature provenance, safety acknowledgement/context, and moderation fields. Database triggers capture drill submissions, identity relink attempts, registrations, actual safety pauses, and verified results as audit snapshots; blocked duplicate registrations and admin actions are also logged. Existing evidence is backfilled, with historical pauses lacking match context marked as unconfirmed. Audit UPDATE, DELETE, and TRUNCATE are rejected, and historical actor IDs survive account deletion. Audit snapshots omit raw government IDs, identity hashes, and medical vitals.
+
 ## Quality checks
 
 ```bash
@@ -314,7 +344,7 @@ pnpm test
 pnpm build
 ```
 
-The migration suite executes the committed migration chain in embedded Postgres/PostGIS (PGlite), including geometry triggers, foreign keys, spatial indexes, and the production discovery/heatmap queries. Auth/passport HTTP tests use real controllers, validation, guards, JWT signature verification, and services with in-memory database/cache doubles. Health HTTP tests inject dependency failures. These checks do not establish native PostgreSQL/Redis connectivity, a live Supabase session, or full application startup; verify those against the deployment services.
+The migration suite executes the committed migration chain in embedded Postgres/PostGIS (PGlite), including geometry/audit triggers, foreign keys, spatial indexes, and production discovery/heatmap/leaderboard SQL. HTTP tests use real controllers, validation, guards, JWT verification, and services with database/cache/queue doubles, including retry injection and measured GTI pipelines. Socket tests use actual loopback Socket.IO connections for anonymous rejection, room access, and deduplicated delivery. Health tests inject dependency failures. These checks do not establish native PostgreSQL/Redis connectivity, a live Supabase session, or full application startup; verify those against the deployment services.
 
 ## License
 

@@ -8,5 +8,6 @@ import { HealthService } from './health.service';
   imports: [PrismaModule, RedisModule],
   controllers: [HealthController],
   providers: [HealthService],
+  exports: [HealthService],
 })
 export class HealthModule {}

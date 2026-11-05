@@ -101,7 +101,14 @@ describe('Phase 2: Identity, Anti-Account Reset, & Passport Tests', () => {
     });
 
     it('blocks profile takeover when Gov ID matches but contact does not', async () => {
+      const auditEvents: Prisma.SecurityAuditLogCreateInput[] = [];
       const takeoverPrisma = {
+        securityAuditLog: {
+          create: async ({ data }: { data: Prisma.SecurityAuditLogCreateInput }) => {
+            auditEvents.push(data);
+            return data;
+          },
+        },
         identityVerification: {
           findUnique: async () => ({
             id: 'identity-id',
@@ -139,6 +146,8 @@ describe('Phase 2: Identity, Anti-Account Reset, & Passport Tests', () => {
         }),
         ConflictException,
       );
+      assert.strictEqual(auditEvents.length, 1);
+      assert.strictEqual(auditEvents[0]?.action, 'GOV_ID_DUPLICATE_ATTEMPT');
     });
 
     it('prevents public registration from escalating to privileged roles', async () => {

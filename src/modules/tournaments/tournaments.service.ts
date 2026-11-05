@@ -249,6 +249,8 @@ export class TournamentsService {
       const existing = await transaction.tournament.findUnique({ where: { id } });
       if (!existing) throw new NotFoundException('Tournament not found');
       assertTournamentOwner(existing.organizerId, actor);
+      if (existing.status === TournamentStatus.SUSPENDED && actor.role === 'ORGANIZER')
+        throw new BadRequestException('Suspended tournaments require administrator moderation');
       return transaction.tournament.update({
         where: { id },
         data: this.tournamentData(dto, existing),

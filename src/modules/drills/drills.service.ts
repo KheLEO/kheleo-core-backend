@@ -1,8 +1,8 @@
-import { Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { ConflictException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../infrastructure/database/prisma.service';
 import { QueueProducerService } from '../../infrastructure/queues/queue-producer.service';
 import { SubmitDrillDto } from './dto/submit-drill.dto';
-import { Prisma } from '@prisma/client';
+import { DrillSignatureVersion, Prisma } from '@prisma/client';
 import { runSerializableTransaction } from '../../common/database/serializable-transaction';
 
 export interface DrillSubmissionResult {
@@ -24,20 +24,30 @@ export class DrillsService {
     athleteId: string,
     dto: SubmitDrillDto,
     signatureHash: string,
+    signatureVersion: DrillSignatureVersion = DrillSignatureVersion.LEGACY,
   ): Promise<DrillSubmissionResult> {
-    const profile = await this.prisma.athleteProfile.findUnique({
-      where: { userId: athleteId },
-      select: { id: true, userId: true, biomechanicalScore: true },
-    });
-
-    if (!profile) {
-      throw new NotFoundException(`Athlete profile not found for user ${athleteId}.`);
-    }
-
     const posturePointsAwarded = Math.round(dto.form_score * 10);
     const currentBiomechanicalScore = await runSerializableTransaction(
       this.prisma,
       async (transaction) => {
+        const profile = await transaction.athleteProfile.findUnique({
+          where: { userId: athleteId },
+          select: { id: true, userId: true, biomechanicalScore: true },
+        });
+
+        if (!profile) {
+          throw new NotFoundException(`Athlete profile not found for user ${athleteId}.`);
+        }
+
+        if (
+          await transaction.drillSubmission.findFirst({
+            where: {
+              signatureHash: { equals: signatureHash.trim().toLowerCase(), mode: 'insensitive' },
+            },
+            select: { id: true },
+          })
+        )
+          throw new ConflictException('Drill signature was already submitted');
         const previousSubmissionsCount = await transaction.drillSubmission.count({
           where: { athleteId: profile.userId },
         });
@@ -57,7 +67,9 @@ export class DrillsService {
             framesAnalyzed: dto.frames_analyzed,
             flawFlags: (dto.flaw_flags ?? []) as Prisma.InputJsonValue,
             jointAnglesSummary: (dto.joint_angles_summary ?? {}) as Prisma.InputJsonValue,
-            signatureHash,
+            signatureHash: signatureHash.trim().toLowerCase(),
+            signatureVersion,
+            metadataVerified: signatureVersion !== DrillSignatureVersion.LEGACY,
           },
         });
 
@@ -74,12 +86,12 @@ export class DrillsService {
 
     // 5. Enqueue GTI recalculation BullMQ job
     await this.queueProducer.enqueueGtiRecalculation({
-      athleteId: profile.userId,
+      athleteId,
       trigger: 'DRILL_SUBMISSION',
     });
 
     this.logger.log(
-      `Drill submitted for athlete ${profile.userId}: formScore=${dto.form_score}, newBiomechanicalScore=${currentBiomechanicalScore}`,
+      `Drill submitted for athlete ${athleteId}: formScore=${dto.form_score}, newBiomechanicalScore=${currentBiomechanicalScore}`,
     );
 
     return {

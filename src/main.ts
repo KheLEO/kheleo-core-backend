@@ -36,6 +36,7 @@ async function bootstrap(): Promise<void> {
       'Authorization',
       'Idempotency-Key',
       'X-Drill-Signature',
+      'X-Drill-Signed-Fields',
       'X-Device-Signature',
       'X-Timestamp',
       'If-None-Match',

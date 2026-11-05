@@ -19,6 +19,9 @@ import { HeatmapsModule } from './modules/heatmaps/heatmaps.module';
 import { CommonModule } from './common/common.module';
 import { HealthModule } from './modules/health/health.module';
 
+import { AdminModule } from './modules/admin/admin.module';
+import { LeaderboardsModule } from './modules/leaderboards/leaderboards.module';
+
 @Module({
   imports: [
     // Infrastructure
@@ -29,6 +32,8 @@ import { HealthModule } from './modules/health/health.module';
     RealtimeModule,
     CommonModule,
     HealthModule,
+    AdminModule,
+    LeaderboardsModule,
 
     // Domain Modules
     AuthModule,

@@ -59,6 +59,7 @@ enum TournamentStatus {
   IN_PROGRESS
   COMPLETED
   CANCELLED
+  SUSPENDED
 }
 
 enum BracketType {
@@ -132,7 +133,9 @@ model User {
   drillSubmissions       DrillSubmission[]
   healthAlerts           HealthAlert[]
   scoutAlerts            ScoutAlert[]
-  securityAuditLogs      SecurityAuditLog[]
+  wearableSessions       WearableSession[]
+  reportedMatchResults   VerifiedMatchResult[]   @relation("ResultReporter")
+  acknowledgedAlerts     HealthAlert[]           @relation("AlertAcknowledger")
 
   @@index([role, isActive])
   @@map("users")
@@ -267,6 +270,7 @@ model Tournament {
   startDate            DateTime @map("start_date") @db.Timestamptz
   endDate              DateTime @map("end_date") @db.Timestamptz
   rulesConfig          Json     @default("{}") @map("rules_config") @db.JsonB
+  isFeatured           Boolean  @default(false) @map("is_featured")
 
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
   updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz
@@ -304,6 +308,7 @@ model Bracket {
   teams                  Team[]
   freeAgentRegistrations FreeAgentRegistration[]
   healthAlerts           HealthAlert[]
+  verifiedResults        VerifiedMatchResult[]
 
   @@index([tournamentId, roundOrder])
   @@map("brackets")
@@ -437,11 +442,13 @@ model Match {
   pauseReason    String?     @map("pause_reason") @db.VarChar(255)
   pausedAt       DateTime?   @map("paused_at") @db.Timestamptz
 
-  bracket    Bracket @relation(fields: [bracketId], references: [id], onDelete: Cascade)
-  teamA      Team    @relation("MatchTeamA", fields: [teamAId], references: [id])
-  teamB      Team    @relation("MatchTeamB", fields: [teamBId], references: [id])
-  umpire     User?   @relation("UmpireMatches", fields: [umpireId], references: [id])
-  winnerTeam Team?   @relation("MatchWinner", fields: [winnerTeamId], references: [id])
+  bracket        Bracket              @relation(fields: [bracketId], references: [id], onDelete: Cascade)
+  teamA          Team                 @relation("MatchTeamA", fields: [teamAId], references: [id])
+  teamB          Team                 @relation("MatchTeamB", fields: [teamBId], references: [id])
+  umpire         User?                @relation("UmpireMatches", fields: [umpireId], references: [id])
+  winnerTeam     Team?                @relation("MatchWinner", fields: [winnerTeamId], references: [id])
+  healthAlerts   HealthAlert[]
+  verifiedResult VerifiedMatchResult?
 
   @@index([bracketId, status])
   @@index([teamAId, teamBId])
@@ -449,16 +456,18 @@ model Match {
 }
 
 model DrillSubmission {
-  id                 String   @id @default(uuid()) @db.Uuid
-  athleteId          String   @map("athlete_id") @db.Uuid
-  sport              String   @db.VarChar(50)
-  drillType          String   @map("drill_type") @db.VarChar(64)
-  formScore          Float    @map("form_score")
-  framesAnalyzed     Int      @map("frames_analyzed")
-  flawFlags          Json     @map("flaw_flags") @db.JsonB
-  jointAnglesSummary Json     @map("joint_angles_summary") @db.JsonB
-  signatureHash      String   @unique @map("signature_hash") @db.VarChar(64)
-  createdAt          DateTime @default(now()) @map("created_at") @db.Timestamptz
+  id                 String                @id @default(uuid()) @db.Uuid
+  athleteId          String                @map("athlete_id") @db.Uuid
+  sport              String                @db.VarChar(50)
+  drillType          String                @map("drill_type") @db.VarChar(64)
+  formScore          Float                 @map("form_score")
+  framesAnalyzed     Int                   @map("frames_analyzed")
+  flawFlags          Json                  @map("flaw_flags") @db.JsonB
+  jointAnglesSummary Json                  @map("joint_angles_summary") @db.JsonB
+  signatureHash      String                @unique @map("signature_hash") @db.VarChar(64)
+  signatureVersion   DrillSignatureVersion @default(LEGACY) @map("signature_version")
+  metadataVerified   Boolean               @default(false) @map("metadata_verified")
+  createdAt          DateTime              @default(now()) @map("created_at") @db.Timestamptz
 
   athlete User @relation(fields: [athleteId], references: [id], onDelete: Cascade)
 
@@ -468,21 +477,27 @@ model DrillSubmission {
 }
 
 model HealthAlert {
-  id              String        @id @default(uuid()) @db.Uuid
-  athleteId       String        @map("athlete_id") @db.Uuid
-  tournamentId    String?       @map("tournament_id") @db.Uuid
-  bracketId       String?       @map("bracket_id") @db.Uuid
-  severity        AlertSeverity @default(NORMAL)
-  heartRate       Float         @map("heart_rate")
-  spo2            Float         @map("spo2")
-  skinTemperature Float         @map("skin_temperature")
-  triggerReason   String        @map("trigger_reason")
-  matchPaused     Boolean       @default(false) @map("match_paused")
-  createdAt       DateTime      @default(now()) @map("created_at") @db.Timestamptz
+  id               String          @id @default(uuid()) @db.Uuid
+  athleteId        String          @map("athlete_id") @db.Uuid
+  tournamentId     String?         @map("tournament_id") @db.Uuid
+  bracketId        String?         @map("bracket_id") @db.Uuid
+  severity         AlertSeverity   @default(NORMAL)
+  heartRate        Float           @map("heart_rate")
+  spo2             Float           @map("spo2")
+  skinTemperature  Float           @map("skin_temperature")
+  triggerReason    String          @map("trigger_reason")
+  matchPaused      Boolean         @default(false) @map("match_paused")
+  matchId          String?         @map("match_id") @db.Uuid
+  acknowledgedAt   DateTime?       @map("acknowledged_at") @db.Timestamptz
+  acknowledgedById String?         @map("acknowledged_by_id") @db.Uuid
+  source           TelemetrySource @default(DEVICE_HMAC)
+  createdAt        DateTime        @default(now()) @map("created_at") @db.Timestamptz
 
-  athlete    User        @relation(fields: [athleteId], references: [id], onDelete: Cascade)
-  tournament Tournament? @relation(fields: [tournamentId], references: [id], onDelete: SetNull)
-  bracket    Bracket?    @relation(fields: [bracketId], references: [id], onDelete: SetNull)
+  athlete        User        @relation(fields: [athleteId], references: [id], onDelete: Cascade)
+  match          Match?      @relation(fields: [matchId], references: [id], onDelete: SetNull)
+  acknowledgedBy User?       @relation("AlertAcknowledger", fields: [acknowledgedById], references: [id], onDelete: SetNull)
+  tournament     Tournament? @relation(fields: [tournamentId], references: [id], onDelete: SetNull)
+  bracket        Bracket?    @relation(fields: [bracketId], references: [id], onDelete: SetNull)
 
   @@index([athleteId, createdAt(sort: Desc)])
   @@index([severity, matchPaused])
@@ -567,9 +582,49 @@ model SecurityAuditLog {
   metadata   Json?    @db.JsonB
   createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz
 
-  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
-
   @@index([userId, createdAt(sort: Desc)])
   @@index([action, createdAt(sort: Desc)])
   @@map("security_audit_logs")
+}
+
+enum DrillSignatureVersion {
+  LEGACY
+  FULL
+  FULL_V2
+}
+
+enum TelemetrySource {
+  DEVICE_HMAC
+  ATHLETE_JWT
+}
+
+model WearableSession {
+  id          String          @id @default(uuid()) @db.Uuid
+  athleteId   String          @map("athlete_id") @db.Uuid
+  sessionDate DateTime        @map("session_date") @db.Date
+  source      TelemetrySource
+  observedAt  DateTime        @default(now()) @map("observed_at") @db.Timestamptz
+  athlete     User            @relation(fields: [athleteId], references: [id], onDelete: Cascade)
+
+  @@unique([athleteId, sessionDate])
+  @@map("wearable_sessions")
+}
+
+model VerifiedMatchResult {
+  id                    String   @id @default(uuid()) @db.Uuid
+  bracketId             String   @map("bracket_id") @db.Uuid
+  matchId               String?  @unique @map("match_id") @db.Uuid
+  reportedById          String   @map("reported_by_id") @db.Uuid
+  requestKey            String   @unique @map("request_key") @db.VarChar(64)
+  fingerprint           String   @db.VarChar(64)
+  participantAthleteIds String[] @map("participant_athlete_ids") @db.Uuid
+  winnerAthleteIds      String[] @map("winner_athlete_ids") @db.Uuid
+  createdAt             DateTime @default(now()) @map("created_at") @db.Timestamptz
+  bracket               Bracket  @relation(fields: [bracketId], references: [id], onDelete: Cascade)
+  match                 Match?   @relation(fields: [matchId], references: [id], onDelete: SetNull)
+  reportedBy            User     @relation("ResultReporter", fields: [reportedById], references: [id])
+
+  @@index([bracketId, createdAt(sort: Desc)])
+  @@index([participantAthleteIds], type: Gin)
+  @@map("verified_match_results")
 }

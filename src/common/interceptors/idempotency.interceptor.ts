@@ -13,6 +13,8 @@ import { FastifyRequest, FastifyReply } from 'fastify';
 import * as crypto from 'node:crypto';
 import { Reflector } from '@nestjs/core';
 
+import { canonicalJson } from '../crypto/canonical-json';
+
 export const FRESH_IDEMPOTENCY_KEY = 'idempotency:require-fresh-execution';
 
 interface IdempotentRequest extends FastifyRequest {
@@ -23,24 +25,6 @@ interface CachedIdempotentResponse {
   readonly fingerprint: string;
   readonly statusCode: number;
   readonly body: unknown;
-}
-
-function canonicalJson(value: unknown): string {
-  if (value === null || typeof value !== 'object') {
-    const serialized = JSON.stringify(value);
-    if (serialized === undefined) {
-      throw new BadRequestException('Request body must contain valid JSON values.');
-    }
-    return serialized;
-  }
-  if (Array.isArray(value)) {
-    return `[${value.map((item: unknown) => canonicalJson(item)).join(',')}]`;
-  }
-  const record = value as Readonly<Record<string, unknown>>;
-  return `{${Object.keys(record)
-    .sort()
-    .map((key: string) => `${JSON.stringify(key)}:${canonicalJson(record[key])}`)
-    .join(',')}}`;
 }
 
 @Injectable()

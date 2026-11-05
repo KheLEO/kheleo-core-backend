@@ -20,6 +20,7 @@ function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
 
 @Injectable()
 export class JwtStrategy extends PassportStrategy(Strategy) {
+  private readonly verifyToken: (token: string) => unknown;
   constructor(
     configService: ConfigService,
     private readonly prisma: PrismaService,
@@ -61,6 +62,32 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
         done(new UnauthorizedException('Invalid or expired authentication token'));
       },
     });
+    this.verifyToken = (token: string): unknown => {
+      const decoded = jwt.decode(token, { complete: true });
+      if (decoded?.header.alg === 'RS256' && local.algorithm === 'RS256') {
+        return jwt.verify(token, local.verificationKey, { algorithms: ['RS256'] });
+      }
+      if (decoded?.header.alg === 'HS256') {
+        for (const secret of hmacSecrets) {
+          try {
+            return jwt.verify(token, secret, { algorithms: ['HS256'] });
+          } catch {
+            /* Try the next configured authority. */
+          }
+        }
+      }
+      throw new UnauthorizedException('Invalid or expired authentication token');
+    };
+  }
+
+  async authenticateToken(token: string): Promise<JwtTokenPayload> {
+    let payload: unknown;
+    try {
+      payload = this.verifyToken(token);
+    } catch {
+      throw new UnauthorizedException('Invalid or expired authentication token');
+    }
+    return this.validate(payload);
   }
 
   async validate(payload: unknown): Promise<JwtTokenPayload> {

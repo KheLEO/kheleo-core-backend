@@ -9,12 +9,16 @@ import {
   UseGuards,
   UseInterceptors,
   ForbiddenException,
+  ParseUUIDPipe,
+  ParseEnumPipe,
 } from '@nestjs/common';
 import { GtiService, GtiComputationResult } from './gti.service';
 import { AuthenticatedJwtUser, JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
-import { UserRole } from '@prisma/client';
+import { SportType, UserRole } from '@prisma/client';
 import { IdempotencyInterceptor } from '../../common/interceptors/idempotency.interceptor';
+
+import { LeaderboardPage, LeaderboardsQueryDto } from '../leaderboards/leaderboards.dto';
 
 @Controller('gti')
 export class GtiController {
@@ -25,7 +29,7 @@ export class GtiController {
   @UseGuards(JwtAuthGuard)
   @UseInterceptors(IdempotencyInterceptor)
   async recalculate(
-    @Param('athleteId') athleteId: string,
+    @Param('athleteId', ParseUUIDPipe) athleteId: string,
     @CurrentUser() user: AuthenticatedJwtUser,
   ): Promise<GtiComputationResult> {
     const privilegedRoles: readonly string[] = [UserRole.FEDERATION_ADMIN, UserRole.SUPER_ADMIN];
@@ -35,10 +39,15 @@ export class GtiController {
     return this.gtiService.recalculateAthleteGti(athleteId);
   }
 
+  @Get('leaderboards')
+  async leaderboards(@Query() query: LeaderboardsQueryDto): Promise<LeaderboardPage> {
+    return this.gtiService.getLeaderboards(query);
+  }
+
   @Get('rank/:sport/:athleteId')
   async getRank(
-    @Param('sport') sport: string,
-    @Param('athleteId') athleteId: string,
+    @Param('sport', new ParseEnumPipe(SportType)) sport: SportType,
+    @Param('athleteId', ParseUUIDPipe) athleteId: string,
     @Query('district') district?: string,
   ): Promise<{ sport: string; athleteId: string; rank: number | null }> {
     const rank = await this.gtiService.getLeaderboardRank(sport, athleteId, district);
