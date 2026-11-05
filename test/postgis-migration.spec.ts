@@ -53,9 +53,12 @@ describe('PostGIS baseline migration', () => {
     return athleteId;
   }
 
-  async function createTournament(lat: number, lng: number): Promise<string> {
+  async function createTournament(
+    lat: number,
+    lng: number,
+    tournamentId: string = randomUUID(),
+  ): Promise<string> {
     const userId = await createUser();
-    const tournamentId = randomUUID();
     await database.query(
       `
       INSERT INTO tournaments (
@@ -259,5 +262,79 @@ describe('PostGIS baseline migration', () => {
       profileId,
     ]);
     assert.deepEqual(result.rows, [{ date_of_birth: null, gender: null, primary_sport: null }]);
+  });
+  it('paginates PostGIS by exact distance then UUID, including zero-distance ties and smaller UUIDs on later pages', async () => {
+    const ids = [
+      '99999999-9999-4999-8999-999999999999',
+      'ffffffff-ffff-4fff-8fff-ffffffffffff',
+      '00000000-0000-4000-8000-000000000001',
+    ];
+    await createTournament(0, 0, ids[0]);
+    await createTournament(0, 0, ids[1]);
+    await createTournament(0, 0.1, ids[2]);
+    const prisma = {
+      $queryRaw: async (query: Prisma.Sql): Promise<unknown> =>
+        (await database.query(query.text, query.values)).rows,
+    };
+    const repository = new PostgisSpatialRepository(prisma as unknown as PrismaService);
+    const observed: string[] = [];
+    let cursor: string | undefined;
+    for (let page = 0; page < 4; page += 1) {
+      const rows = await repository.findTournamentsWithinRadius(
+        { lat: 0, lng: 0 },
+        50,
+        SportType.CRICKET,
+        1,
+        cursor,
+      );
+      observed.push(...rows.map((row) => row.id));
+      if (!rows[0]) break;
+      cursor = rows[0].id;
+    }
+    assert.deepEqual(observed, ids);
+    await assert.rejects(
+      repository.findTournamentsWithinRadius(
+        { lat: 0, lng: 0 },
+        50,
+        SportType.CRICKET,
+        1,
+        randomUUID(),
+      ),
+      /Cursor tournament is not in the current nearby search/,
+    );
+  });
+
+  it('keeps MATCHED intact when a conditional leave runs after a committed worker update', async () => {
+    const userId = await createUser();
+    const tournamentId = await createTournament(10, 10);
+    const bracketId = randomUUID();
+    const registrationId = randomUUID();
+    await database.query('INSERT INTO brackets (id, tournament_id, name) VALUES ($1, $2, $3)', [
+      bracketId,
+      tournamentId,
+      'Concurrency test',
+    ]);
+    await database.query(
+      'INSERT INTO free_agent_registrations (id, user_id, tournament_id, bracket_id, sport, primary_role) VALUES ($1, $2, $3, $4, $5, $6)',
+      [registrationId, userId, tournamentId, bracketId, 'CRICKET', 'BATSMAN'],
+    );
+    const before = await database.query<{ readonly status: string }>(
+      'SELECT status FROM free_agent_registrations WHERE id = $1',
+      [registrationId],
+    );
+    assert.equal(before.rows[0]?.status, 'QUEUED');
+    await database.query("UPDATE free_agent_registrations SET status = 'MATCHED' WHERE id = $1", [
+      registrationId,
+    ]);
+    const leave = await database.query(
+      "UPDATE free_agent_registrations SET status = 'CANCELLED' WHERE id = $1 AND user_id = $2 AND status = 'QUEUED' RETURNING id",
+      [registrationId, userId],
+    );
+    assert.equal(leave.rows.length, 0);
+    const after = await database.query<{ readonly status: string }>(
+      'SELECT status FROM free_agent_registrations WHERE id = $1',
+      [registrationId],
+    );
+    assert.equal(after.rows[0]?.status, 'MATCHED');
   });
 });

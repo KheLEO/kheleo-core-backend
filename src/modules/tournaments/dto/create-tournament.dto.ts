@@ -1,78 +1,102 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import {
+  IsDateString,
   IsEnum,
   IsInt,
-  IsLatitude,
-  IsLongitude,
   IsNotEmpty,
   IsNumber,
-  IsOptional,
   IsString,
+  Max,
   Min,
+  ValidateIf,
 } from 'class-validator';
-import { SportType } from '@prisma/client';
+import { SportType, TournamentStatus } from '@prisma/client';
+import { FieldAliases } from '../../../common/decorators/field-aliases.decorator';
 
 export class CreateTournamentDto {
-  @ApiProperty({ example: 'Varanasi Premier Grassroots Cup' })
+  @ApiProperty()
   @IsString()
   @IsNotEmpty()
+  @FieldAliases('title')
   readonly name!: string;
 
-  @ApiProperty({ enum: SportType, example: SportType.CRICKET })
+  @ApiProperty({ enum: SportType })
   @IsEnum(SportType)
-  @IsNotEmpty()
   readonly sport!: SportType;
 
-  @ApiPropertyOptional({ example: 0.0 })
-  @IsOptional()
+  @ApiPropertyOptional({ enum: TournamentStatus })
+  @ValidateIf((_object: unknown, value: unknown) => value !== undefined)
+  @IsEnum(TournamentStatus)
+  readonly status?: TournamentStatus;
+
+  @ApiPropertyOptional({ minimum: 0, maximum: 100 })
+  @ValidateIf((_object: unknown, value: unknown) => value !== undefined)
   @IsNumber()
+  @Min(0)
+  @Max(100)
+  @FieldAliases('min_gti')
   readonly minGti?: number;
 
-  @ApiPropertyOptional({ example: 100.0 })
-  @IsOptional()
+  @ApiPropertyOptional({ minimum: 0, maximum: 100 })
+  @ValidateIf((_object: unknown, value: unknown) => value !== undefined)
   @IsNumber()
+  @Min(0)
+  @Max(100)
+  @FieldAliases('max_gti')
   readonly maxGti?: number;
 
-  @ApiProperty({ example: 16 })
+  @ApiProperty({ minimum: 2 })
   @IsInt()
   @Min(2)
+  @FieldAliases('max_teams')
   readonly maxTeams!: number;
 
-  @ApiProperty({ example: 11 })
+  @ApiProperty({ minimum: 1, maximum: 30 })
   @IsInt()
   @Min(1)
+  @Max(30)
+  @FieldAliases('team_size')
   readonly teamSize!: number;
 
-  @ApiPropertyOptional({ example: 25000.0 })
-  @IsOptional()
+  @ApiPropertyOptional({ minimum: 0 })
+  @ValidateIf((_object: unknown, value: unknown) => value !== undefined)
   @IsNumber()
+  @Min(0)
+  @FieldAliases('prize_pool')
   readonly prizePool?: number;
 
-  @ApiProperty({ example: 'Sigra Stadium, Varanasi' })
+  @ApiProperty()
   @IsString()
   @IsNotEmpty()
+  @FieldAliases('venue_name')
   readonly venueName!: string;
 
-  @ApiProperty({ example: 25.3176 })
-  @IsLatitude()
+  @ApiProperty({ minimum: -90, maximum: 90 })
+  @IsNumber()
+  @Min(-90)
+  @Max(90)
+  @FieldAliases('venue_lat')
   readonly venueLat!: number;
 
-  @ApiProperty({ example: 82.9739 })
-  @IsLongitude()
+  @ApiProperty({ minimum: -180, maximum: 180 })
+  @IsNumber()
+  @Min(-180)
+  @Max(180)
+  @FieldAliases('venue_lng')
   readonly venueLng!: number;
 
-  @ApiProperty({ example: '2026-10-25T18:00:00.000Z' })
-  @IsString()
-  @IsNotEmpty()
+  @ApiProperty()
+  @IsDateString({ strict: true })
+  @FieldAliases('registration_deadline')
   readonly registrationDeadline!: string;
 
-  @ApiProperty({ example: '2026-11-01T09:00:00.000Z' })
-  @IsString()
-  @IsNotEmpty()
+  @ApiProperty()
+  @IsDateString({ strict: true })
+  @FieldAliases('start_date')
   readonly startDate!: string;
 
-  @ApiProperty({ example: '2026-11-05T18:00:00.000Z' })
-  @IsString()
-  @IsNotEmpty()
+  @ApiProperty()
+  @IsDateString({ strict: true })
+  @FieldAliases('end_date')
   readonly endDate!: string;
 }

@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { BadRequestException, Injectable } from '@nestjs/common';
 import { PrismaService } from './prisma.service';
 import { Prisma, SportType } from '@prisma/client';
 
@@ -42,45 +42,38 @@ export class PostgisSpatialRepository {
     cursorId?: string,
   ): Promise<readonly SpatialTournamentRow[]> {
     const radiusMeters = radiusKm * 1000;
-
-    const sportFilter = sport ? Prisma.sql`AND sport = ${sport}::"SportType"` : Prisma.empty;
-    const cursorFilter = cursorId ? Prisma.sql`AND id > ${cursorId}::uuid` : Prisma.empty;
-
-    const results = await this.prisma.$queryRaw<SpatialTournamentRow[]>(Prisma.sql`
-      SELECT
-        id,
-        COALESCE(NULLIF(name, ''), title, 'Tournament') AS name,
-        title,
-        sport,
-        status,
-        min_gti::float AS min_gti,
-        max_gti::float AS max_gti,
-        venue_name,
-        venue_lat,
-        venue_lng,
-        prize_pool::float AS prize_pool,
-        team_size,
-        max_teams,
-        registration_deadline,
-        start_date,
-        ST_Distance(
-          location::geography,
-          ST_SetSRID(ST_MakePoint(${point.lng}, ${point.lat}), 4326)::geography
-        ) / 1000.0 AS distance_km
-      FROM tournaments
-      WHERE status = 'REGISTRATION_OPEN'
-        AND location IS NOT NULL
-        AND ST_DWithin(
-          location::geography,
-          ST_SetSRID(ST_MakePoint(${point.lng}, ${point.lat}), 4326)::geography,
-          ${radiusMeters}
-        )
-        ${sportFilter}
-        ${cursorFilter}
-      ORDER BY distance_km ASC
-      LIMIT ${limit}
+    const sportFilter = sport ? Prisma.sql`AND t.sport = ${sport}::"SportType"` : Prisma.empty;
+    const origin = Prisma.sql`ST_SetSRID(ST_MakePoint(${point.lng}, ${point.lat}), 4326)::geography`;
+    let cursorDistance: number | undefined;
+    if (cursorId) {
+      const cursor = await this.prisma.$queryRaw<
+        Array<{ readonly distance_km: number }>
+      >(Prisma.sql`
+        SELECT ST_Distance(t.location::geography, ${origin}) / 1000.0 AS distance_km
+        FROM tournaments t WHERE t.id = ${cursorId}::uuid AND t.status = 'REGISTRATION_OPEN'
+          AND t.location IS NOT NULL AND ST_DWithin(t.location::geography, ${origin}, ${radiusMeters}) ${sportFilter}
+      `);
+      if (!cursor[0])
+        throw new BadRequestException('Cursor tournament is not in the current nearby search');
+      cursorDistance = cursor[0].distance_km;
+    }
+    const cursorFilter =
+      cursorDistance !== undefined
+        ? Prisma.sql`
+      WHERE distance_km > ${cursorDistance}::double precision
+        OR (distance_km = ${cursorDistance}::double precision AND id > ${cursorId}::uuid)
+    `
+        : Prisma.empty;
+    return this.prisma.$queryRaw<SpatialTournamentRow[]>(Prisma.sql`
+      WITH measured AS (
+        SELECT t.id, COALESCE(NULLIF(t.name, ''), t.title, 'Tournament') AS name, t.title, t.sport, t.status,
+          t.min_gti::float AS min_gti, t.max_gti::float AS max_gti, t.venue_name, t.venue_lat, t.venue_lng,
+          t.prize_pool::float AS prize_pool, t.team_size, t.max_teams, t.registration_deadline, t.start_date,
+          ST_Distance(t.location::geography, ${origin}) / 1000.0 AS distance_km
+        FROM tournaments t WHERE t.status = 'REGISTRATION_OPEN' AND t.location IS NOT NULL
+          AND ST_DWithin(t.location::geography, ${origin}, ${radiusMeters}) ${sportFilter}
+      )
+      SELECT * FROM measured ${cursorFilter} ORDER BY distance_km ASC, id ASC LIMIT ${limit}
     `);
-
-    return results;
   }
 }

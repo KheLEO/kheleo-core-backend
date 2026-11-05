@@ -1,51 +1,60 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsEnum, IsInt, IsNotEmpty, IsNumber, IsOptional, IsString, Min } from 'class-validator';
+import {
+  IsEnum,
+  IsInt,
+  IsNotEmpty,
+  IsNumber,
+  IsString,
+  Max,
+  Min,
+  ValidateIf,
+} from 'class-validator';
 import { BracketType } from '@prisma/client';
+import { FieldAliases } from '../../../common/decorators/field-aliases.decorator';
 
 export class CreateBracketDto {
-  @ApiProperty({ example: 'Under-19 Gold Tier' })
+  @ApiProperty()
   @IsString()
   @IsNotEmpty()
   readonly name!: string;
 
-  @ApiProperty({ example: 'GOLD' })
+  @ApiProperty()
   @IsString()
   @IsNotEmpty()
+  @FieldAliases('tier_name')
   readonly tierName!: string;
 
-  @ApiProperty({
-    example: 45.0,
-    description: 'Minimum GTI threshold for entry',
-  })
+  @ApiProperty({ minimum: 0, maximum: 100 })
   @IsNumber()
+  @Min(0)
+  @Max(100)
+  @FieldAliases('min_gti')
   readonly minGti!: number;
 
-  @ApiProperty({
-    example: 70.0,
-    description: 'Maximum GTI ceiling (Anti-Sandbagging limit)',
-  })
+  @ApiProperty({ minimum: 0, maximum: 100 })
   @IsNumber()
+  @Min(0)
+  @Max(100)
+  @FieldAliases('max_gti')
   readonly maxGti!: number;
 
-  @ApiPropertyOptional({
-    example: 500.0,
-    description: 'Registration entry fee',
-  })
-  @IsOptional()
+  @ApiPropertyOptional({ minimum: 0 })
+  @ValidateIf((_object: unknown, value: unknown) => value !== undefined)
   @IsNumber()
+  @Min(0)
+  @FieldAliases('entry_fee')
   readonly entryFee?: number;
 
-  @ApiPropertyOptional({ example: 16, default: 16 })
-  @IsOptional()
+  @ApiPropertyOptional({ minimum: 2 })
+  @ValidateIf((_object: unknown, value: unknown) => value !== undefined)
   @IsInt()
   @Min(2)
+  @FieldAliases('max_teams')
   readonly maxTeams?: number;
 
-  @ApiPropertyOptional({
-    enum: BracketType,
-    default: BracketType.SINGLE_ELIMINATION,
-  })
-  @IsOptional()
+  @ApiPropertyOptional({ enum: BracketType })
+  @ValidateIf((_object: unknown, value: unknown) => value !== undefined)
   @IsEnum(BracketType)
+  @FieldAliases('bracket_type')
   readonly bracketType?: BracketType;
 }

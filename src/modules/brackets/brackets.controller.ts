@@ -1,6 +1,8 @@
 import {
   Controller,
   Post,
+  Patch,
+  Delete,
   Get,
   Param,
   Query,
@@ -21,8 +23,9 @@ import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { Roles } from '../../common/decorators/roles.decorator';
 import { RolesGuard } from '../../common/guards/roles.guard';
 import { IdempotencyInterceptor } from '../../common/interceptors/idempotency.interceptor';
-import { UserRole } from '@prisma/client';
+import { Bracket, UserRole } from '@prisma/client';
 import { CursorPaginationQueryDto } from '../../common/dto/cursor-pagination-query.dto';
+import { UpdateBracketDto } from './dto/update-bracket.dto';
 
 @ApiTags('Tournament Brackets & Anti-Sandbagging Gatekeeper')
 @Controller()
@@ -84,7 +87,35 @@ export class BracketsController {
   async createBracket(
     @Param('tournamentId', ParseUUIDPipe) tournamentId: string,
     @Body() dto: CreateBracketDto,
-  ) {
-    return this.bracketsService.createBracket(tournamentId, dto);
+    @CurrentUser() actor: AuthenticatedJwtUser,
+  ): Promise<Bracket> {
+    return this.bracketsService.createBracket(tournamentId, dto, actor);
+  }
+
+  @Patch('tournaments/:tournamentId/brackets/:bracketId')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.ORGANIZER, UserRole.FEDERATION_ADMIN, UserRole.SUPER_ADMIN)
+  @UseInterceptors(IdempotencyInterceptor)
+  @ApiBearerAuth()
+  async updateBracket(
+    @Param('tournamentId', ParseUUIDPipe) tournamentId: string,
+    @Param('bracketId', ParseUUIDPipe) bracketId: string,
+    @Body() dto: UpdateBracketDto,
+    @CurrentUser() actor: AuthenticatedJwtUser,
+  ): Promise<Bracket> {
+    return this.bracketsService.updateBracket(tournamentId, bracketId, dto, actor);
+  }
+
+  @Delete('tournaments/:tournamentId/brackets/:bracketId')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.ORGANIZER, UserRole.FEDERATION_ADMIN, UserRole.SUPER_ADMIN)
+  @UseInterceptors(IdempotencyInterceptor)
+  @ApiBearerAuth()
+  async deleteBracket(
+    @Param('tournamentId', ParseUUIDPipe) tournamentId: string,
+    @Param('bracketId', ParseUUIDPipe) bracketId: string,
+    @CurrentUser() actor: AuthenticatedJwtUser,
+  ): Promise<Bracket> {
+    return this.bracketsService.deleteBracket(tournamentId, bracketId, actor);
   }
 }

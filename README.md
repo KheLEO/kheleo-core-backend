@@ -221,10 +221,15 @@ All routes below are under `/api/v1`.
 | `POST /passport/:userId/sports`                                           | Owner or super admin + idempotency key                   | Add or update a sport record                                             |
 | `GET /passport/:userId/sports`                                            | Owner, scout, federation admin, or super admin           | List sport records with `limit` and `cursor_id`; respect scout opt-out   |
 | `GET /tournaments/nearby`                                                 | Public                                                   | Find open tournaments by `lat`, `lng`, and `radius_km`                   |
+| `GET /tournaments`                                                       | Public                                                   | List by sport, status, organizer_id, cursor_id, and limit                 |
 | `GET /tournaments/:id`                                                    | Public                                                   | Return tournament details and brackets                                   |
 | `POST /tournaments`                                                       | Organizer/admin + idempotency key                        | Create an open tournament                                                |
+| `PATCH /tournaments/:id`                                                  | Owning organizer or federation/super admin + idempotency key | Update tournament metadata and registration dates                    |
+| `DELETE /tournaments/:id`                                                 | Owning organizer or federation/super admin + idempotency key | Delete a tournament                                                   |
 | `GET /tournaments/:tournamentId/brackets`                                 | Public                                                   | List brackets with cursor pagination                                     |
 | `POST /tournaments/:tournamentId/brackets`                                | Organizer/admin + idempotency key                        | Create a bracket                                                         |
+| `PATCH /tournaments/:tournamentId/brackets/:bracketId`                     | Owning organizer or federation/super admin + idempotency key | Update a bracket                                                      |
+| `DELETE /tournaments/:tournamentId/brackets/:bracketId`                    | Owning organizer or federation/super admin + idempotency key | Delete a bracket                                                      |
 | `POST /tournaments/:tournamentId/brackets/:bracketId/register`            | JWT + idempotency key                                    | Register after GTI anti-sandbagging checks                               |
 | `POST /tournaments/:tournamentId/brackets/:bracketId/free-agents/join`    | JWT + idempotency key                                    | Join the role-balanced pool                                              |
 | `DELETE /tournaments/:tournamentId/brackets/:bracketId/free-agents/leave` | JWT + idempotency key                                    | Leave a queued pool entry                                                |
@@ -289,6 +294,16 @@ Socket.IO clients authenticate using `auth.token` or an `Authorization: Bearer <
 | `/ws/events`      | `join:match`, `join:athlete`, `join:tournament` | `MATCH_PAUSE_ALERT`, `GTI_UPDATED`, `SCOUT_TALENT_ALERT` |
 
 Redis backs the Socket.IO adapter so events can fan out across application instances.
+
+## Tournament and matchmaking rules
+
+Tournament/bracket create and patch bodies accept camelCase and snake_case fields. GTI bounds must satisfy `0 <= minGti <= maxGti <= 100`; fees and prize pools cannot be negative. Capacity must be at least two, and team size must be between one and thirty. Registration deadlines, starts, and ends must be valid ISO dates in that order. Partial updates validate the combined persisted and supplied values. Tournament/bracket mutations check the parent tournament owner inside their serializable transaction; federation and super admins can manage other organizers' events.
+
+Bracket registration and pool joins read current profile GTI, verified identity, bracket bounds, tournament status, and registration deadline inside the same serializable transaction as their writes. Serialization retries repeat those checks. Both above-ceiling responses contain `suggestedBracketId` and `suggestedBracketTier`, or null when no bracket contains the score. Team registration additionally checks tournament membership, captain authority, complete verified rosters, and current roster mean GTI.
+
+Pool leave uses a conditional QUEUED-to-CANCELLED update, so a worker claim cannot be overwritten. Matchmaking reads the complete eligible queue in batches, searches primary/secondary-role assignments and alternative rosters within the mean-GTI bounds, and prevents duplicate athletes. Each formed team stores its captain and emits one roster event after commit. One job continues forming teams until no valid roster or capacity remains. Exact GTI-constrained roster search can take more work for large or difficult pools; it has no arbitrary candidate-prefix or search-attempt cutoff.
+
+Nearby results remain a flat array ordered by unrounded distance, then UUID. Pass the last returned UUID as `cursor` with the same search coordinates, radius, and sport; an invalid or out-of-search cursor returns 400. PostGIS computes the cursor distance before applying this ordering. The Haversine fallback scans SQL bounding-box pages (including antimeridian and pole handling), calculates distances, and retains only the nearest requested results in memory. Its spherical distances are approximate compared with PostGIS geography distances.
 
 ## Quality checks
 

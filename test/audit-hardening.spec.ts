@@ -4,6 +4,7 @@ import {
   BadRequestException,
   CallHandler,
   ConflictException,
+  ForbiddenException,
   ExecutionContext,
 } from '@nestjs/common';
 import { firstValueFrom, of, throwError } from 'rxjs';
@@ -41,6 +42,20 @@ import { BracketsService } from '../src/modules/brackets/brackets.service';
 import { MatchmakingService } from '../src/modules/matchmaking/matchmaking.service';
 import { QueueProducerService } from '../src/infrastructure/queues/queue-producer.service';
 import { MatchmakingGateway } from '../src/modules/matchmaking/matchmaking.gateway';
+import {
+  createCompetitionApp,
+  createCompetitionFixture,
+  makeTournament,
+  TOURNAMENT_ID,
+  BRACKET_ID,
+  OTHER_OWNER_ID,
+} from './helpers/competition.fixture';
+import { Tournament } from '@prisma/client';
+import { PaginatedResponseDto } from '../src/common/dto/paginated-response.dto';
+import {
+  geographicBoundingBox,
+  haversineDistance,
+} from '../src/infrastructure/database/geo-distance';
 
 interface TestReply {
   statusCode: number;
@@ -1128,5 +1143,522 @@ describe('Phase 2 auth and frontend HTTP contracts', () => {
       matchmaking.joinPool(randomUUID(), randomUUID(), TEST_USER_ID, { primary_role: 'BOWLER' }),
       BadRequestException,
     );
+  });
+});
+
+const tournamentPayload = {
+  name: 'Campus Final',
+  sport: 'CRICKET',
+  min_gti: 10,
+  max_gti: 80,
+  max_teams: 8,
+  team_size: 4,
+  prize_pool: 1000,
+  venue_name: 'Campus Ground',
+  venue_lat: 19,
+  venue_lng: 72,
+  registration_deadline: '2099-01-01T00:00:00Z',
+  start_date: '2099-01-02T00:00:00Z',
+  end_date: '2099-01-03T00:00:00Z',
+};
+const bracketPayload = {
+  name: 'Silver',
+  tier_name: 'SILVER',
+  min_gti: 30,
+  max_gti: 70,
+  entry_fee: 0,
+  max_teams: 8,
+};
+
+type CompetitionFixture = ReturnType<typeof createCompetitionFixture>;
+async function withCompetitionApp(
+  operation: (fixture: CompetitionFixture, app: NestFastifyApplication) => Promise<void>,
+): Promise<void> {
+  const fixture = createCompetitionFixture();
+  fixture.auth.state.user.role = UserRole.ORGANIZER;
+  const app = await createCompetitionApp(fixture);
+  try {
+    await operation(fixture, app);
+  } finally {
+    await app.close();
+  }
+}
+
+async function seedTeam(
+  fixture: CompetitionFixture,
+  scores: readonly number[] = [50, 50, 50, 50],
+  captainId: string | null = TEST_USER_ID,
+  memberCaptain = false,
+): Promise<string> {
+  const team = await fixture.prisma.team.create({
+    data: { name: 'Campus XI', tournamentId: TOURNAMENT_ID, captainId, averageGti: 50 },
+  });
+  for (const [index, score] of scores.entries()) {
+    const userId = index === 0 ? TEST_USER_ID : randomUUID();
+    const profile = {
+      ...fixture.state.profiles.get(TEST_USER_ID)!,
+      id: randomUUID(),
+      userId,
+      currentGti: new Prisma.Decimal(score),
+    };
+    fixture.state.profiles.set(userId, profile);
+    await fixture.prisma.teamMember.create({
+      data: {
+        teamId: team.id,
+        userId,
+        athleteId: profile.id,
+        isCaptain: index === 0 && memberCaptain,
+      },
+    });
+  }
+  return team.id;
+}
+
+describe('Phase 3 organizer CRUD, transactional eligibility, and spatial regressions', () => {
+  it("rejects organizer creation of a bracket in another organizer's tournament with HTTP 403", async () => {
+    await withCompetitionApp(async (fixture, app) => {
+      fixture.state.tournaments.get(TOURNAMENT_ID)!.organizerId = OTHER_OWNER_ID;
+      const response = await app.inject({
+        method: 'POST',
+        url: `/api/v1/tournaments/${TOURNAMENT_ID}/brackets`,
+        headers: authenticatedHeaders(),
+        payload: bracketPayload,
+      });
+      assert.strictEqual(response.statusCode, 403, response.body);
+      assert.match(response.body, /You do not own this tournament/);
+      assert.strictEqual(fixture.state.brackets.size, 1);
+    });
+  });
+
+  it('supports owner tournament/bracket create, update, listing, and delete with snake_case DTOs', async () => {
+    await withCompetitionApp(async (fixture, app) => {
+      const created = await app.inject({
+        method: 'POST',
+        url: '/api/v1/tournaments',
+        headers: authenticatedHeaders(),
+        payload: tournamentPayload,
+      });
+      assert.strictEqual(created.statusCode, 201, created.body);
+      const tournament = created.json<StandardApiResponse<Tournament>>().data;
+      assert.strictEqual(tournament.organizerId, TEST_USER_ID);
+      const updated = await app.inject({
+        method: 'PATCH',
+        url: `/api/v1/tournaments/${tournament.id}`,
+        headers: authenticatedHeaders(),
+        payload: { prizePool: 2000, maxTeams: 10 },
+      });
+      assert.strictEqual(updated.statusCode, 200, updated.body);
+      assert.strictEqual(
+        Number(updated.json<StandardApiResponse<Tournament>>().data.prizePool),
+        2000,
+      );
+      const bracket = await app.inject({
+        method: 'POST',
+        url: `/api/v1/tournaments/${tournament.id}/brackets`,
+        headers: authenticatedHeaders(),
+        payload: bracketPayload,
+      });
+      assert.strictEqual(bracket.statusCode, 201, bracket.body);
+      const bracketId = bracket.json<StandardApiResponse<{ readonly id: string }>>().data.id;
+      const patched = await app.inject({
+        method: 'PATCH',
+        url: `/api/v1/tournaments/${tournament.id}/brackets/${bracketId}`,
+        headers: authenticatedHeaders(),
+        payload: { minGti: 35, maxGti: 75, entryFee: 10 },
+      });
+      assert.strictEqual(patched.statusCode, 200, patched.body);
+      assert.strictEqual(
+        Number(patched.json<StandardApiResponse<{ readonly minGti: number }>>().data.minGti),
+        35,
+      );
+      assert.strictEqual(
+        (
+          await app.inject({
+            method: 'DELETE',
+            url: `/api/v1/tournaments/${tournament.id}/brackets/${bracketId}`,
+            headers: authenticatedHeaders(),
+          })
+        ).statusCode,
+        200,
+      );
+      assert.strictEqual(fixture.state.brackets.has(bracketId), false);
+      assert.strictEqual(
+        (
+          await app.inject({
+            method: 'DELETE',
+            url: `/api/v1/tournaments/${tournament.id}`,
+            headers: authenticatedHeaders(),
+          })
+        ).statusCode,
+        200,
+      );
+      assert.strictEqual(fixture.state.tournaments.has(tournament.id), false);
+    });
+  });
+
+  it('enforces ownership on every tournament/bracket mutation and permits both administrator roles', async () => {
+    await withCompetitionApp(async (fixture, app) => {
+      fixture.state.tournaments.get(TOURNAMENT_ID)!.organizerId = OTHER_OWNER_ID;
+      const requests = [
+        {
+          method: 'PATCH' as const,
+          url: `/api/v1/tournaments/${TOURNAMENT_ID}`,
+          payload: { name: 'Changed' },
+        },
+        { method: 'DELETE' as const, url: `/api/v1/tournaments/${TOURNAMENT_ID}` },
+        {
+          method: 'PATCH' as const,
+          url: `/api/v1/tournaments/${TOURNAMENT_ID}/brackets/${BRACKET_ID}`,
+          payload: { name: 'Changed' },
+        },
+        {
+          method: 'DELETE' as const,
+          url: `/api/v1/tournaments/${TOURNAMENT_ID}/brackets/${BRACKET_ID}`,
+        },
+      ];
+      for (const request of requests) {
+        const response = await app.inject({ ...request, headers: authenticatedHeaders() });
+        assert.strictEqual(response.statusCode, 403, response.body);
+        assert.match(response.body, /You do not own this tournament/);
+      }
+      for (const role of [UserRole.FEDERATION_ADMIN, UserRole.SUPER_ADMIN]) {
+        fixture.auth.state.user.role = role;
+        const response = await app.inject({
+          method: 'PATCH',
+          url: `/api/v1/tournaments/${TOURNAMENT_ID}`,
+          headers: authenticatedHeaders(),
+          payload: { name: `Managed by ${role}` },
+        });
+        assert.strictEqual(response.statusCode, 200, response.body);
+      }
+      assert.ok(
+        fixture.state.reads
+          .filter((entry) => entry.model === 'tournament')
+          .every((entry) => entry.inTransaction),
+      );
+    });
+  });
+
+  it('filters tournament lists and advances deterministic UUID cursors without duplicates', async () => {
+    await withCompetitionApp(async (fixture, app) => {
+      const secondId = '55555555-5555-4555-8555-555555555555';
+      fixture.state.tournaments.set(secondId, makeTournament({ id: secondId }));
+      fixture.state.tournaments.set(
+        OTHER_OWNER_ID,
+        makeTournament({ id: OTHER_OWNER_ID, organizerId: OTHER_OWNER_ID }),
+      );
+      const draftId = randomUUID();
+      fixture.state.tournaments.set(draftId, makeTournament({ id: draftId, status: 'DRAFT' }));
+      const url = `/api/v1/tournaments?sport=CRICKET&status=REGISTRATION_OPEN&organizer_id=${TEST_USER_ID}&limit=1`;
+      const first = await app.inject({ method: 'GET', url });
+      assert.strictEqual(first.statusCode, 200, first.body);
+      const page1 = first.json<StandardApiResponse<PaginatedResponseDto<Tournament>>>().data;
+      assert.deepStrictEqual(
+        page1.data.map((row) => row.id),
+        [TOURNAMENT_ID],
+      );
+      assert.strictEqual(page1.has_more, true);
+      assert.strictEqual(page1.next_cursor, TOURNAMENT_ID);
+      const second = await app.inject({
+        method: 'GET',
+        url: `${url}&cursor_id=${page1.next_cursor}`,
+      });
+      const page2 = second.json<StandardApiResponse<PaginatedResponseDto<Tournament>>>().data;
+      assert.deepStrictEqual(
+        page2.data.map((row) => row.id),
+        [secondId],
+      );
+      assert.strictEqual(page2.has_more, false);
+    });
+  });
+
+  it('rejects invalid tournament invariants and validates PATCH values against persisted fields', async () => {
+    await withCompetitionApp(async (fixture, app) => {
+      for (const overrides of [
+        { min_gti: -1 },
+        { max_gti: 101 },
+        { min_gti: 80, max_gti: 20 },
+        { prize_pool: -1 },
+        { max_teams: 1 },
+        { team_size: 0 },
+        { team_size: 31 },
+        { venue_lat: 91 },
+        { venue_lng: -181 },
+        { start_date: 'not-a-date' },
+        { start_date: '2099-02-30' },
+        { registration_deadline: '2099-01-04' },
+        { end_date: '2099-01-01' },
+      ]) {
+        const response = await app.inject({
+          method: 'POST',
+          url: '/api/v1/tournaments',
+          headers: authenticatedHeaders(),
+          payload: { ...tournamentPayload, ...overrides },
+        });
+        assert.strictEqual(response.statusCode, 400, response.body);
+      }
+      fixture.state.tournaments.get(TOURNAMENT_ID)!.maxGti = new Prisma.Decimal(60);
+      for (const payload of [
+        { min_gti: 70 },
+        { min_gti: null },
+        { team_size: null },
+        { registration_deadline: '2099-01-04' },
+        { end_date: '2098-12-31' },
+      ]) {
+        const response = await app.inject({
+          method: 'PATCH',
+          url: `/api/v1/tournaments/${TOURNAMENT_ID}`,
+          headers: authenticatedHeaders(),
+          payload,
+        });
+        assert.strictEqual(response.statusCode, 400, response.body);
+      }
+      assert.strictEqual(fixture.state.tournaments.size, 1);
+    });
+  });
+
+  it('enforces bracket GTI/fee/capacity invariants on create and partial update', async () => {
+    await withCompetitionApp(async (_fixture, app) => {
+      for (const overrides of [
+        { min_gti: -1 },
+        { max_gti: 101 },
+        { min_gti: 80, max_gti: 20 },
+        { entry_fee: -1 },
+        { max_teams: 1 },
+      ]) {
+        const response = await app.inject({
+          method: 'POST',
+          url: `/api/v1/tournaments/${TOURNAMENT_ID}/brackets`,
+          headers: authenticatedHeaders(),
+          payload: { ...bracketPayload, ...overrides },
+        });
+        assert.strictEqual(response.statusCode, 400, response.body);
+      }
+      const response = await app.inject({
+        method: 'PATCH',
+        url: `/api/v1/tournaments/${TOURNAMENT_ID}/brackets/${BRACKET_ID}`,
+        headers: authenticatedHeaders(),
+        payload: { min_gti: 70 },
+      });
+      assert.strictEqual(response.statusCode, 400, response.body);
+      const anonymous = await app.inject({
+        method: 'PATCH',
+        url: `/api/v1/tournaments/${TOURNAMENT_ID}`,
+        payload: { name: 'Anonymous change' },
+      });
+      assert.strictEqual(anonymous.statusCode, 401);
+    });
+  });
+
+  for (const change of ['gti', 'identity', 'deadline', 'bracket-bounds'] as const) {
+    it(`re-reads ${change} on registration retries and rolls back the first attempt`, async () => {
+      const fixture = createCompetitionFixture();
+      fixture.state.failNextCommit = true;
+      fixture.state.onBegin = (attempt) => {
+        if (attempt !== 2) return;
+        if (change === 'gti')
+          fixture.state.profiles.get(TEST_USER_ID)!.currentGti = new Prisma.Decimal(90);
+        if (change === 'identity')
+          fixture.state.profiles.get(TEST_USER_ID)!.user.identityRecord!.status =
+            VerificationStatus.REVOKED;
+        if (change === 'deadline')
+          fixture.state.tournaments.get(TOURNAMENT_ID)!.registrationDeadline = new Date(
+            '2000-01-01',
+          );
+        if (change === 'bracket-bounds')
+          fixture.state.brackets.get(BRACKET_ID)!.maxGti = new Prisma.Decimal(45);
+      };
+      await assert.rejects(
+        fixture.services.brackets.registerForBracket(TOURNAMENT_ID, BRACKET_ID, TEST_USER_ID, {}),
+        (error: unknown) => {
+          if (change === 'identity') assert.ok(error instanceof ForbiddenException);
+          else if (change === 'deadline') {
+            assert.ok(error instanceof BadRequestException);
+            assert.match(error.message, /deadline/);
+          } else {
+            assert.ok(error instanceof ConflictException);
+            assert.strictEqual(
+              (error.getResponse() as Record<string, unknown>).code,
+              'SANDBAGGING_DETECTED',
+            );
+          }
+          return true;
+        },
+      );
+      assert.strictEqual(fixture.state.transactions, 2);
+      assert.strictEqual(fixture.state.registrations.size, 0);
+      assert.strictEqual(
+        fixture.state.reads.filter((entry) => entry.model === 'profile').length,
+        2,
+      );
+      assert.ok(fixture.state.reads.every((entry) => entry.inTransaction));
+    });
+  }
+
+  it('does not suggest a bracket whose minimum GTI is higher than the athlete score', async () => {
+    const fixture = createCompetitionFixture();
+    fixture.state.profiles.get(TEST_USER_ID)!.currentGti = new Prisma.Decimal(82);
+    const id = randomUUID();
+    fixture.state.brackets.set(id, {
+      ...fixture.state.brackets.get(BRACKET_ID)!,
+      id,
+      minGti: new Prisma.Decimal(90),
+      maxGti: new Prisma.Decimal(100),
+    });
+    for (const execute of [
+      () =>
+        fixture.services.brackets.registerForBracket(TOURNAMENT_ID, BRACKET_ID, TEST_USER_ID, {}),
+      () =>
+        fixture.services.matchmaking.joinPool(TOURNAMENT_ID, BRACKET_ID, TEST_USER_ID, {
+          primary_role: 'BATSMAN',
+        }),
+    ]) {
+      await assert.rejects(execute(), (error: unknown) => {
+        assert.ok(error instanceof ConflictException);
+        const response = error.getResponse() as Record<string, unknown>;
+        assert.strictEqual(response.code, 'SANDBAGGING_DETECTED');
+        assert.strictEqual(response.suggestedBracketId, null);
+        assert.strictEqual(response.suggestedBracketTier, null);
+        return true;
+      });
+    }
+  });
+
+  it('validates team captain ownership and uses live roster GTI rather than a stale team average', async () => {
+    const fixture = createCompetitionFixture();
+    const foreignCaptain = await seedTeam(fixture, [50, 50, 50, 50], OTHER_OWNER_ID);
+    await assert.rejects(
+      fixture.services.brackets.registerForBracket(TOURNAMENT_ID, BRACKET_ID, TEST_USER_ID, {
+        teamId: foreignCaptain,
+      }),
+      /Only the team captain/,
+    );
+    const highTeam = await seedTeam(fixture, [50, 100, 100, 100]);
+    await assert.rejects(
+      fixture.services.brackets.registerForBracket(TOURNAMENT_ID, BRACKET_ID, TEST_USER_ID, {
+        teamId: highTeam,
+      }),
+      (error: unknown) => {
+        assert.ok(error instanceof ConflictException);
+        assert.strictEqual((error.getResponse() as Record<string, unknown>).teamGti, 87.5);
+        return true;
+      },
+    );
+    assert.strictEqual(fixture.state.registrations.size, 0);
+  });
+
+  it('allows a member captain to register a valid roster and rejects teams from another tournament', async () => {
+    const fixture = createCompetitionFixture();
+    const teamId = await seedTeam(fixture, [50, 45, 55, 50], null, true);
+    const result = await fixture.services.brackets.registerForBracket(
+      TOURNAMENT_ID,
+      BRACKET_ID,
+      TEST_USER_ID,
+      { teamId },
+    );
+    assert.strictEqual(result.teamId, teamId);
+    assert.strictEqual(fixture.state.teams.get(teamId)?.averageGti, 50);
+    fixture.state.teams.get(teamId)!.tournamentId = OTHER_OWNER_ID;
+    await assert.rejects(
+      fixture.services.brackets.registerForBracket(TOURNAMENT_ID, BRACKET_ID, TEST_USER_ID, {
+        teamId,
+      }),
+      /does not belong/,
+    );
+  });
+
+  it('paginates all bounding-box candidates in the fallback so nearby rows beyond a UUID prefix are retained', async () => {
+    const fixture = createCompetitionFixture();
+    fixture.state.tournaments.clear();
+    for (let index = 0; index < 205; index += 1) {
+      const id = `00000000-0000-4000-8000-${index.toString(16).padStart(12, '0')}`;
+      fixture.state.tournaments.set(id, makeTournament({ id, venueLat: 0.8, venueLng: 0.8 }));
+    }
+    const id = 'ffffffff-ffff-4fff-8fff-ffffffffffff';
+    fixture.state.tournaments.set(id, makeTournament({ id, venueLat: 0, venueLng: 0.1 }));
+    const rows = await fixture.services.tournaments.findNearby({
+      lat: 0,
+      lng: 0,
+      radius_km: 100,
+      limit: 1,
+    });
+    assert.deepStrictEqual(
+      rows.map((row) => row.id),
+      [id],
+    );
+    const reads = fixture.state.reads.filter((entry) => entry.model === 'tournament');
+    assert.strictEqual(reads.length, 2);
+    assert.ok(
+      reads.every(
+        (entry) =>
+          entry.args.where?.venueLat !== undefined && entry.args.where.venueLng !== undefined,
+      ),
+    );
+  });
+
+  it('applies distance/UUID ordering to Haversine cursors rather than filtering by UUID alone', async () => {
+    const fixture = createCompetitionFixture();
+    fixture.state.tournaments.clear();
+    const locations = [
+      { id: 'ffffffff-ffff-4fff-8fff-ffffffffffff', lng: 0 },
+      { id: '99999999-9999-4999-8999-999999999999', lng: 0 },
+      { id: '00000000-0000-4000-8000-000000000001', lng: 0.1 },
+    ];
+    for (const location of locations)
+      fixture.state.tournaments.set(
+        location.id,
+        makeTournament({ id: location.id, venueLat: 0, venueLng: location.lng }),
+      );
+    const ids: string[] = [];
+    let cursor: string | undefined;
+    for (let page = 0; page < 4; page += 1) {
+      const rows = await fixture.services.tournaments.findNearby({
+        lat: 0,
+        lng: 0,
+        radius_km: 50,
+        limit: 1,
+        cursor,
+      });
+      ids.push(...rows.map((row) => row.id));
+      if (!rows[0]) break;
+      cursor = rows[0].id;
+    }
+    assert.deepStrictEqual(ids, [locations[1]!.id, locations[0]!.id, locations[2]!.id]);
+    await assert.rejects(
+      fixture.services.tournaments.findNearby({
+        lat: 0,
+        lng: 0,
+        radius_km: 50,
+        limit: 1,
+        cursor: randomUUID(),
+      }),
+      BadRequestException,
+    );
+  });
+
+  it('uses conservative bounding boxes across the antimeridian and near the poles', async () => {
+    const fixture = createCompetitionFixture();
+    fixture.state.tournaments.clear();
+    const first = randomUUID();
+    const second = randomUUID();
+    fixture.state.tournaments.set(
+      first,
+      makeTournament({ id: first, venueLat: 0, venueLng: 179.9 }),
+    );
+    fixture.state.tournaments.set(
+      second,
+      makeTournament({ id: second, venueLat: 0, venueLng: -179.9 }),
+    );
+    const rows = await fixture.services.tournaments.findNearby({
+      lat: 0,
+      lng: 179.95,
+      radius_km: 50,
+      limit: 20,
+    });
+    assert.strictEqual(rows.length, 2);
+    const box = geographicBoundingBox({ lat: 89.9, lng: 0 }, 50);
+    assert.strictEqual(box.allLongitudes, true);
+    assert.strictEqual(box.maxLat, 90);
+    assert.ok(haversineDistance({ lat: 0, lng: 179.9 }, 0, -179.9) < 25);
   });
 });

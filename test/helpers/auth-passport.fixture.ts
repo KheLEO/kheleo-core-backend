@@ -47,7 +47,7 @@ export const SUPABASE_TEST_SECRET = 'fixture-supabase-shared-jwt-secret';
 export const TEST_USER_ID = 'ccf7fc2d-5984-4356-8bfe-84666b410f66';
 export const TEST_OTHER_ID = 'cdba88df-a7bf-47e8-91b8-d2b6eb6c9987';
 
-interface TestUser extends User {
+export interface TestUser extends User {
   identityRecord: IdentityVerification | null;
   athleteProfile: { id: string; currentGti: Prisma.Decimal } | null;
   drillSubmissions: DrillSubmission[];
@@ -66,7 +66,7 @@ interface FixtureOptions {
   readonly config?: Readonly<Record<string, string | number>>;
 }
 
-interface ProfileWrite {
+export interface ProfileWrite {
   readonly where: { readonly userId?: string; readonly id?: string };
   readonly data?: Readonly<Record<string, unknown>>;
   readonly create?: Readonly<Record<string, unknown>>;

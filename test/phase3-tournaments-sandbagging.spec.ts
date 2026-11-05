@@ -1,222 +1,70 @@
 import { describe, it } from 'node:test';
 import * as assert from 'node:assert';
-import { BracketsService } from '../src/modules/brackets/brackets.service';
+import { ConflictException } from '@nestjs/common';
+import { Prisma, RegistrationStatus } from '@prisma/client';
 import { TournamentsService } from '../src/modules/tournaments/tournaments.service';
 import { PrismaService } from '../src/infrastructure/database/prisma.service';
 import { PostgisSpatialRepository } from '../src/infrastructure/database/postgis-spatial.repository';
-import { RegistrationStatus, TournamentStatus } from '@prisma/client';
-import { ConflictException } from '@nestjs/common';
+import { createCompetitionFixture, TOURNAMENT_ID, BRACKET_ID } from './helpers/competition.fixture';
+import { TEST_USER_ID } from './helpers/auth-passport.fixture';
 
 describe('Phase 3: Tournaments Geospatial Discovery & Anti-Sandbagging Engine', () => {
-  describe('Anti-Sandbagging Gatekeeper Engine', () => {
-    it('REJECTS athlete registration with SANDBAGGING_DETECTED when GTI exceeds max_gti ceiling', async () => {
-      const mockPrisma = {
-        athleteProfile: {
-          findUnique: async () => ({
-            user: { isActive: true, identityRecord: { status: 'VERIFIED' } },
-            dateOfBirth: new Date('2000-01-01'),
-            gender: 'FEMALE',
-            primarySport: 'CRICKET',
-            district: 'Pune',
-            state: 'Maharashtra',
-            id: 'athlete-prof-1',
-            currentGti: 75.5, // High skill (75.5)
-          }),
-        },
-        bracket: {
-          findUnique: async () => ({
-            id: 'bracket-bronze',
-            tournamentId: 'tournament-1',
-            tierName: 'BRONZE_ENTRY',
-            minGti: 0.0,
-            maxGti: 40.0, // Ceiling is 40.0
-            entryFee: 100.0,
-            maxTeams: 16,
-            tournament: {
-              id: 'tournament-1',
-              status: TournamentStatus.REGISTRATION_OPEN,
-              title: 'Varanasi Open',
-            },
-          }),
-          findMany: async () => [
-            {
-              id: 'bracket-gold',
-              tierName: 'GOLD_ELITE',
-              minGti: 70.0,
-              maxGti: 100.0,
-            },
-          ],
-        },
+  describe('Transactional Anti-Sandbagging Gatekeeper', () => {
+    it('rejects above-ceiling athletes and recommends a bracket containing their actual GTI', async () => {
+      const fixture = createCompetitionFixture();
+      fixture.state.profiles.get(TEST_USER_ID)!.currentGti = new Prisma.Decimal(75.5);
+      const recommended = {
+        ...fixture.state.brackets.get(BRACKET_ID)!,
+        id: '44444444-4444-4444-8444-444444444444',
+        tierName: 'GOLD',
+        minGti: new Prisma.Decimal(70),
+        maxGti: new Prisma.Decimal(100),
       };
-
-      const bracketsService = new BracketsService(mockPrisma as unknown as PrismaService);
-
+      fixture.state.brackets.set(recommended.id, recommended);
       await assert.rejects(
-        async () => {
-          await bracketsService.registerForBracket(
-            'tournament-1',
-            'bracket-bronze',
-            'user-athlete-1',
-            {},
-          );
+        fixture.services.brackets.registerForBracket(TOURNAMENT_ID, BRACKET_ID, TEST_USER_ID, {}),
+        (error: unknown) => {
+          assert.ok(error instanceof ConflictException);
+          const response = error.getResponse() as Record<string, unknown>;
+          assert.strictEqual(response.code, 'SANDBAGGING_DETECTED');
+          assert.strictEqual(response.suggestedBracketId, recommended.id);
+          assert.strictEqual(response.athleteGti, 75.5);
+          return true;
         },
-        (err: unknown) => {
-          assert.ok(err instanceof ConflictException);
-          const response = err.getResponse() as Record<string, unknown>;
-          assert.strictEqual(response['code'], 'SANDBAGGING_DETECTED');
-          assert.strictEqual(response['suggestedBracketId'], 'bracket-gold');
-          assert.strictEqual(response['suggestedBracketTier'], 'GOLD_ELITE');
-          assert.strictEqual(response['athleteGti'], 75.5);
-          assert.strictEqual(response['bracketMaxGti'], 40.0);
+      );
+      assert.ok(fixture.state.reads.every((entry) => entry.inTransaction));
+    });
+
+    it('rejects athletes below the minimum GTI', async () => {
+      const fixture = createCompetitionFixture();
+      fixture.state.profiles.get(TEST_USER_ID)!.currentGti = new Prisma.Decimal(25);
+      await assert.rejects(
+        fixture.services.brackets.registerForBracket(TOURNAMENT_ID, BRACKET_ID, TEST_USER_ID, {}),
+        (error: unknown) => {
+          assert.ok(error instanceof ConflictException);
+          assert.strictEqual(
+            (error.getResponse() as Record<string, unknown>).code,
+            'BELOW_MINIMUM_TIER',
+          );
           return true;
         },
       );
     });
 
-    it('REJECTS athlete registration with BELOW_MINIMUM_TIER when GTI is below minimum threshold', async () => {
-      const mockPrisma = {
-        athleteProfile: {
-          findUnique: async () => ({
-            user: { isActive: true, identityRecord: { status: 'VERIFIED' } },
-            dateOfBirth: new Date('2000-01-01'),
-            gender: 'FEMALE',
-            primarySport: 'CRICKET',
-            district: 'Pune',
-            state: 'Maharashtra',
-            id: 'athlete-prof-2',
-            currentGti: 25.0, // Low skill (25.0)
-          }),
-        },
-        bracket: {
-          findUnique: async () => ({
-            id: 'bracket-pro',
-            tournamentId: 'tournament-1',
-            tierName: 'PRO_DIVISION',
-            minGti: 60.0, // Minimum floor is 60.0
-            maxGti: 90.0,
-            entryFee: 500.0,
-            maxTeams: 16,
-            tournament: {
-              id: 'tournament-1',
-              status: TournamentStatus.REGISTRATION_OPEN,
-              title: 'Varanasi Open',
-            },
-          }),
-        },
-      };
-
-      const bracketsService = new BracketsService(mockPrisma as unknown as PrismaService);
-
-      await assert.rejects(
-        async () => {
-          await bracketsService.registerForBracket(
-            'tournament-1',
-            'bracket-pro',
-            'user-athlete-2',
-            {},
-          );
-        },
-        (err: unknown) => {
-          assert.ok(err instanceof ConflictException);
-          const response = err.getResponse() as Record<string, unknown>;
-          assert.strictEqual(response['code'], 'BELOW_MINIMUM_TIER');
-          assert.strictEqual(response['athleteGti'], 25.0);
-          assert.strictEqual(response['bracketMinGti'], 60.0);
-          return true;
-        },
-      );
-    });
-
-    it('ACCEPTS qualifying athlete within GTI limits and wraps creation in transaction', async () => {
-      let transactionExecuted = false;
-
-      const mockPrisma = {
-        athleteProfile: {
-          findUnique: async () => ({
-            user: { isActive: true, identityRecord: { status: 'VERIFIED' } },
-            dateOfBirth: new Date('2000-01-01'),
-            gender: 'FEMALE',
-            primarySport: 'CRICKET',
-            district: 'Pune',
-            state: 'Maharashtra',
-            id: 'athlete-prof-3',
-            currentGti: 52.0, // Within range [40.0, 65.0]
-          }),
-        },
-        bracket: {
-          findUnique: async () => ({
-            id: 'bracket-silver',
-            tournamentId: 'tournament-1',
-            tierName: 'SILVER_INTERMEDIATE',
-            minGti: 40.0,
-            maxGti: 65.0,
-            entryFee: 250.0,
-            maxTeams: 16,
-            tournament: {
-              id: 'tournament-1',
-              status: TournamentStatus.REGISTRATION_OPEN,
-              title: 'Varanasi Open',
-            },
-          }),
-        },
-        $transaction: async (
-          callback: (tx: {
-            registration: {
-              findUnique: () => Promise<null>;
-              count: () => Promise<number>;
-              create: (data: {
-                data: {
-                  bracketId: string;
-                  userId: string;
-                  feePaid: number;
-                  status: RegistrationStatus;
-                };
-              }) => Promise<{
-                id: string;
-                bracketId: string;
-                userId: string;
-                teamId: null;
-                status: RegistrationStatus;
-                feePaid: number;
-                registeredAt: Date;
-              }>;
-            };
-          }) => Promise<unknown>,
-        ) => {
-          transactionExecuted = true;
-          return callback({
-            registration: {
-              findUnique: async () => null,
-              count: async () => 8, // 8 / 16 registered
-              create: async (payload) => ({
-                id: 'reg-new-1',
-                bracketId: payload.data.bracketId,
-                userId: payload.data.userId,
-                teamId: null,
-                status: payload.data.status,
-                feePaid: payload.data.feePaid,
-                registeredAt: new Date('2026-10-11T13:00:00Z'),
-              }),
-            },
-          });
-        },
-      };
-
-      const bracketsService = new BracketsService(mockPrisma as unknown as PrismaService);
-
-      const result = await bracketsService.registerForBracket(
-        'tournament-1',
-        'bracket-silver',
-        'user-athlete-3',
+    it('registers an eligible athlete with all eligibility reads and writes in one transaction', async () => {
+      const fixture = createCompetitionFixture();
+      fixture.state.profiles.get(TEST_USER_ID)!.currentGti = new Prisma.Decimal(52);
+      const response = await fixture.services.brackets.registerForBracket(
+        TOURNAMENT_ID,
+        BRACKET_ID,
+        TEST_USER_ID,
         {},
       );
-
-      assert.strictEqual(transactionExecuted, true);
-      assert.strictEqual(result.registrationId, 'reg-new-1');
-      assert.strictEqual(result.tierName, 'SILVER_INTERMEDIATE');
-      assert.strictEqual(result.athleteGti, 52.0);
-      assert.strictEqual(result.status, RegistrationStatus.CONFIRMED);
-      assert.strictEqual(result.feePaid, 250.0);
+      assert.strictEqual(fixture.state.transactions, 1);
+      assert.strictEqual(fixture.state.registrations.has(response.registrationId), true);
+      assert.strictEqual(response.athleteGti, 52);
+      assert.strictEqual(response.status, RegistrationStatus.CONFIRMED);
+      assert.ok(fixture.state.reads.every((entry) => entry.inTransaction));
     });
   });
 

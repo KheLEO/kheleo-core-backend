@@ -2,6 +2,8 @@ import {
   Controller,
   Get,
   Post,
+  Patch,
+  Delete,
   Param,
   Query,
   Body,
@@ -20,13 +22,46 @@ import { JwtAuthGuard, AuthenticatedJwtUser } from '../../common/guards/jwt-auth
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { Roles } from '../../common/decorators/roles.decorator';
 import { RolesGuard } from '../../common/guards/roles.guard';
-import { UserRole } from '@prisma/client';
+import { Tournament, UserRole } from '@prisma/client';
 import { IdempotencyInterceptor } from '../../common/interceptors/idempotency.interceptor';
+import { UpdateTournamentDto } from './dto/update-tournament.dto';
+import { ListTournamentsQueryDto } from './dto/list-tournaments-query.dto';
+import { PaginatedResponseDto } from '../../common/dto/paginated-response.dto';
 
 @ApiTags('Tournaments & Geospatial Discovery')
 @Controller('tournaments')
 export class TournamentsController {
   constructor(private readonly tournamentsService: TournamentsService) {}
+
+  @Get()
+  async list(@Query() query: ListTournamentsQueryDto): Promise<PaginatedResponseDto<Tournament>> {
+    return this.tournamentsService.list(query);
+  }
+
+  @Patch(':id')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.ORGANIZER, UserRole.FEDERATION_ADMIN, UserRole.SUPER_ADMIN)
+  @UseInterceptors(IdempotencyInterceptor)
+  @ApiBearerAuth()
+  async update(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() actor: AuthenticatedJwtUser,
+    @Body() dto: UpdateTournamentDto,
+  ): Promise<Tournament> {
+    return this.tournamentsService.updateTournament(id, actor, dto);
+  }
+
+  @Delete(':id')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.ORGANIZER, UserRole.FEDERATION_ADMIN, UserRole.SUPER_ADMIN)
+  @UseInterceptors(IdempotencyInterceptor)
+  @ApiBearerAuth()
+  async delete(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() actor: AuthenticatedJwtUser,
+  ): Promise<Tournament> {
+    return this.tournamentsService.deleteTournament(id, actor);
+  }
 
   @Get('nearby')
   @ApiOperation({

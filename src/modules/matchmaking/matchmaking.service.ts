@@ -3,7 +3,6 @@ import {
   ConflictException,
   NotFoundException,
   BadRequestException,
-  Logger,
 } from '@nestjs/common';
 import { PrismaService } from '../../infrastructure/database/prisma.service';
 import { QueueProducerService } from '../../infrastructure/queues/queue-producer.service';
@@ -13,22 +12,65 @@ import {
   FreeAgentStatusResponseDto,
   RosterMemberSummaryDto,
 } from './dto/free-agent-status-response.dto';
-import { FreeAgentStatus, RegistrationStatus, TournamentStatus } from '@prisma/client';
+import { FreeAgentStatus, Prisma, RegistrationStatus, VerificationStatus } from '@prisma/client';
 import * as crypto from 'node:crypto';
 import { runSerializableTransaction } from '../../common/database/serializable-transaction';
-import { assertVerifiedAthlete } from '../../common/auth/account-access';
+import {
+  participationBracketSelect,
+  participationProfileSelect,
+  ParticipationProfile,
+  readParticipationSnapshot,
+  registrationIsOpen,
+} from '../tournaments/participation-policy';
+import {
+  MatchingGtiBounds,
+  RoleAssignment,
+  RoleCandidate,
+  RoleSlotRequirement,
+  matchRoleSlots,
+} from './role-matcher';
 
-interface RoleSlotRequirement {
-  readonly slotName: string;
-  readonly rolePattern: RegExp;
+const queuedCandidateSelect = {
+  id: true,
+  userId: true,
+  primaryRole: true,
+  secondaryRole: true,
+  joinedAt: true,
+  user: {
+    select: { email: true, phone: true, athleteProfile: { select: participationProfileSelect } },
+  },
+} satisfies Prisma.FreeAgentRegistrationSelect;
+type QueuedCandidate = Prisma.FreeAgentRegistrationGetPayload<{
+  select: typeof queuedCandidateSelect;
+}>;
+type EligibleCandidate = QueuedCandidate & {
+  readonly user: QueuedCandidate['user'] & { readonly athleteProfile: ParticipationProfile };
+};
+interface CreatedRoster {
+  readonly teamId: string;
+  readonly teamName: string;
+  readonly roster: readonly RosterMemberPayload[];
+}
+function isEligibleCandidate(candidate: QueuedCandidate): candidate is EligibleCandidate {
+  const profile = candidate.user.athleteProfile;
+  return (
+    profile !== null &&
+    profile.user.isActive &&
+    profile.user.identityRecord?.status === VerificationStatus.VERIFIED &&
+    Boolean(
+      profile.dateOfBirth &&
+        profile.gender &&
+        profile.primarySport &&
+        profile.district &&
+        profile.state,
+    )
+  );
 }
 
 class RosterClaimConflictError extends Error {}
 
 @Injectable()
 export class MatchmakingService {
-  private readonly logger = new Logger(MatchmakingService.name);
-
   constructor(
     private readonly prisma: PrismaService,
     private readonly queueProducer: QueueProducerService,
@@ -45,115 +87,25 @@ export class MatchmakingService {
     userId: string,
     dto: JoinFreeAgentDto,
   ): Promise<FreeAgentStatusResponseDto> {
-    // 1. Resolve athlete profile and GTI
-    const athleteProfile = await this.prisma.athleteProfile.findUnique({
-      where: { userId },
-      select: {
-        id: true,
-        currentGti: true,
-        dateOfBirth: true,
-        gender: true,
-        primarySport: true,
-        district: true,
-        state: true,
-        user: { select: { isActive: true, identityRecord: { select: { status: true } } } },
-      },
-    });
-
-    if (!athleteProfile) {
-      throw new BadRequestException(
-        'Athlete profile must be created before joining the free agent matchmaking pool.',
-      );
-    }
-
-    const athleteGti = Number(athleteProfile.currentGti);
-    assertVerifiedAthlete(athleteProfile.user);
-    if (
-      !athleteProfile.dateOfBirth ||
-      !athleteProfile.gender ||
-      !athleteProfile.primarySport ||
-      !athleteProfile.district ||
-      !athleteProfile.state
-    ) {
-      throw new BadRequestException(
-        'Complete the athlete passport before tournament participation',
-      );
-    }
-
-    // 2. Validate bracket & tournament existence
-    const bracket = await this.prisma.bracket.findUnique({
-      where: { id: bracketId },
-      select: {
-        id: true,
-        tournamentId: true,
-        tierName: true,
-        minGti: true,
-        maxGti: true,
-        tournament: {
-          select: { id: true, status: true, sport: true, teamSize: true },
-        },
-      },
-    });
-
-    if (!bracket || bracket.tournamentId !== tournamentId) {
-      throw new NotFoundException(
-        `Bracket with ID ${bracketId} does not exist in tournament ${tournamentId}.`,
-      );
-    }
-
-    if (bracket.tournament.status !== TournamentStatus.REGISTRATION_OPEN) {
-      throw new BadRequestException('Tournament is not currently open for registration.');
-    }
-
-    const maxGti = Number(bracket.maxGti);
-    const minGti = Number(bracket.minGti);
-
-    // 3. Anti-Sandbagging Gatekeeper validation
-    if (athleteGti > maxGti) {
-      this.logger.warn(
-        `Anti-Sandbagging Check Failed in Free Agent Queue: User ${userId} (GTI: ${athleteGti}) attempted entry into Bracket ${bracket.tierName} (Max: ${maxGti})`,
-      );
-      throw new ConflictException({
-        code: 'SANDBAGGING_DETECTED',
-        error: 'Conflict',
-        message: `Athlete GTI (${athleteGti.toFixed(2)}) exceeds bracket maximum ceiling (${maxGti.toFixed(2)}). Anti-sandbagging policy prohibits over-qualified free agents from this pool tier.`,
-        athleteGti,
-        bracketMaxGti: maxGti,
-        bracketMinGti: minGti,
-      });
-    }
-
-    if (athleteGti < minGti) {
-      throw new ConflictException({
-        code: 'BELOW_MINIMUM_TIER',
-        error: 'Conflict',
-        message: `Athlete GTI (${athleteGti.toFixed(2)}) is below the minimum threshold (${minGti.toFixed(2)}) for this tier.`,
-        athleteGti,
-        bracketMinGti: minGti,
-        bracketMaxGti: maxGti,
-      });
-    }
-
-    const roleRequirements = this.getSlotRequirements(
-      bracket.tournament.sport,
-      bracket.tournament.teamSize,
-    );
-    const submittedRoles = [dto.primary_role, dto.secondary_role].filter((role): role is string =>
-      Boolean(role),
-    );
-    if (
-      !submittedRoles.some((role) =>
-        roleRequirements.some((requirement) => requirement.rolePattern.test(role)),
-      )
-    ) {
-      throw new BadRequestException(
-        `Submitted roles are not valid for ${bracket.tournament.sport}.`,
-      );
-    }
-
     const { registration, waitPosition } = await runSerializableTransaction(
       this.prisma,
       async (transaction) => {
+        const { bracket } = await readParticipationSnapshot(
+          transaction,
+          tournamentId,
+          bracketId,
+          userId,
+        );
+        const requirements = this.getSlotRequirements(
+          bracket.tournament.sport,
+          bracket.tournament.teamSize,
+        );
+        const roles = [dto.primary_role, dto.secondary_role].filter((role): role is string =>
+          Boolean(role),
+        );
+        if (!roles.some((role) => requirements.some((slot) => slot.rolePattern.test(role)))) {
+          throw new BadRequestException('Submitted roles are not valid for this sport.');
+        }
         const existingQueue = await transaction.freeAgentRegistration.findFirst({
           where: {
             userId,
@@ -234,28 +186,26 @@ export class MatchmakingService {
     bracketId: string,
     userId: string,
   ): Promise<{ message: string; cancelled: boolean }> {
-    const active = await this.prisma.freeAgentRegistration.findFirst({
-      where: {
-        userId,
-        bracketId,
-        tournamentId,
-        status: FreeAgentStatus.QUEUED,
-      },
+    return runSerializableTransaction(this.prisma, async (transaction) => {
+      const active = await transaction.freeAgentRegistration.findFirst({
+        where: { userId, bracketId, tournamentId },
+        orderBy: [{ joinedAt: 'desc' }, { id: 'desc' }],
+        select: { id: true },
+      });
+      if (!active) throw new NotFoundException('No free agent registration found to cancel.');
+      const result = await transaction.freeAgentRegistration.updateMany({
+        where: { id: active.id, userId, tournamentId, bracketId, status: FreeAgentStatus.QUEUED },
+        data: { status: FreeAgentStatus.CANCELLED },
+      });
+      if (result.count !== 1)
+        throw new ConflictException(
+          'Cannot leave pool: registration is already matched or cancelled',
+        );
+      return {
+        message: 'Successfully removed from the free agent matchmaking pool.',
+        cancelled: true,
+      };
     });
-
-    if (!active) {
-      throw new NotFoundException('No active queued free agent registration found to cancel.');
-    }
-
-    await this.prisma.freeAgentRegistration.update({
-      where: { id: active.id },
-      data: { status: FreeAgentStatus.CANCELLED },
-    });
-
-    return {
-      message: 'Successfully removed from the free agent matchmaking pool.',
-      cancelled: true,
-    };
   }
 
   /**
@@ -372,216 +322,176 @@ export class MatchmakingService {
    * 5. Emits ROSTER_FORMED realtime WebSocket event.
    */
   async processBracketPool(tournamentId: string, bracketId: string): Promise<boolean> {
-    const bracket = await this.prisma.bracket.findUnique({
+    let formed = false;
+    while (true) {
+      let created: CreatedRoster | null;
+      try {
+        created = await runSerializableTransaction(this.prisma, (transaction) =>
+          this.formNextRoster(transaction, tournamentId, bracketId),
+        );
+      } catch (error: unknown) {
+        if (error instanceof RosterClaimConflictError) return formed;
+        throw error;
+      }
+      if (!created) return formed;
+      this.gateway.emitRosterFormed({
+        team_id: created.teamId,
+        team_name: created.teamName,
+        bracket_id: bracketId,
+        roster: created.roster,
+      });
+      formed = true;
+    }
+  }
+
+  private async formNextRoster(
+    transaction: Prisma.TransactionClient,
+    tournamentId: string,
+    bracketId: string,
+  ): Promise<CreatedRoster | null> {
+    const bracket = await transaction.bracket.findUnique({
       where: { id: bracketId },
-      select: {
-        id: true,
-        tournamentId: true,
-        minGti: true,
-        maxGti: true,
-        entryFee: true,
-        maxTeams: true,
-        tournament: { select: { id: true, sport: true, teamSize: true } },
+      select: participationBracketSelect,
+    });
+    if (
+      !bracket ||
+      bracket.tournamentId !== tournamentId ||
+      !registrationIsOpen(bracket.tournament)
+    )
+      return null;
+    const registered = await transaction.registration.count({
+      where: { bracketId, status: RegistrationStatus.CONFIRMED },
+    });
+    if (registered >= bracket.maxTeams) return null;
+    const slots = this.getSlotRequirements(bracket.tournament.sport, bracket.tournament.teamSize);
+    const candidates = await this.loadCandidates(transaction, tournamentId, bracketId);
+    const assigned = this.matchCandidatesToSlots(candidates, slots, {
+      minGti: Number(bracket.minGti),
+      maxGti: Number(bracket.maxGti),
+      score: (candidate) => Number(candidate.user.athleteProfile.currentGti),
+      identity: (candidate) => candidate.userId,
+    });
+    if (!assigned) return null;
+    const meanGti = assigned
+      .reduce(
+        (sum, item) => sum.add(item.candidate.user.athleteProfile.currentGti),
+        new Prisma.Decimal(0),
+      )
+      .div(assigned.length)
+      .toNumber();
+    const captainUserId = [...assigned].sort(
+      (a, b) =>
+        a.candidate.joinedAt.getTime() - b.candidate.joinedAt.getTime() ||
+        a.candidate.id.localeCompare(b.candidate.id),
+    )[0]!.candidate.userId;
+    for (const { candidate } of assigned) {
+      const claim = await transaction.freeAgentRegistration.updateMany({
+        where: {
+          id: candidate.id,
+          userId: candidate.userId,
+          tournamentId,
+          bracketId,
+          status: FreeAgentStatus.QUEUED,
+        },
+        data: { status: FreeAgentStatus.MATCHING },
+      });
+      if (claim.count !== 1)
+        throw new RosterClaimConflictError(
+          'Free agent was matched or cancelled by another execution.',
+        );
+    }
+    const team = await transaction.team.create({
+      data: {
+        tournamentId,
+        bracketId,
+        captainId: captainUserId,
+        name: 'FA-Roster-' + crypto.randomBytes(2).toString('hex').toUpperCase(),
+        isFreeAgentTeam: true,
+        isFreeAgentFormed: true,
+        compositeGti: meanGti,
+        averageGti: meanGti,
       },
     });
-
-    if (!bracket || bracket.tournamentId !== tournamentId) return false;
-
-    // Define complementary role composition for the sport
-    const slotRequirements = this.getSlotRequirements(
-      bracket.tournament.sport,
-      bracket.tournament.teamSize,
-    );
-    const requiredTeamSize = slotRequirements.length;
-
-    // Query candidates ordered by joinedAt ASC (FIFO)
-    const candidates = await this.prisma.freeAgentRegistration.findMany({
-      where: {
+    const roster: RosterMemberPayload[] = [];
+    for (const { candidate, slotName } of assigned) {
+      await transaction.teamMember.create({
+        data: {
+          teamId: team.id,
+          userId: candidate.userId,
+          athleteId: candidate.user.athleteProfile.id,
+          assignedRole: slotName,
+          isCaptain: candidate.userId === captainUserId,
+        },
+      });
+      const result = await transaction.freeAgentRegistration.updateMany({
+        where: { id: candidate.id, userId: candidate.userId, status: FreeAgentStatus.MATCHING },
+        data: { status: FreeAgentStatus.MATCHED, matchedTeamId: team.id },
+      });
+      if (result.count !== 1)
+        throw new RosterClaimConflictError('Free agent claim was lost before roster completion.');
+      roster.push({
+        user_id: candidate.userId,
+        name: candidate.user.email ?? candidate.user.phone ?? 'Athlete',
+        assigned_role: slotName,
+        gti: Number(candidate.user.athleteProfile.currentGti),
+      });
+    }
+    await transaction.registration.create({
+      data: {
         bracketId,
-        status: FreeAgentStatus.QUEUED,
-      },
-      orderBy: { joinedAt: 'asc' },
-      take: Math.min(200, requiredTeamSize * 10),
-      select: {
-        id: true,
-        userId: true,
-        primaryRole: true,
-        secondaryRole: true,
-        joinedAt: true,
-        user: {
-          select: {
-            email: true,
-            phone: true,
-            athleteProfile: { select: { currentGti: true } },
-          },
+        teamId: team.id,
+        status: RegistrationStatus.CONFIRMED,
+        feePaid: bracket.entryFee,
+        metadata: {
+          isFreeAgentFormedTeam: true,
+          averageGti: meanGti,
+          teamName: team.name,
+          registeredAt: new Date().toISOString(),
         },
       },
     });
+    return { teamId: team.id, teamName: team.name, roster };
+  }
 
-    if (candidates.length < requiredTeamSize) {
-      this.logger.debug(
-        `Insufficient candidates for Bracket ${bracketId} (${candidates.length}/${requiredTeamSize} needed).`,
-      );
-      return false;
-    }
-
-    // Role-balancing slot assignment
-    const assigned = this.matchCandidatesToSlots(candidates, slotRequirements);
-    if (!assigned) {
-      this.logger.debug(
-        `Role composition criteria not yet met for Bracket ${bracketId}. Waiting for matching specialists.`,
-      );
-      return false;
-    }
-
-    // Skill-variance check: calculate Mean GTI
-    const totalGti = assigned.reduce((sum, item) => {
-      const gti = item.candidate.user.athleteProfile?.currentGti
-        ? Number(item.candidate.user.athleteProfile.currentGti)
-        : 30.0;
-      return sum + gti;
-    }, 0);
-    const meanGti = Math.round((totalGti / requiredTeamSize) * 100) / 100;
-
-    const minGti = Number(bracket.minGti);
-    const maxGti = Number(bracket.maxGti);
-
-    if (meanGti < minGti || meanGti > maxGti) {
-      this.logger.warn(
-        `Proposed team mean GTI (${meanGti}) outside bracket range [${minGti}, ${maxGti}]. Skipping batch.`,
-      );
-      return false;
-    }
-
-    // Atomic execution inside Prisma $transaction
-    const shortId = crypto.randomBytes(2).toString('hex').toUpperCase();
-    const teamName = `FA-Roster-${shortId}`;
-
-    let createdRoster: {
-      readonly teamId: string;
-      readonly teamName: string;
-      readonly bracketId: string;
-      readonly roster: readonly RosterMemberPayload[];
-    };
-
-    try {
-      createdRoster = await runSerializableTransaction(this.prisma, async (tx) => {
-        for (const item of assigned) {
-          const claim = await tx.freeAgentRegistration.updateMany({
-            where: { id: item.candidate.id, status: FreeAgentStatus.QUEUED },
-            data: { status: FreeAgentStatus.MATCHING },
-          });
-          if (claim.count !== 1) {
-            throw new RosterClaimConflictError(
-              `Free agent ${item.candidate.id} was claimed by another worker.`,
-            );
-          }
-        }
-
-        const registeredTeamCount = await tx.registration.count({
-          where: {
-            bracketId,
-            status: RegistrationStatus.CONFIRMED,
-            teamId: { not: null },
-          },
-        });
-        if (registeredTeamCount >= bracket.maxTeams) {
-          throw new ConflictException('Bracket team capacity has been reached.');
-        }
-
-        const team = await tx.team.create({
-          data: {
-            tournamentId,
-            bracketId,
-            name: teamName,
-            isFreeAgentTeam: true,
-            isFreeAgentFormed: true,
-            compositeGti: meanGti,
-            averageGti: meanGti,
-          },
-        });
-
-        // 2. Create TeamMembers
-        const rosterList: RosterMemberPayload[] = [];
-        for (let i = 0; i < assigned.length; i++) {
-          const item = assigned[i]!;
-          const gti = item.candidate.user.athleteProfile?.currentGti
-            ? Number(item.candidate.user.athleteProfile.currentGti)
-            : 50.0;
-          const name =
-            item.candidate.user.email ??
-            item.candidate.user.phone ??
-            `Athlete ${item.candidate.userId.substring(0, 4)}`;
-
-          await tx.teamMember.create({
-            data: {
-              teamId: team.id,
-              userId: item.candidate.userId,
-              assignedRole: item.slotName,
-              isCaptain: i === 0, // First candidate designated as captain
-            },
-          });
-
-          // 3. Update FreeAgentRegistration status
-          await tx.freeAgentRegistration.updateMany({
-            where: {
-              id: item.candidate.id,
-              status: FreeAgentStatus.MATCHING,
-            },
-            data: {
-              status: FreeAgentStatus.MATCHED,
-              matchedTeamId: team.id,
-            },
-          });
-
-          rosterList.push({
-            user_id: item.candidate.userId,
-            name,
-            assigned_role: item.slotName,
-            gti,
-          });
-        }
-
-        // 4. Create final bracket Registration
-        await tx.registration.create({
-          data: {
-            bracketId,
-            teamId: team.id,
-            status: RegistrationStatus.CONFIRMED,
-            feePaid: bracket.entryFee,
-            metadata: {
-              isFreeAgentFormedTeam: true,
-              teamName,
-              averageGti: meanGti,
-              registeredAt: new Date().toISOString(),
-            },
-          },
-        });
-
-        return {
-          teamId: team.id,
-          teamName,
+  private async loadCandidates(
+    transaction: Prisma.TransactionClient,
+    tournamentId: string,
+    bracketId: string,
+  ): Promise<EligibleCandidate[]> {
+    const candidates: EligibleCandidate[] = [];
+    let cursor: { readonly id: string; readonly joinedAt: Date } | undefined;
+    while (true) {
+      const page: QueuedCandidate[] = await transaction.freeAgentRegistration.findMany({
+        where: {
+          tournamentId,
           bracketId,
-          roster: rosterList,
-        };
+          status: FreeAgentStatus.QUEUED,
+          user: {
+            isActive: true,
+            identityRecord: { status: VerificationStatus.VERIFIED },
+            teamMembers: { none: { team: { tournamentId } } },
+          },
+          ...(cursor
+            ? {
+                OR: [
+                  { joinedAt: { gt: cursor.joinedAt } },
+                  { joinedAt: cursor.joinedAt, id: { gt: cursor.id } },
+                ],
+              }
+            : {}),
+        },
+        orderBy: [{ joinedAt: 'asc' }, { id: 'asc' }],
+        take: 200,
+        select: queuedCandidateSelect,
       });
-    } catch (error: unknown) {
-      if (error instanceof RosterClaimConflictError) {
-        this.logger.debug(error.message);
-        return false;
+      for (const candidate of page) {
+        if (isEligibleCandidate(candidate)) candidates.push(candidate);
       }
-      throw error;
+      if (page.length < 200) return candidates;
+      const last = page.at(-1)!;
+      if (cursor && last.id === cursor.id) throw new Error('Candidate pagination did not advance');
+      cursor = { id: last.id, joinedAt: last.joinedAt };
     }
-
-    // 5. Realtime roster notification via WebSocket
-    this.gateway.emitRosterFormed({
-      team_id: createdRoster.teamId,
-      team_name: createdRoster.teamName,
-      bracket_id: createdRoster.bracketId,
-      roster: createdRoster.roster,
-    });
-
-    return true;
   }
 
   /**
@@ -594,18 +504,21 @@ export class MatchmakingService {
       const size = Math.max(4, teamSize ?? 7);
       const bowlerCount = Math.max(1, Math.floor((size - 2) * 0.4));
       const batsmanCount = size - bowlerCount - 2;
-      return [
-        ...Array.from({ length: batsmanCount }, () => ({
-          slotName: 'BATSMAN',
-          rolePattern: /BAT/i,
-        })),
-        ...Array.from({ length: bowlerCount }, () => ({
-          slotName: 'BOWLER',
-          rolePattern: /BOWL/i,
-        })),
-        { slotName: 'ALL_ROUNDER', rolePattern: /ALL|ROUND/i },
-        { slotName: 'WICKETKEEPER', rolePattern: /KEEP|WICKET/i },
-      ];
+      return this.resizeSlotRequirements(
+        [
+          ...Array.from({ length: batsmanCount }, () => ({
+            slotName: 'BATSMAN',
+            rolePattern: /BAT/i,
+          })),
+          ...Array.from({ length: bowlerCount }, () => ({
+            slotName: 'BOWLER',
+            rolePattern: /BOWL/i,
+          })),
+          { slotName: 'ALL_ROUNDER', rolePattern: /ALL|ROUND/i },
+          { slotName: 'WICKETKEEPER', rolePattern: /KEEP|WICKET/i },
+        ],
+        teamSize ?? 7,
+      );
     }
 
     if (s.includes('FOOTBALL')) {
@@ -614,21 +527,24 @@ export class MatchmakingService {
       const defenderCount = Math.max(1, Math.floor(outfieldCount / 3));
       const midfielderCount = Math.max(1, Math.floor(outfieldCount / 3));
       const forwardCount = outfieldCount - defenderCount - midfielderCount;
-      return [
-        { slotName: 'GOALKEEPER', rolePattern: /GOAL|GK/i },
-        ...Array.from({ length: defenderCount }, () => ({
-          slotName: 'DEFENDER',
-          rolePattern: /DEF|BACK/i,
-        })),
-        ...Array.from({ length: midfielderCount }, () => ({
-          slotName: 'MIDFIELDER',
-          rolePattern: /MID/i,
-        })),
-        ...Array.from({ length: forwardCount }, () => ({
-          slotName: 'FORWARD',
-          rolePattern: /FORW|STRIK|WING/i,
-        })),
-      ];
+      return this.resizeSlotRequirements(
+        [
+          { slotName: 'GOALKEEPER', rolePattern: /GOAL|GK/i },
+          ...Array.from({ length: defenderCount }, () => ({
+            slotName: 'DEFENDER',
+            rolePattern: /DEF|BACK/i,
+          })),
+          ...Array.from({ length: midfielderCount }, () => ({
+            slotName: 'MIDFIELDER',
+            rolePattern: /MID/i,
+          })),
+          ...Array.from({ length: forwardCount }, () => ({
+            slotName: 'FORWARD',
+            rolePattern: /FORW|STRIK|WING/i,
+          })),
+        ],
+        teamSize ?? 7,
+      );
     }
 
     if (s.includes('BASKETBALL')) {
@@ -667,64 +583,11 @@ export class MatchmakingService {
     ];
   }
 
-  /**
-   * Greedy bipartite slot matching:
-   * Maps available candidates to required role slots using primaryRole first, then secondaryRole fallback.
-   */
-  private matchCandidatesToSlots<T extends { primaryRole: string; secondaryRole: string | null }>(
+  matchCandidatesToSlots<T extends RoleCandidate>(
     candidates: readonly T[],
     slots: readonly RoleSlotRequirement[],
-  ): ReadonlyArray<{ slotName: string; candidate: T }> | null {
-    const usedCandidateIndices = new Set<number>();
-    const result: Array<{ slotName: string; candidate: T }> = [];
-
-    // Phase 1: Try primary role match
-    for (const slot of slots) {
-      let matchedIndex = -1;
-      for (let i = 0; i < candidates.length; i++) {
-        if (!usedCandidateIndices.has(i)) {
-          const candidate = candidates[i]!;
-          if (slot.rolePattern.test(candidate.primaryRole)) {
-            matchedIndex = i;
-            break;
-          }
-        }
-      }
-
-      // Phase 2: Try secondary role fallback if no primary match
-      if (matchedIndex === -1) {
-        for (let i = 0; i < candidates.length; i++) {
-          if (!usedCandidateIndices.has(i)) {
-            const candidate = candidates[i]!;
-            if (candidate.secondaryRole && slot.rolePattern.test(candidate.secondaryRole)) {
-              matchedIndex = i;
-              break;
-            }
-          }
-        }
-      }
-
-      // Phase 3: For wildcard/generic fallback
-      if (matchedIndex === -1 && slot.rolePattern.source === '.*') {
-        for (let i = 0; i < candidates.length; i++) {
-          if (!usedCandidateIndices.has(i)) {
-            matchedIndex = i;
-            break;
-          }
-        }
-      }
-
-      if (matchedIndex === -1) {
-        return null; // Cannot satisfy this slot
-      }
-
-      usedCandidateIndices.add(matchedIndex);
-      result.push({
-        slotName: slot.slotName,
-        candidate: candidates[matchedIndex]!,
-      });
-    }
-
-    return result;
+    bounds?: MatchingGtiBounds<T>,
+  ): readonly RoleAssignment<T>[] | null {
+    return matchRoleSlots(candidates, slots, bounds);
   }
 }
