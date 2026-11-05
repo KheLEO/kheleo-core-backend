@@ -1,7 +1,7 @@
 datasource db {
   provider   = "postgresql"
   url        = env("DATABASE_URL")
-  extensions = [postgis(version: "3.4")]
+  extensions = [postgis]
 }
 
 generator client {
@@ -132,6 +132,7 @@ model User {
   drillSubmissions       DrillSubmission[]
   healthAlerts           HealthAlert[]
   scoutAlerts            ScoutAlert[]
+  securityAuditLogs      SecurityAuditLog[]
 
   @@index([role, isActive])
   @@map("users")
@@ -188,7 +189,7 @@ model AthleteProfile {
   dominantSide String?  @map("dominant_side") @db.VarChar(16)
 
   /// PostGIS geometry column - managed via raw SQL migrations
-  locationGeom Unsupported("geometry(Point, 4326)")? @map("location_geom")
+  locationGeom Unsupported("geometry(Point, 4326)")? @map("location")
   locationLat  Float?                                @map("location_lat")
   locationLng  Float?                                @map("location_lng")
 
@@ -217,6 +218,7 @@ model AthleteProfile {
   @@index([primarySport, currentGti(sort: Desc)])
   @@index([district, state])
   @@index([tierClassification, currentGti(sort: Desc)])
+  @@index([locationGeom], type: Gist, map: "idx_athlete_profiles_location_gist")
   @@map("athlete_profiles")
 }
 
@@ -259,7 +261,7 @@ model Tournament {
   venueLng  Float  @map("venue_lng")
 
   /// PostGIS geometry column - managed via raw SQL trigger on insert/update
-  venueGeom Unsupported("geometry(Point, 4326)")? @map("venue_geom")
+  venueGeom Unsupported("geometry(Point, 4326)")? @map("location")
 
   registrationDeadline DateTime @map("registration_deadline") @db.Timestamptz
   startDate            DateTime @map("start_date") @db.Timestamptz
@@ -279,6 +281,7 @@ model Tournament {
   @@index([sport, status])
   @@index([minGti, maxGti])
   @@index([registrationDeadline])
+  @@index([venueGeom], type: Gist, map: "idx_tournaments_location_gist")
   @@map("tournaments")
 }
 
@@ -551,4 +554,22 @@ model IdempotencyRecord {
 
   @@index([key, expiresAt])
   @@map("idempotency_records")
+}
+
+model SecurityAuditLog {
+  id         String   @id @default(uuid()) @db.Uuid
+  userId     String?  @map("user_id") @db.Uuid
+  action     String   @db.VarChar(100)
+  resource   String?  @db.VarChar(100)
+  resourceId String?  @map("resource_id") @db.VarChar(255)
+  ipAddress  String?  @map("ip_address") @db.VarChar(45)
+  userAgent  String?  @map("user_agent") @db.Text
+  metadata   Json?    @db.JsonB
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([userId, createdAt(sort: Desc)])
+  @@index([action, createdAt(sort: Desc)])
+  @@map("security_audit_logs")
 }

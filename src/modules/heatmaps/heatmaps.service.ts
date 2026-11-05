@@ -39,7 +39,7 @@ export class HeatmapsService {
           ROUND(AVG(COALESCE(gti, current_gti, 0))::numeric, 2)::float AS average_gti,
           ROUND((COUNT(CASE WHEN UPPER(gender) = 'FEMALE' THEN 1 END)::numeric / NULLIF(COUNT(id), 0)::numeric) * 100, 2)::float AS female_participation_pct,
           CASE 
-            WHEN COUNT(location_geom) > 0 THEN ST_AsGeoJSON(ST_Centroid(ST_Collect(location_geom)))
+            WHEN COUNT(location) > 0 THEN ST_AsGeoJSON(ST_Centroid(ST_Collect(location)))
             WHEN COUNT(location_lat) > 0 THEN ST_AsGeoJSON(ST_MakePoint(AVG(location_lng), AVG(location_lat)))
             ELSE NULL
           END AS centroid

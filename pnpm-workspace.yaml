@@ -5,3 +5,7 @@ onlyBuiltDependencies:
   - '@prisma/client'
   - '@prisma/engines'
   - prisma
+  - msgpackr-extract
+  - '@scarf/scarf'
+  - bcrypt
+  - argon2

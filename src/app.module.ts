@@ -17,6 +17,7 @@ import { GtiModule } from './modules/gti/gti.module';
 import { ScoutsModule } from './modules/scouts/scouts.module';
 import { HeatmapsModule } from './modules/heatmaps/heatmaps.module';
 import { CommonModule } from './common/common.module';
+import { HealthModule } from './modules/health/health.module';
 
 @Module({
   imports: [
@@ -27,6 +28,7 @@ import { CommonModule } from './common/common.module';
     BullmqModule,
     RealtimeModule,
     CommonModule,
+    HealthModule,
 
     // Domain Modules
     AuthModule,

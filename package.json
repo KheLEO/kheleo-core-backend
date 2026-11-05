@@ -5,17 +5,33 @@
   "author": "Kheleo Engineering",
   "private": true,
   "license": "UNLICENSED",
+  "packageManager": "pnpm@10.32.0",
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "@prisma/client",
+      "@prisma/engines",
+      "prisma",
+      "msgpackr-extract",
+      "@scarf/scarf",
+      "bcrypt",
+      "argon2"
+    ]
+  },
   "scripts": {
-    "build": "nest build",
+    "build": "nest build && node scripts/create-entrypoint-shim.cjs",
+    "postinstall": "prisma generate",
     "format": "prettier --write \"src/**/*.ts\"",
     "start": "nest start",
     "start:dev": "nest start --watch",
     "start:debug": "nest start --debug --watch",
-    "start:prod": "node dist/main",
+    "start:prod": "node dist/main.js",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
     "prisma:deploy": "prisma migrate deploy",
-    "test": "ts-node test/phase2-auth-passport.spec.ts && ts-node test/phase3-tournaments-sandbagging.spec.ts && ts-node test/phase4-matchmaking-pool.spec.ts && ts-node test/phase5-drills-iot-gti.spec.ts && ts-node test/audit-hardening.spec.ts"
+    "test": "ts-node test/phase2-auth-passport.spec.ts && ts-node test/phase3-tournaments-sandbagging.spec.ts && ts-node test/phase4-matchmaking-pool.spec.ts && ts-node test/phase5-drills-iot-gti.spec.ts && ts-node test/audit-hardening.spec.ts && ts-node test/health.spec.ts && ts-node test/postgis-migration.spec.ts"
   },
   "dependencies": {
     "@fastify/compress": "^8.0.1",
@@ -38,17 +54,19 @@
     "jsonwebtoken": "^9.0.2",
     "passport": "^0.7.0",
     "passport-jwt": "^4.0.1",
+    "prisma": "^6.4.1",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.2",
     "socket.io": "^4.8.1"
   },
   "devDependencies": {
+    "@electric-sql/pglite": "0.5.15",
+    "@electric-sql/pglite-postgis": "0.2.15",
     "@nestjs/cli": "^11.0.5",
     "@nestjs/schematics": "^11.0.2",
     "@types/jsonwebtoken": "^9.0.9",
     "@types/node": "^22.13.9",
     "@types/passport-jwt": "^4.0.1",
-    "prisma": "^6.4.1",
     "ts-node": "^10.9.2",
     "typescript": "^5.8.2"
   }

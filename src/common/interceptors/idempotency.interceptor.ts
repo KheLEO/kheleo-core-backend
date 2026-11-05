@@ -7,15 +7,37 @@ import {
   BadRequestException,
   Logger,
 } from '@nestjs/common';
-import { Observable, catchError, concatMap, from, of, throwError } from 'rxjs';
+import { Observable, catchError, concatMap, defer, from, of, throwError } from 'rxjs';
 import { RedisService } from '../../infrastructure/cache/redis.service';
 import { FastifyRequest, FastifyReply } from 'fastify';
 import * as crypto from 'node:crypto';
+
+interface IdempotentRequest extends FastifyRequest {
+  readonly user?: { readonly sub: string };
+}
 
 interface CachedIdempotentResponse {
   readonly fingerprint: string;
   readonly statusCode: number;
   readonly body: unknown;
+}
+
+function canonicalJson(value: unknown): string {
+  if (value === null || typeof value !== 'object') {
+    const serialized = JSON.stringify(value);
+    if (serialized === undefined) {
+      throw new BadRequestException('Request body must contain valid JSON values.');
+    }
+    return serialized;
+  }
+  if (Array.isArray(value)) {
+    return `[${value.map((item: unknown) => canonicalJson(item)).join(',')}]`;
+  }
+  const record = value as Readonly<Record<string, unknown>>;
+  return `{${Object.keys(record)
+    .sort()
+    .map((key: string) => `${JSON.stringify(key)}:${canonicalJson(record[key])}`)
+    .join(',')}}`;
 }
 
 @Injectable()
@@ -28,7 +50,7 @@ export class IdempotencyInterceptor implements NestInterceptor {
 
   async intercept(context: ExecutionContext, next: CallHandler): Promise<Observable<unknown>> {
     const http = context.switchToHttp();
-    const req = http.getRequest<FastifyRequest>();
+    const req = http.getRequest<IdempotentRequest>();
     const res = http.getResponse<FastifyReply>();
 
     const idempotencyHeader = req.headers['idempotency-key'];
@@ -48,17 +70,16 @@ export class IdempotencyInterceptor implements NestInterceptor {
       throw new BadRequestException('Idempotency-Key must be at least 16 characters long.');
     }
 
-    const route = req.url.split('?')[0] ?? req.url;
-    const requestBody = JSON.stringify(req.body ?? null);
+    const deviceHeader = req.headers['x-device-signature'];
+    const deviceSignature = Array.isArray(deviceHeader) ? deviceHeader[0] : deviceHeader;
+    const actorScope = req.user?.sub ?? deviceSignature ?? req.ip ?? 'anonymous';
     const fingerprint = crypto
       .createHash('sha256')
-      .update(`${req.method}:${route}:${requestBody}`)
+      .update(
+        canonicalJson({ actorScope, method: req.method, url: req.url, body: req.body ?? null }),
+      )
       .digest('hex');
-    const scopedKey = crypto
-      .createHash('sha256')
-      .update(`${req.method}:${route}:${idempotencyKey}`)
-      .digest('hex');
-    const redisKey = `idempotency:${scopedKey}`;
+    const redisKey = `idempotency:${actorScope}:${req.method}:${req.url}:${idempotencyKey}`;
     const cachedResponse = await this.redis.get(redisKey);
 
     if (cachedResponse) {
@@ -81,9 +102,10 @@ export class IdempotencyInterceptor implements NestInterceptor {
     }
 
     const lockKey = `lock:${redisKey}`;
+    const lockOwnerToken = crypto.randomUUID();
     const acquired = await this.redis.setnx(
       lockKey,
-      'ACQUIRED',
+      lockOwnerToken,
       IdempotencyInterceptor.LOCK_TTL_SECONDS,
     );
     if (!acquired) {
@@ -92,12 +114,14 @@ export class IdempotencyInterceptor implements NestInterceptor {
       );
     }
 
-    return next.handle().pipe(
+    return defer(() => next.handle()).pipe(
       concatMap((responseBody: unknown) =>
-        from(this.cacheResponse(redisKey, lockKey, fingerprint, res, responseBody)),
+        from(this.cacheResponse(redisKey, lockKey, lockOwnerToken, fingerprint, res, responseBody)),
       ),
       catchError((error: unknown) =>
-        from(this.redis.del(lockKey)).pipe(concatMap(() => throwError(() => error))),
+        from(this.releaseLock(lockKey, lockOwnerToken)).pipe(
+          concatMap(() => throwError(() => error)),
+        ),
       ),
     );
   }
@@ -105,6 +129,7 @@ export class IdempotencyInterceptor implements NestInterceptor {
   private async cacheResponse(
     redisKey: string,
     lockKey: string,
+    lockOwnerToken: string,
     fingerprint: string,
     response: FastifyReply,
     body: unknown,
@@ -122,7 +147,15 @@ export class IdempotencyInterceptor implements NestInterceptor {
       this.logger.error(`Failed to persist idempotent response for ${redisKey}: ${String(error)}`);
       return body;
     } finally {
-      await this.redis.del(lockKey);
+      await this.releaseLock(lockKey, lockOwnerToken);
+    }
+  }
+
+  private async releaseLock(lockKey: string, lockOwnerToken: string): Promise<void> {
+    try {
+      await this.redis.deleteIfValueMatches(lockKey, lockOwnerToken);
+    } catch (error: unknown) {
+      this.logger.error(`Failed to release idempotency lock: ${String(error)}`);
     }
   }
 }

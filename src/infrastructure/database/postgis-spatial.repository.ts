@@ -64,14 +64,14 @@ export class PostgisSpatialRepository {
         registration_deadline,
         start_date,
         ST_Distance(
-          COALESCE(venue_geom, ST_SetSRID(ST_MakePoint(venue_lng, venue_lat), 4326))::geography,
+          location::geography,
           ST_SetSRID(ST_MakePoint(${point.lng}, ${point.lat}), 4326)::geography
         ) / 1000.0 AS distance_km
       FROM tournaments
       WHERE status = 'REGISTRATION_OPEN'
-        AND (venue_geom IS NOT NULL OR (venue_lat IS NOT NULL AND venue_lng IS NOT NULL))
+        AND location IS NOT NULL
         AND ST_DWithin(
-          COALESCE(venue_geom, ST_SetSRID(ST_MakePoint(venue_lng, venue_lat), 4326))::geography,
+          location::geography,
           ST_SetSRID(ST_MakePoint(${point.lng}, ${point.lat}), 4326)::geography,
           ${radiusMeters}
         )

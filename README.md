@@ -51,7 +51,7 @@ The application is organized by domain under `src/modules`, with shared guards, 
 ## Prerequisites
 
 - Node.js 20 or newer
-- pnpm
+- pnpm 10.32.0 (pinned in `package.json`; Corepack selects this version)
 - Docker with Docker Compose, or compatible PostgreSQL/PostGIS and Redis instances
 
 ## Local setup
@@ -71,14 +71,13 @@ The application is organized by domain under `src/modules`, with shared guards, 
    docker compose up -d
    ```
 
-4. Generate Prisma Client and initialize the development database from the current schema.
+4. Apply the committed baseline to an empty development database. Dependency installation already generates Prisma Client.
 
    ```bash
-   pnpm prisma:generate
-   pnpm exec prisma db push
+   pnpm prisma:deploy
    ```
 
-   The repository currently contains the Prisma schema but no committed migration history. Use `pnpm exec prisma migrate dev --name <migration_name>` when creating a migration that should be reviewed and committed. `pnpm prisma:deploy` applies committed migrations in deployment environments.
+   The baseline initializes all tables, PostGIS, coordinate synchronization triggers, and spatial indexes. It requires permission to create the PostGIS extension. Use `pnpm exec prisma migrate dev --name <migration_name>` for subsequent schema changes; preserve custom trigger and expression-index SQL when reviewing migrations. Existing databases created with `db push` need a reviewed baseline reconciliation before deployment, including renaming `venue_geom`/`location_geom` to `location` and installing the triggers and indexes. Do not mark the baseline applied until the database matches it.
 
 5. Start the API.
 
@@ -131,9 +130,11 @@ openssl rsa -pubout -in keys/private.pem -out keys/public.pem
 | `pnpm prisma:generate` | Generate Prisma Client                       |
 | `pnpm prisma:migrate`  | Create/apply a development migration         |
 | `pnpm prisma:deploy`   | Apply committed migrations                   |
-| `pnpm test`            | Run the five project integration/spec suites |
+| `pnpm test`            | Run the seven project spec suites            |
 
-Run `pnpm build` before `pnpm start:prod`.
+Run `pnpm build` before `pnpm start:prod`. The build emits `dist/main.js` and a compatibility shim at `dist/src/main.js`; both entrypoints start the same application. Build output excludes tests and audit evidence.
+
+`GET /api/v1/health` is public and requires no headers. It returns `{ status, db, redis, uptime }` directly, with HTTP 200 for `status: "ok"` or HTTP 503 for `status: "degraded"`. Database and Redis probes run concurrently with a one-second deadline each; dependency results are `"ok"` or `"unavailable"`, and uptime is measured in seconds.
 
 ## Authentication and request integrity
 
@@ -153,7 +154,7 @@ All mutation routes wired through the idempotency interceptor require a key of a
 Idempotency-Key: <unique-request-key>
 ```
 
-Successful responses are cached for 24 hours by HTTP method, route, key, and request fingerprint. Reusing a key with a different body returns `409 Conflict`; a replay with the same body returns the cached response and `X-Cache-Lookup: IDEMPOTENT_HIT`.
+Successful responses are cached for 24 hours per authenticated user, HTTP method, full URL including query string, and key. Public requests fall back to the device-signature header, then the caller IP. Fingerprints sort JSON object keys recursively and preserve array order. Reusing a key in the same scope with a different body returns `409 Conflict`; a replay with the same body returns the cached response and `X-Cache-Lookup: IDEMPOTENT_HIT`. Concurrent duplicates receive `409 Conflict`; lock release atomically verifies the invocation's owner token.
 
 ### Example registration
 
@@ -186,6 +187,7 @@ All routes below are under `/api/v1`.
 
 | Method and route                                                          | Access                                                   | Purpose                                                                  |
 | ------------------------------------------------------------------------- | -------------------------------------------------------- | ------------------------------------------------------------------------ |
+| `GET /health`                                                            | Public                                                   | Check database and Redis readiness                                      |
 | `POST /auth/register`                                                     | Public + idempotency key                                 | Register an athlete or recover the matching permanent profile            |
 | `POST /auth/login`                                                        | Public + idempotency key                                 | Authenticate with verified contact and government ID                     |
 | `POST /auth/verify-government-id`                                         | JWT + idempotency key                                    | Bind a government ID to the current user                                 |
@@ -276,6 +278,8 @@ pnpm exec tsc --noEmit
 pnpm test
 pnpm build
 ```
+
+The migration suite executes the committed SQL in embedded Postgres/PostGIS (PGlite), including geometry triggers, foreign keys, spatial indexes, and the production discovery/heatmap queries. Health HTTP tests inject dependency failures. These checks do not establish native PostgreSQL/Redis connectivity or full application startup; verify those against the deployment services.
 
 ## License
 
