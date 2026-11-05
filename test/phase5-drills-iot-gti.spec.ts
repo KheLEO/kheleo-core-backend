@@ -443,10 +443,32 @@ describe('Phase 5: Edge-AI Drills, IoT Safety Match-Pause, GTI Engine, Scout Ale
       assert.strictEqual(result.gti, 88.2);
       assert.strictEqual(result.eliteBreached, true);
       assert.strictEqual(result.scoutAlertTriggered, true);
+      assert.deepStrictEqual(result.evidence, {
+        biomechanical: 'VERIFIED',
+        wearable: 'VERIFIED',
+        matchPerformance: 'VERIFIED',
+      });
+      assert.strictEqual(result.provisional, false);
 
       // Verify DB Transaction
       assert.ok(updatedProfile);
       assert.ok(createdHistory);
+      assert.deepStrictEqual(
+        (createdHistory as { data: { calculationFactors: Record<string, unknown> } }).data
+          .calculationFactors,
+        {
+          w1: 0.35,
+          w2: 0.25,
+          w3: 0.4,
+          calculationVersion: 'gti-v1',
+          evidence: {
+            biomechanical: 'VERIFIED',
+            wearable: 'VERIFIED',
+            matchPerformance: 'VERIFIED',
+          },
+          provisional: false,
+        },
+      );
 
       // Verify Redis ZADD calls for global and district leaderboards
       assert.strictEqual(redisCommands.length, 2);

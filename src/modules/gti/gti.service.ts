@@ -15,6 +15,12 @@ export interface GtiComputationResult {
   readonly matchPerformanceScore: number;
   readonly eliteBreached: boolean;
   readonly scoutAlertTriggered: boolean;
+  readonly evidence: {
+    readonly biomechanical: 'VERIFIED' | 'NOT_AVAILABLE';
+    readonly wearable: 'VERIFIED' | 'NOT_AVAILABLE';
+    readonly matchPerformance: 'VERIFIED' | 'NOT_AVAILABLE';
+  };
+  readonly provisional: boolean;
 }
 
 @Injectable()
@@ -118,18 +124,34 @@ export class GtiService {
         biomech = Number((sum / drills.length).toFixed(2));
       }
     }
+    const biomechanicalEvidence: GtiComputationResult['evidence']['biomechanical'] =
+      biomech > 0 ? 'VERIFIED' : 'NOT_AVAILABLE';
 
     // Wearable Consistency: from trainingConsistencyScore or wearableScore
+    const wearableEvidence: GtiComputationResult['evidence']['wearable'] =
+      profile.trainingConsistencyScore > 0 || Number(profile.wearableScore) !== 50
+        ? 'VERIFIED'
+        : 'NOT_AVAILABLE';
     const wearable =
       profile.trainingConsistencyScore > 0
         ? profile.trainingConsistencyScore
         : Number(profile.wearableScore) || 50.0;
 
     // Match Performance: from matchPerformanceScore or matchPerfScore
+    const matchPerformanceEvidence: GtiComputationResult['evidence']['matchPerformance'] =
+      profile.matchPerformanceScore > 0 || Number(profile.matchPerfScore) !== 50
+        ? 'VERIFIED'
+        : 'NOT_AVAILABLE';
     const matchPerf =
       profile.matchPerformanceScore > 0
         ? profile.matchPerformanceScore
         : Number(profile.matchPerfScore) || 50.0;
+    const evidence = {
+      biomechanical: biomechanicalEvidence,
+      wearable: wearableEvidence,
+      matchPerformance: matchPerformanceEvidence,
+    } as const;
+    const provisional = Object.values(evidence).some((status) => status !== 'VERIFIED');
 
     // 3. Compute normalized composite GTI
     const computedGti = this.computeCompositeGti(biomech, wearable, matchPerf);
@@ -162,11 +184,14 @@ export class GtiService {
             w1: GtiService.W1_BIOMECHANICAL,
             w2: GtiService.W2_WEARABLE_CONSISTENCY,
             w3: GtiService.W3_MATCH_PERFORMANCE,
+            calculationVersion: 'gti-v1',
+            evidence,
+            provisional,
           },
         },
       });
 
-      if (!eliteBreached || !isUnderrepresented) {
+      if (!eliteBreached || !isUnderrepresented || provisional) {
         return false;
       }
 
@@ -251,6 +276,8 @@ export class GtiService {
       matchPerformanceScore: matchPerf,
       eliteBreached,
       scoutAlertTriggered: scoutAlertCreated,
+      evidence,
+      provisional,
     };
   }
 

@@ -9,6 +9,7 @@ import {
 import { ForbiddenException, Logger, UseGuards } from '@nestjs/common';
 import { Server, Socket } from 'socket.io';
 import { WsAuthGuard } from '../../infrastructure/realtime/ws-auth.guard';
+import { PrismaService } from '../../infrastructure/database/prisma.service';
 
 interface AuthenticatedSocket extends Socket {
   readonly user?: { readonly sub: string; readonly role: string };
@@ -39,6 +40,8 @@ export class MatchmakingGateway implements OnGatewayInit {
 
   private readonly logger = new Logger(MatchmakingGateway.name);
 
+  constructor(private readonly prisma: PrismaService) {}
+
   afterInit(): void {
     this.logger.log('Matchmaking WebSocket Gateway initialized');
   }
@@ -57,10 +60,23 @@ export class MatchmakingGateway implements OnGatewayInit {
   }
 
   @SubscribeMessage('join:bracket')
-  handleJoinBracket(
-    @ConnectedSocket() client: Socket,
+  async handleJoinBracket(
+    @ConnectedSocket() client: AuthenticatedSocket,
     @MessageBody() data: { bracketId: string },
-  ): void {
+  ): Promise<void> {
+    const user = client.user;
+    if (!user || user.role === 'ATHLETE' || user.role === 'SCOUT') {
+      throw new ForbiddenException('Only competition staff may subscribe to bracket events.');
+    }
+    if (user.role !== 'FEDERATION_ADMIN' && user.role !== 'SUPER_ADMIN') {
+      const bracket = await this.prisma.bracket.findUnique({
+        where: { id: data.bracketId },
+        select: { tournament: { select: { organizerId: true } } },
+      });
+      if (!bracket || bracket.tournament.organizerId !== user.sub) {
+        throw new ForbiddenException('You cannot subscribe to this bracket.');
+      }
+    }
     const room = `bracket:${data.bracketId}`;
     void client.join(room);
     this.logger.debug(`Socket ${client.id} joined bracket room ${room}`);
@@ -75,14 +91,11 @@ export class MatchmakingGateway implements OnGatewayInit {
       data,
     };
 
-    // Broadcast to bracket room
     if (this.server) {
-      this.server.to(`bracket:${data.bracket_id}`).emit('ROSTER_FORMED', payload);
-
-      // Also deliver directly to each matched user's personal room
-      for (const member of data.roster) {
-        this.server.to(`user:${member.user_id}`).emit('ROSTER_FORMED', payload);
-      }
+    this.server.to(`bracket:${data.bracket_id}`).emit('ROSTER_FORMED', payload);
+    for (const member of data.roster) {
+      this.server.to(`user:${member.user_id}`).emit('ROSTER_FORMED', payload);
+    }
     }
 
     this.logger.log(

@@ -42,6 +42,7 @@ import { BracketsService } from '../src/modules/brackets/brackets.service';
 import { MatchmakingService } from '../src/modules/matchmaking/matchmaking.service';
 import { QueueProducerService } from '../src/infrastructure/queues/queue-producer.service';
 import { MatchmakingGateway } from '../src/modules/matchmaking/matchmaking.gateway';
+import { WsEventGateway } from '../src/infrastructure/realtime/ws-event.gateway';
 import {
   createCompetitionApp,
   createCompetitionFixture,
@@ -142,6 +143,140 @@ describe('Audit hardening regressions', () => {
       interceptor.intercept(createContext(undefined, '/drills/submit', {}), next),
       BadRequestException,
     );
+  });
+
+  describe('Realtime authorization regressions', () => {
+    it('rejects athlete subscriptions to competition rooms', async () => {
+      const gateway = new WsEventGateway({
+        tournament: { findUnique: async () => null },
+        match: { findUnique: async () => null },
+      } as never);
+      const joins: string[] = [];
+      const client = {
+        id: 'socket-athlete',
+        user: { sub: TEST_USER_ID, role: UserRole.ATHLETE },
+        join: (room: string) => {
+          joins.push(room);
+        },
+      } as never;
+
+      await assert.rejects(
+        gateway.handleJoinTournament(client, { tournamentId: 'tournament-1' }),
+        ForbiddenException,
+      );
+      await assert.rejects(
+        gateway.handleJoinMatch(client, { matchId: 'match-1' }),
+        ForbiddenException,
+      );
+      assert.deepStrictEqual(joins, []);
+    });
+
+    it('rejects an organizer from another organizer’s tournament room', async () => {
+      const gateway = new WsEventGateway({
+        tournament: {
+          findUnique: async () => ({ organizerId: 'different-organizer' }),
+        },
+        match: { findUnique: async () => null },
+      } as never);
+      const client = {
+        id: 'socket-organizer',
+        user: { sub: TEST_USER_ID, role: UserRole.ORGANIZER },
+        join: () => undefined,
+      } as never;
+
+      await assert.rejects(
+        gateway.handleJoinTournament(client, { tournamentId: 'tournament-1' }),
+        ForbiddenException,
+      );
+    });
+
+    it('allows an assigned umpire to join a match room', async () => {
+      const gateway = new WsEventGateway({
+        tournament: { findUnique: async () => null },
+        match: {
+          findUnique: async () => ({
+            umpireId: TEST_USER_ID,
+            bracket: { tournament: { organizerId: 'different-organizer' } },
+          }),
+        },
+      } as never);
+      const joins: string[] = [];
+      const client = {
+        id: 'socket-umpire',
+        user: { sub: TEST_USER_ID, role: UserRole.UMPIRE },
+        join: (room: string) => joins.push(room),
+      } as never;
+
+      await gateway.handleJoinMatch(client, { matchId: 'match-1' });
+      assert.deepStrictEqual(joins, ['match:match-1']);
+    });
+
+    it('does not globally broadcast sensitive match-pause events', () => {
+      const gateway = new WsEventGateway({
+        tournament: { findUnique: async () => null },
+        match: { findUnique: async () => null },
+      } as never);
+      const emittedRooms: string[] = [];
+      let globalBroadcasts = 0;
+      gateway.server = {
+        to: (room: string) => ({
+          emit: () => emittedRooms.push(room),
+        }),
+        emit: () => {
+          globalBroadcasts += 1;
+        },
+      } as never;
+
+      gateway.broadcastAutonomousMatchPause({
+        event: 'MATCH_PAUSE_ALERT',
+        severity: 'CRITICAL',
+        athlete_id: TEST_USER_ID,
+        athlete_name: 'Athlete',
+        vitals: { heart_rate: 200, spo2: 88, skin_temperature: 40 },
+        directive: 'MANDATORY REST',
+        tournament_id: 'tournament-1',
+        bracket_id: 'bracket-1',
+        match_id: 'match-1',
+      });
+
+      assert.strictEqual(globalBroadcasts, 0);
+      assert.deepStrictEqual(emittedRooms, [
+        'tournament:tournament-1',
+        'organizer:tournament-1',
+        'umpire:tournament-1',
+        'bracket:bracket-1',
+        'match:match-1',
+      ]);
+    });
+
+    it('restricts matchmaking bracket subscriptions to the tournament owner', async () => {
+      const gateway = new MatchmakingGateway({
+        bracket: {
+          findUnique: async () => ({
+            tournament: { organizerId: 'different-organizer' },
+          }),
+        },
+      } as never);
+      const athlete = {
+        id: 'socket-athlete',
+        user: { sub: TEST_USER_ID, role: UserRole.ATHLETE },
+        join: () => undefined,
+      } as never;
+      const organizer = {
+        id: 'socket-organizer',
+        user: { sub: TEST_USER_ID, role: UserRole.ORGANIZER },
+        join: () => undefined,
+      } as never;
+
+      await assert.rejects(
+        gateway.handleJoinBracket(athlete, { bracketId: 'bracket-1' }),
+        ForbiddenException,
+      );
+      await assert.rejects(
+        gateway.handleJoinBracket(organizer, { bracketId: 'bracket-1' }),
+        ForbiddenException,
+      );
+    });
   });
 
   it('rejects reuse of a key with a different request payload', async () => {
@@ -1224,6 +1359,7 @@ describe('Phase 3 organizer CRUD, transactional eligibility, and spatial regress
         headers: authenticatedHeaders(),
         payload: bracketPayload,
       });
+
       assert.strictEqual(response.statusCode, 403, response.body);
       assert.match(response.body, /You do not own this tournament/);
       assert.strictEqual(fixture.state.brackets.size, 1);
