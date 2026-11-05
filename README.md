@@ -144,7 +144,7 @@ Run `pnpm build` before `pnpm start:prod`. The build emits `dist/main.js` and a 
 
 Authentication is intentionally passwordless in this service. Public athlete registration accepts a phone number or email and may bind a government ID. Login requires the same verified contact plus the government-ID proof. The normalized ID is hashed with a versioned domain salt and `IDENTITY_PEPPER`; only the hash is stored.
 
-If registration supplies a government ID already attached to the same contact, the existing permanent profile is reactivated and returned without changing its contacts or historical GTI. A matching ID with a different contact is rejected. Registration accepts `ATHLETE`, `ORGANIZER`, and `SCOUT`; `SUPER_ADMIN` requires a matching `adminInviteCode` and server `ADMIN_INVITE_CODE`. Other privileged roles cannot self-register.
+If registration supplies a government ID already attached to the same contact, the existing permanent profile is reactivated and returned without changing its contacts or historical GTI. A matching ID with a different contact is rejected. Registration accepts `ATHLETE`, `ORGANIZER`, and `SCOUT`; organizers/scouts require a bound identity and remain UNVERIFIED pending administrator approval; `SUPER_ADMIN` requires a matching `adminInviteCode` and server `ADMIN_INVITE_CODE`. Other privileged roles cannot self-register.
 
 Login, refresh, and authenticated HTTP requests reject deactivated accounts and identities marked `REVOKED` or `FLAGGED_DUPLICATE`. Deactivation also revokes stored refresh tokens. Token lifetimes follow `JWT_ACCESS_EXPIRY` and `JWT_REFRESH_EXPIRY`. Identity lookups try the configured salt version and version 1; new records store the configured version. Retain the identity pepper when changing the salt version.
 
@@ -282,7 +282,7 @@ In production, full/full-v2 signing is required by default. For local compatibil
 
 ### Safety telemetry
 
-`POST /safety/telemetry-webhook` requires `Idempotency-Key` plus either an athlete JWT matching `athlete_id`, or `X-Device-Signature` containing the HMAC-SHA256 of the JSON request body signed with `TELEMETRY_SERVICE_HMAC_SECRET`. The required timestamp must be within 300 seconds. Bounds are heart_rate 20–260, spo2 50–100, and skin_temperature 25–45. JWT telemetry is an authenticated self-report, not hardware attestation; the stored session/alert source records this distinction.
+`POST /safety/telemetry-webhook` requires `Idempotency-Key` plus either an athlete JWT matching `athlete_id`, or `X-Device-Signature` containing the HMAC-SHA256 of the JSON request body signed with `TELEMETRY_SERVICE_HMAC_SECRET`. The required timestamp must be within 300 seconds. Bounds are heart_rate 20–260, spo2 50–100, and skin_temperature 25–45. JWT telemetry is an authenticated self-report, not hardware attestation. Browser packets labeled `source: BLE` or `SIMULATOR` require both athlete JWT and device HMAC. Sessions/alerts persist source and `baseline_fields`; a heart-rate-only strap uses labeled defaults `spo2: 98`, `skin_temperature: 36.8`. Simulator packets may carry authorized competition context and exercise the same safety thresholds.
 
 Telemetry levels are evaluated as follows:
 
@@ -292,7 +292,7 @@ Telemetry levels are evaluated as follows:
 | Warning  | Heart rate `> 185`, SpO2 `< 93`, or skin temperature `> 38.5`, when no critical condition exists |
 | Normal   | No threshold is breached                                                                         |
 
-Critical telemetry with an active match checks actual roster membership and supplied parent context before moving WARMUP/LIVE to PAUSED_SAFETY. Missing parent IDs are filled from the match. Only a real transition records matchPaused=true and emits MATCH_PAUSE_ALERT. Standalone critical telemetry records a CRITICAL_ALERT without inventing a paused match. Context without match_id requires confirmed registration. Resume requires owning organizer/assigned umpire/super-admin authority and acknowledgement of all outstanding critical alerts; acknowledgement is an operational record, not medical clearance.
+Critical telemetry with an active match checks actual roster membership and supplied parent context before moving WARMUP/LIVE to PAUSED_SAFETY. Missing parent IDs are filled from the match. Only a real match transition records matchPaused=true. Every critical reading emits a room-scoped MATCH_PAUSE_ALERT. Standalone critical telemetry records a CRITICAL_ALERT without inventing a paused match. Context without match_id requires confirmed registration. Resume requires owning organizer/assigned umpire/super-admin authority and acknowledgement of all outstanding critical alerts; acknowledgement is an operational record, not medical clearance.
 
 ## GTI and talent discovery
 
@@ -355,3 +355,13 @@ Private and unlicensed. See `package.json`.
 Phase 5 adds durable outbox delivery/retry intents, production contact proof, pending identity approval, administrative recovery blocking, Redis URL/TLS/ACL settings, and Data API isolation. Apply all migrations before startup. Queue/event recovery is at least once; clients should reconcile with durable REST state and deduplicate recovered event IDs or business IDs. Scout alert lists retain their array response and accept cursor_id/limit with X-Next-Cursor for the next page. Registration never marks fees paid without settlement.
 
 Run the complete embedded PostGIS/PGlite test suite on Node 24. CI checks the Node 20 application build, compiled probes, native PostGIS/Redis integration and container separately; its older V8 cannot load the pinned PostGIS WASM test extension.
+
+## Prompt 1 contract and rollout changes
+
+- `POST /api/v1/auth/logout` revokes all refresh families in a serializable transaction. Refresh rotation and successor issuance are atomic; inactive/revoked/duplicate identities cannot authenticate or refresh.
+- `/auth/verify-gov-id` aliases `/auth/verify-government-id`. `GET/POST/PATCH /users/profile` targets the authenticated passport. `biomechanicalScore` is returned directly.
+- Nearby discovery returns `{ data, next_cursor, has_more }`, ordered by exact distance then UUID on both spatial and fallback paths. Clients should follow `next_cursor` until `has_more` is false.
+- The frontend uses FULL_V2 canonical drill signatures covering sport, frame count, flags, joint summaries, timestamp, athlete, calibration version, and pose digest. Unique `(athlete_id, client_pose_digest)` prevents awarding the same pose series again with a new timestamp.
+- Apply `20261106000000_telemetry_provenance` with `pnpm prisma:deploy` before deploying this code. It adds BLE/simulator provenance, baseline labels, and pose-digest replay protection.
+
+Scoring policy 1.0.0 is an engineering reference policy. These changes do not provide camera/device attestation, physical-sensor certification, or medical validation.

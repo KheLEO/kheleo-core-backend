@@ -102,6 +102,9 @@ export class AthletePassportDto {
   @ApiProperty({ example: 120 })
   readonly posturePoints!: number;
 
+  @ApiProperty({ example: 65.0, description: 'Biomechanical form score (0-100)' })
+  readonly biomechanicalScore!: number;
+
   @ApiProperty({
     enum: VerificationStatus,
     example: VerificationStatus.VERIFIED,

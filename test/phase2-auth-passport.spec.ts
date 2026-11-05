@@ -14,6 +14,7 @@ import {
 } from '@nestjs/common';
 import { LoginDto } from '../src/modules/auth/dto/login.dto';
 import { createAuthFixture, TEST_DOCUMENT } from './helpers/auth-passport.fixture';
+import { JwtStrategy } from '../src/modules/auth/strategies/jwt.strategy';
 import { decode } from 'jsonwebtoken';
 
 describe('Phase 2: Identity, Anti-Account Reset, & Passport Tests', () => {
@@ -366,7 +367,19 @@ describe('Phase 2 auth, identity rotation, and passport regressions', () => {
   for (const role of [UserRole.ATHLETE, UserRole.ORGANIZER, UserRole.SCOUT]) {
     it(`allows campus registration as ${role}`, async () => {
       const fixture = createAuthFixture();
-      const result = await fixture.auth.register({ email: 'new-role@fixture.test', role });
+      fixture.state.user.identityRecord = null;
+      const result = await fixture.auth.register({
+        email: 'new-role@fixture.test',
+        role,
+        ...(role !== UserRole.ATHLETE ? { governmentId: login.governmentId } : {}),
+      });
+      if (role !== UserRole.ATHLETE) {
+        assert.strictEqual(result.user.isVerified, false);
+        assert.strictEqual(
+          fixture.state.createdIdentities[0]?.status,
+          VerificationStatus.UNVERIFIED,
+        );
+      }
       assert.strictEqual(result.user.role, role);
     });
   }
@@ -450,3 +463,69 @@ describe('Phase 2 auth, identity rotation, and passport regressions', () => {
     );
   });
 });
+
+describe('Prompt 1 token families and passport trust boundaries', () => {
+  it('revokes every refresh family on logout and rejects rotated tokens afterward', async () => {
+    const f = createAuthFixture();
+    const rotated = await f.auth.refreshTokens('fixture-refresh-token');
+    assert.strictEqual(f.state.createdTokens[0]?.family, f.state.token.family);
+    await f.auth.logout(f.state.user.id);
+    assert.ok(f.state.createdTokens.every((token) => token.revoked));
+    await assert.rejects(f.auth.refreshTokens(rotated.refreshToken));
+    assert.strictEqual(f.state.createdTokens.length, 1);
+  });
+  it('revokes descendants when an already rotated refresh token is replayed', async () => {
+    const f = createAuthFixture();
+    await f.auth.refreshTokens('fixture-refresh-token');
+    await assert.rejects(f.auth.refreshTokens('fixture-refresh-token'));
+    assert.ok(f.state.createdTokens.every((token) => token.revoked));
+  });
+  for (const role of [UserRole.ATHLETE, UserRole.SCOUT, UserRole.UMPIRE]) {
+    it(`rejects verified metrics and badges authored by ${role} inside the service`, async () => {
+      const f = createAuthFixture();
+      for (const extra of [
+        { verifiedMetrics: { wins: 999 } },
+        { earnedBadges: [{ id: 'forged' }] },
+      ])
+        await assert.rejects(
+          f.passports.addOrUpdateSportRecord(
+            f.state.user.id,
+            { sport: SportType.CRICKET, primaryRole: 'BOWLER', ...extra },
+            { sub: f.state.user.id, role },
+          ),
+          ForbiddenException,
+        );
+    });
+  }
+  for (const role of [UserRole.ORGANIZER, UserRole.FEDERATION_ADMIN, UserRole.SUPER_ADMIN]) {
+    it(`accepts staff-verified fields from ${role}`, async () => {
+      const f = createAuthFixture();
+      await f.passports.upsertPassport(f.state.user.id, { primarySport: SportType.CRICKET });
+      const result = await f.passports.addOrUpdateSportRecord(
+        f.state.user.id,
+        {
+          sport: SportType.CRICKET,
+          primaryRole: 'BOWLER',
+          verifiedMetrics: { wins: 10 },
+          earnedBadges: [{ id: 'verified' }],
+        },
+        { sub: f.state.user.id, role },
+      );
+      assert.deepStrictEqual(result.verifiedMetrics, { wins: 10 });
+      assert.deepStrictEqual(result.earnedBadges, [{ id: 'verified' }]);
+    });
+  }
+});
+
+for (const role of [UserRole.ORGANIZER, UserRole.SCOUT]) {
+  it(`blocks pending ${role} tokens until administrator verification`, async () => {
+    const f = createAuthFixture();
+    f.state.user.role = role;
+    f.state.user.identityRecord!.status = VerificationStatus.UNVERIFIED;
+    const strategy = new JwtStrategy(f.config, f.database);
+    const payload = { sub: f.state.user.id, role, exp: Math.floor(Date.now() / 1000) + 900 };
+    await assert.rejects(strategy.validate(payload), ForbiddenException);
+    f.state.user.identityRecord!.status = VerificationStatus.VERIFIED;
+    assert.strictEqual((await strategy.validate(payload)).role, role);
+  });
+}

@@ -146,12 +146,12 @@ describe('Audit hardening regressions', () => {
   });
 
   describe('Realtime authorization regressions', () => {
-    it('rejects athlete subscriptions to competition rooms', async () => {
+    it('rejects unrelated athlete subscriptions to competition rooms', async () => {
       const f = await createSecurityFixture();
       const gateway = new WsEventGateway(f.sockets, new RoomAccessService(f.prisma));
       const joins: string[] = [];
       const client = {
-        data: { user: { sub: ATHLETE_ID, role: 'ATHLETE' } },
+        data: { user: { sub: randomUUID(), role: 'ATHLETE' } },
         join: (room: string) => {
           joins.push(room);
         },
@@ -213,6 +213,10 @@ describe('Audit hardening regressions', () => {
           `tournament:${TOURNAMENT_ID}`,
           `bracket:${BRACKET_ID}`,
           `match:${MATCH_ID}`,
+          'role:ORGANIZER',
+          'role:UMPIRE',
+          'role:FEDERATION_ADMIN',
+          'role:SUPER_ADMIN',
         ]),
       );
     });
@@ -821,6 +825,7 @@ describe('Phase 2 auth and frontend HTTP contracts', () => {
         jointAnglesSummary: {},
         signatureHash: 'private-signature',
         signatureVersion: 'LEGACY',
+        clientPoseDigest: null,
         metadataVerified: false,
         createdAt: new Date(),
       });
@@ -839,6 +844,7 @@ describe('Phase 2 auth and frontend HTTP contracts', () => {
         acknowledgedAt: null,
         acknowledgedById: null,
         source: 'DEVICE_HMAC',
+        baselineFields: [],
         createdAt: new Date(),
       });
       const response = await app.inject({
@@ -1681,7 +1687,7 @@ describe('Phase 3 organizer CRUD, transactional eligibility, and spatial regress
       limit: 1,
     });
     assert.deepStrictEqual(
-      rows.map((row) => row.id),
+      rows.data.map((row) => row.id),
       [id],
     );
     const reads = fixture.state.reads.filter((entry) => entry.model === 'tournament');
@@ -1717,9 +1723,9 @@ describe('Phase 3 organizer CRUD, transactional eligibility, and spatial regress
         limit: 1,
         cursor,
       });
-      ids.push(...rows.map((row) => row.id));
-      if (!rows[0]) break;
-      cursor = rows[0].id;
+      ids.push(...rows.data.map((row) => row.id));
+      if (!rows.data[0]) break;
+      cursor = rows.data[0].id;
     }
     assert.deepStrictEqual(ids, [locations[1]!.id, locations[0]!.id, locations[2]!.id]);
     await assert.rejects(
@@ -1753,7 +1759,7 @@ describe('Phase 3 organizer CRUD, transactional eligibility, and spatial regress
       radius_km: 50,
       limit: 20,
     });
-    assert.strictEqual(rows.length, 2);
+    assert.strictEqual(rows.data.length, 2);
     const box = geographicBoundingBox({ lat: 89.9, lng: 0 }, 50);
     assert.strictEqual(box.allLongitudes, true);
     assert.strictEqual(box.maxLat, 90);
@@ -1901,8 +1907,18 @@ describe('Phase 4 authenticated sockets and administrative controls', () => {
       assert.strictEqual(scoutServer.rooms.has(`match:${MATCH_ID}`), false);
       await sockets.events.handleJoinAthlete(scoutServer, { athleteId: ATHLETE_ID });
       assert.strictEqual(scoutServer.rooms.has(`athlete:${ATHLETE_ID}`), false);
+      await sockets.events.handleJoinMatch(ownServer, { matchId: MATCH_ID });
+      await sockets.events.handleJoinBracket(ownServer, { bracketId: BRACKET_ID });
+      await sockets.events.handleJoinTournament(ownServer, { tournamentId: TOURNAMENT_ID });
+      assert.ok(ownServer.rooms.has(`match:${MATCH_ID}`));
+      assert.ok(ownServer.rooms.has(`bracket:${BRACKET_ID}`));
+      assert.ok(ownServer.rooms.has(`tournament:${TOURNAMENT_ID}`));
       await assert.rejects(
-        sockets.events.handleJoinMatch(ownServer, { matchId: MATCH_ID }),
+        sockets.events.handleJoinTournament(scoutServer, { tournamentId: TOURNAMENT_ID }),
+        ForbiddenException,
+      );
+      await assert.rejects(
+        sockets.events.handleJoinBracket(ownServer, { bracketId: randomUUID() }),
         ForbiddenException,
       );
       const staff = sockets.client('/ws/events', f.token(ORGANIZER_ID));

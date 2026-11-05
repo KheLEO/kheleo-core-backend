@@ -23,10 +23,11 @@ export class WsAuthGuard implements CanActivate {
   async authenticate(client: AuthenticatedSocket): Promise<JwtTokenPayload> {
     const auth = client.handshake.auth as Readonly<Record<string, unknown>>;
     const query = client.handshake.query.token;
-    const token =
+    const candidate =
       auth.token ?? client.handshake.headers.authorization?.replace(/^Bearer\s+/i, '') ?? query;
-    if (typeof token !== 'string' || !token.trim())
+    if (typeof candidate !== 'string' || !candidate.trim())
       throw new WsException('Missing authentication token');
+    const token = candidate.replace(/^Bearer\s+/i, '').trim();
     const user = await this.jwtStrategy.authenticateToken(token);
     client.data.user = user;
     return user;
@@ -37,8 +38,13 @@ export class WsAuthGuard implements CanActivate {
     server.use((client, next) => {
       void this.authenticate(client).then(
         async (user) => {
-          await client.join([`user:${user.sub}`, `role:${user.role}`, `athlete:${user.sub}`]);
-          if (['SCOUT', 'FEDERATION_ADMIN', 'SUPER_ADMIN'].includes(user.role))
+          await client.join([`user:${user.sub}`, `athlete:${user.sub}`]);
+          if (user.identityVerified !== false || !['ORGANIZER', 'SCOUT'].includes(user.role))
+            await client.join(`role:${user.role}`);
+          if (
+            ['SCOUT', 'FEDERATION_ADMIN', 'SUPER_ADMIN'].includes(user.role) &&
+            (user.role !== 'SCOUT' || user.identityVerified !== false)
+          )
             await client.join('scouts');
           next();
         },
@@ -50,8 +56,13 @@ export class WsAuthGuard implements CanActivate {
   async accept(client: AuthenticatedSocket): Promise<void> {
     try {
       const user = await this.authenticate(client);
-      await client.join([`user:${user.sub}`, `role:${user.role}`, `athlete:${user.sub}`]);
-      if (['SCOUT', 'FEDERATION_ADMIN', 'SUPER_ADMIN'].includes(user.role))
+      await client.join([`user:${user.sub}`, `athlete:${user.sub}`]);
+      if (user.identityVerified !== false || !['ORGANIZER', 'SCOUT'].includes(user.role))
+        await client.join(`role:${user.role}`);
+      if (
+        ['SCOUT', 'FEDERATION_ADMIN', 'SUPER_ADMIN'].includes(user.role) &&
+        (user.role !== 'SCOUT' || user.identityVerified !== false)
+      )
         await client.join('scouts');
       const timer = setTimeout(
         () => client.disconnect(true),

@@ -1,4 +1,4 @@
-import { Injectable, UnauthorizedException } from '@nestjs/common';
+import { ForbiddenException, Injectable, UnauthorizedException } from '@nestjs/common';
 import { PassportStrategy } from '@nestjs/passport';
 import { ExtractJwt, Strategy } from 'passport-jwt';
 import { ConfigService } from '@nestjs/config';
@@ -114,10 +114,13 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     });
     if (!user) throw new UnauthorizedException('Account does not exist');
     assertAccountAccess(user);
+    if (['ORGANIZER', 'SCOUT'].includes(user.role) && user.identityRecord?.status !== 'VERIFIED')
+      throw new ForbiddenException('Administrator identity verification is pending');
     const metadataRole = isRecord(payload.user_metadata) ? payload.user_metadata.role : undefined;
     const claimedRole = payload.role === 'authenticated' ? metadataRole : payload.role;
     return {
       sub: user.id,
+      identityVerified: user.identityRecord?.status === 'VERIFIED',
       // Supabase user_metadata is user editable; stored roles remain authoritative.
       role: typeof claimedRole === 'string' && claimedRole === user.role ? claimedRole : user.role,
       ...(typeof payload.email === 'string'

@@ -16,6 +16,7 @@ export class RoomAccessService {
     if ([UserRole.SUPER_ADMIN, UserRole.FEDERATION_ADMIN].some((role) => role === actor.role))
       return true;
     if (actor.role === UserRole.ORGANIZER) {
+      if (actor.identityVerified === false) return false;
       if (scope === 'match')
         return !!(await this.prisma.match.findFirst({
           where: { id, bracket: { tournament: { organizerId: actor.sub } } },
@@ -42,6 +43,28 @@ export class RoomAccessService {
           where: { id, matches: { some: { umpireId: actor.sub } } },
           select: { id: true },
         }));
+      return !!(await this.prisma.tournament.findFirst({
+        where: { id, brackets: { some: { matches: { some: { umpireId: actor.sub } } } } },
+        select: { id: true },
+      }));
+    }
+    if (actor.role === UserRole.ATHLETE) {
+      const member = {
+        members: { some: { OR: [{ userId: actor.sub }, { athlete: { userId: actor.sub } }] } },
+      };
+      if (scope === 'match')
+        return !!(await this.prisma.match.findFirst({
+          where: { id, OR: [{ teamA: member }, { teamB: member }] },
+          select: { id: true },
+        }));
+      return !!(await this.prisma.registration.findFirst({
+        where: {
+          status: 'CONFIRMED',
+          ...(scope === 'bracket' ? { bracketId: id } : { bracket: { tournamentId: id } }),
+          OR: [{ userId: actor.sub }, { team: member }],
+        },
+        select: { id: true },
+      }));
     }
     return false;
   }

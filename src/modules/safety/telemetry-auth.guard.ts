@@ -24,12 +24,22 @@ export class TelemetryAuthGuard implements CanActivate {
       request.user = await this.jwt.authenticateToken(match[1]);
       if (request.user.role !== UserRole.ATHLETE)
         throw new ForbiddenException('Athlete telemetry only');
-      const body = request.body as { athlete_id?: unknown } | undefined;
+      const body = request.body as { athlete_id?: unknown; source?: unknown } | undefined;
       if (body?.athlete_id !== request.user.sub)
         throw new ForbiddenException('Telemetry athlete_id must match the authenticated athlete');
-      request.telemetrySource = TelemetrySource.ATHLETE_JWT;
+      if (body.source !== undefined) {
+        this.hmac.canActivate(context);
+        if (body.source !== 'BLE' && body.source !== 'SIMULATOR')
+          throw new ForbiddenException('Unknown telemetry source');
+        request.telemetrySource = body.source;
+      } else request.telemetrySource = TelemetrySource.ATHLETE_JWT;
     } else {
       this.hmac.canActivate(context);
+      const body = request.body as { source?: unknown } | undefined;
+      if (body?.source !== undefined)
+        throw new ForbiddenException(
+          'Labeled browser telemetry also requires athlete authentication',
+        );
       request.telemetrySource = TelemetrySource.DEVICE_HMAC;
     }
     return true;

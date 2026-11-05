@@ -171,7 +171,8 @@ export class IdentityService {
         idType,
         saltVersion: this.defaultSaltVersion,
         status:
-          this.configService.get<string>('app.nodeEnv', 'development') === 'production'
+          this.configService.get<string>('app.nodeEnv', 'development') === 'production' ||
+          ['ORGANIZER', 'SCOUT'].includes(user.role)
             ? VerificationStatus.UNVERIFIED
             : VerificationStatus.VERIFIED,
         verifiedAt: new Date(),

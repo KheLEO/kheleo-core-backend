@@ -71,26 +71,30 @@ describe('Phase 3: Tournaments Geospatial Discovery & Anti-Sandbagging Engine', 
   describe('Geospatial Tournament Discovery', () => {
     it('returns flat TournamentLocationDto structures stripped of relational overhead', async () => {
       const mockSpatialRepo = {
-        findTournamentsWithinRadius: async () => [
-          {
-            id: 'tour-1',
-            name: 'Kashi Cup',
-            title: 'Kashi Cup',
-            sport: 'CRICKET',
-            status: 'REGISTRATION_OPEN',
-            min_gti: 20.0,
-            max_gti: 60.0,
-            venue_name: 'Sampurnanand Ground',
-            venue_lat: 25.32,
-            venue_lng: 82.98,
-            prize_pool: 20000,
-            distance_km: 4.23,
-            registration_deadline: new Date('2026-10-25T18:00:00Z'),
-            start_date: new Date('2026-11-01T09:00:00Z'),
-            team_size: 11,
-            max_teams: 16,
-          },
-        ],
+        findTournamentsWithinRadius: async () => ({
+          data: [
+            {
+              id: 'tour-1',
+              name: 'Kashi Cup',
+              title: 'Kashi Cup',
+              sport: 'CRICKET',
+              status: 'REGISTRATION_OPEN',
+              min_gti: 20.0,
+              max_gti: 60.0,
+              venue_name: 'Sampurnanand Ground',
+              venue_lat: 25.32,
+              venue_lng: 82.98,
+              prize_pool: 20000,
+              distance_km: 4.23,
+              registration_deadline: new Date('2026-10-25T18:00:00Z'),
+              start_date: new Date('2026-11-01T09:00:00Z'),
+              team_size: 11,
+              max_teams: 16,
+            },
+          ],
+          next_cursor: null,
+          has_more: false,
+        }),
       };
 
       const mockPrisma = {};
@@ -107,8 +111,8 @@ describe('Phase 3: Tournaments Geospatial Discovery & Anti-Sandbagging Engine', 
         limit: 10,
       });
 
-      assert.strictEqual(nearby.length, 1);
-      const first = nearby[0];
+      assert.strictEqual(nearby.data.length, 1);
+      const first = nearby.data[0];
       assert.strictEqual(first?.id, 'tour-1');
       assert.strictEqual(first?.name, 'Kashi Cup');
       assert.strictEqual(first?.distanceKm, 4.2);

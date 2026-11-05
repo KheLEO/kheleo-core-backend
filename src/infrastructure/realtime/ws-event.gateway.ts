@@ -16,6 +16,8 @@ import { ScoutAlertPayload } from '../queues/queue-producer.service';
 
 export interface AutonomousMatchPausePayload {
   readonly event_id?: string;
+  readonly source?: string;
+  readonly baseline_fields?: readonly string[];
   readonly event: 'MATCH_PAUSE_ALERT';
   readonly severity: 'CRITICAL';
   readonly athlete_id: string;
@@ -115,7 +117,13 @@ export class WsEventGateway implements OnGatewayInit, OnGatewayConnection, OnGat
       return;
     }
 
-    const rooms = [`athlete:${payload.athlete_id}`];
+    const rooms = [
+      `athlete:${payload.athlete_id}`,
+      'role:ORGANIZER',
+      'role:UMPIRE',
+      'role:FEDERATION_ADMIN',
+      'role:SUPER_ADMIN',
+    ];
     if (payload.tournament_id) rooms.push(`tournament:${payload.tournament_id}`);
     if (payload.bracket_id) rooms.push(`bracket:${payload.bracket_id}`);
     if (payload.match_id) rooms.push(`match:${payload.match_id}`);

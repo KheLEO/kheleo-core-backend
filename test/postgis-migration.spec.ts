@@ -192,7 +192,7 @@ describe('PostGIS baseline migration', () => {
       1,
       SportType.CRICKET,
     );
-    const tournament = rows.find((row) => row.id === id);
+    const tournament = rows.data.find((row) => row.id === id);
     assert.ok(tournament);
     assert.equal(tournament.distance_km, 0);
     assert.equal(tournament.name, 'Migration test');
@@ -201,7 +201,7 @@ describe('PostGIS baseline migration', () => {
       1,
       SportType.CRICKET,
     );
-    assert.equal(distant.length, 0);
+    assert.equal(distant.data.length, 0);
   });
 
   it('runs the production heatmap query using synchronized athlete geometry', async () => {
@@ -291,9 +291,9 @@ describe('PostGIS baseline migration', () => {
         1,
         cursor,
       );
-      observed.push(...rows.map((row) => row.id));
-      if (!rows[0]) break;
-      cursor = rows[0].id;
+      observed.push(...rows.data.map((row) => row.id));
+      if (!rows.data[0]) break;
+      cursor = rows.data[0].id;
     }
     assert.deepEqual(observed, ids);
     await assert.rejects(
@@ -509,5 +509,35 @@ describe('PostGIS baseline migration', () => {
     const hidden = await service.list(query);
     assert.equal(hidden.data[0]!.athleteId, seeded[1]!.userId);
     assert.equal(hidden.data[0]!.rank, 1);
+  });
+  it('stores telemetry provenance and enforces pose-digest uniqueness in migrated PostgreSQL', async () => {
+    const userId = await createUser();
+    const insert = (digest: string | null): Promise<unknown> =>
+      database.query(
+        `
+      INSERT INTO drill_submissions
+        (id, athlete_id, sport, drill_type, form_score, frames_analyzed, flaw_flags, joint_angles_summary, signature_hash, client_pose_digest)
+      VALUES ($1, $2, 'CRICKET', 'CRICKET_BOWLING', 80, 150, '[]', '{}', $3, $4)
+    `,
+        [randomUUID(), userId, randomUUID().replaceAll('-', '').padEnd(64, '0'), digest],
+      );
+    await insert('a'.repeat(64));
+    await assert.rejects(insert('a'.repeat(64)), /unique constraint/);
+    await insert(null);
+    await insert(null);
+    await database.query(
+      `INSERT INTO wearable_sessions (id, athlete_id, session_date, source, baseline_fields)
+      VALUES ($1, $2, CURRENT_DATE, 'BLE', ARRAY['spo2','skin_temperature'])`,
+      [randomUUID(), userId],
+    );
+    const row = await database.query<{ source: string; baseline_fields: string[] }>(
+      'SELECT source, baseline_fields FROM wearable_sessions WHERE athlete_id=$1',
+      [userId],
+    );
+    assert.equal(row.rows[0]?.source, 'BLE');
+    assert.deepEqual(row.rows[0]?.baseline_fields, ['spo2', 'skin_temperature']);
+    await database.query("UPDATE wearable_sessions SET source='SIMULATOR' WHERE athlete_id=$1", [
+      userId,
+    ]);
   });
 });

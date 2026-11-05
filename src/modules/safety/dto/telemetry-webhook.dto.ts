@@ -1,9 +1,26 @@
-import { IsEnum, IsInt, IsNumber, IsOptional, IsUUID, Max, Min } from 'class-validator';
+import {
+  IsArray,
+  ArrayUnique,
+  IsIn,
+  IsEnum,
+  IsInt,
+  IsNumber,
+  IsOptional,
+  IsUUID,
+  Max,
+  Min,
+} from 'class-validator';
 import { Type } from 'class-transformer';
 import { AlertSeverity } from '@prisma/client';
 
 export class TelemetryWebhookDto {
   @IsUUID() athlete_id!: string;
+  @IsOptional() @IsIn(['BLE', 'SIMULATOR']) source?: 'BLE' | 'SIMULATOR';
+  @IsOptional()
+  @IsArray()
+  @ArrayUnique()
+  @IsIn(['spo2', 'skin_temperature'], { each: true })
+  baseline_fields?: ('spo2' | 'skin_temperature')[];
   @IsOptional() @IsUUID() tournament_id?: string;
   @IsOptional() @IsUUID() bracket_id?: string;
   @IsOptional() @IsUUID() match_id?: string;

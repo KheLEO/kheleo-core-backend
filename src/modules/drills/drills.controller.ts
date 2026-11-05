@@ -14,6 +14,9 @@ import { FastifyRequest } from 'fastify';
 import { DrillsService, DrillSubmissionResult } from './drills.service';
 import { SubmitDrillDto } from './dto/submit-drill.dto';
 import { DrillRequest, DrillSignatureGuard } from './guards/drill-signature.guard';
+import { Roles } from '../../common/decorators/roles.decorator';
+import { RolesGuard } from '../../common/guards/roles.guard';
+import { UserRole } from '@prisma/client';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { IdempotencyInterceptor } from '../../common/interceptors/idempotency.interceptor';
 
@@ -23,7 +26,8 @@ export class DrillsController {
 
   @Post('submit')
   @HttpCode(HttpStatus.OK)
-  @UseGuards(JwtAuthGuard, DrillSignatureGuard)
+  @UseGuards(JwtAuthGuard, RolesGuard, DrillSignatureGuard)
+  @Roles(UserRole.ATHLETE)
   @UseInterceptors(IdempotencyInterceptor)
   async submit(
     @Body() dto: SubmitDrillDto,

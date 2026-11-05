@@ -13,7 +13,7 @@ import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
 import { VerifyGovIdDto } from './dto/verify-gov-id.dto';
 import { AuthResponseDto, AuthUserSummaryDto } from './dto/auth-response.dto';
-import { GovIdType, UserRole, VerificationStatus } from '@prisma/client';
+import { GovIdType, Prisma, UserRole, VerificationStatus } from '@prisma/client';
 import * as jwt from 'jsonwebtoken';
 import * as crypto from 'node:crypto';
 import { runSerializableTransaction } from '../../common/database/serializable-transaction';
@@ -69,6 +69,11 @@ export class AuthService {
 
     const publicRoles: readonly UserRole[] = [UserRole.ATHLETE, UserRole.ORGANIZER, UserRole.SCOUT];
     const role = dto.role ?? UserRole.ATHLETE;
+    const pendingStaff = role === UserRole.ORGANIZER || role === UserRole.SCOUT;
+    if (pendingStaff && !dto.governmentId)
+      throw new BadRequestException(
+        'Organizer and scout signup requires an identity for administrator review',
+      );
     if (!publicRoles.includes(role)) {
       const invite = this.configService.get<string>('auth.adminInviteCode');
       const supplied = dto.adminInviteCode;
@@ -225,7 +230,10 @@ export class AuthService {
             idHash: precomputedIdHash,
             idType: dto.governmentId.idType,
             saltVersion: this.identityService.getConfiguredSaltVersion(),
-            status: production ? VerificationStatus.UNVERIFIED : VerificationStatus.VERIFIED,
+            status:
+              production || pendingStaff
+                ? VerificationStatus.UNVERIFIED
+                : VerificationStatus.VERIFIED,
             verifiedAt: new Date(),
           },
         });
@@ -234,7 +242,7 @@ export class AuthService {
       return { ...newUser, athleteProfileId: profileId ?? null };
     });
 
-    const isVerified = Boolean(precomputedIdHash) && !production;
+    const isVerified = Boolean(precomputedIdHash) && !production && !pendingStaff;
     return this.generateAuthResponse(
       user.id,
       user.role,
@@ -359,57 +367,78 @@ export class AuthService {
   async refreshTokens(refreshTokenStr: string): Promise<AuthResponseDto> {
     const tokenHash = crypto.createHash('sha256').update(refreshTokenStr).digest('hex');
 
-    const storedToken = await this.prisma.refreshToken.findUnique({
-      where: { tokenHash },
-      include: {
-        user: {
-          include: {
-            athleteProfile: { select: { id: true } },
-            identityRecord: { select: { status: true } },
+    const result = await runSerializableTransaction(this.prisma, async (transaction) => {
+      const storedToken = await transaction.refreshToken.findUnique({
+        where: { tokenHash },
+        include: {
+          user: {
+            include: {
+              athleteProfile: { select: { id: true } },
+              identityRecord: { select: { status: true } },
+            },
           },
         },
-      },
-    });
+      });
 
-    if (!storedToken) {
-      throw new UnauthorizedException('Invalid refresh token.');
-    }
+      if (!storedToken) {
+        throw new UnauthorizedException('Invalid refresh token.');
+      }
 
-    assertAccountAccess(storedToken.user);
+      assertAccountAccess(storedToken.user);
 
-    if (storedToken.revoked || storedToken.expiresAt < new Date()) {
-      // Security measure: Revoke all tokens in family on reuse detection
-      await this.prisma.refreshToken.updateMany({
-        where: { family: storedToken.family },
+      if (storedToken.revoked || storedToken.expiresAt <= new Date()) {
+        // Security measure: Revoke all tokens in family on reuse detection
+        await transaction.refreshToken.updateMany({
+          where: { family: storedToken.family },
+          data: { revoked: true },
+        });
+        return { error: new UnauthorizedException('Refresh token expired or compromised.') };
+      }
+
+      const revokeResult = await transaction.refreshToken.updateMany({
+        where: { id: storedToken.id, revoked: false },
         data: { revoked: true },
       });
-      throw new UnauthorizedException('Refresh token expired or compromised.');
-    }
+      if (revokeResult.count !== 1) {
+        await transaction.refreshToken.updateMany({
+          where: { family: storedToken.family },
+          data: { revoked: true },
+        });
+        return { error: new UnauthorizedException('Refresh token replay detected.') };
+      }
 
-    const revokeResult = await this.prisma.refreshToken.updateMany({
-      where: { id: storedToken.id, revoked: false },
-      data: { revoked: true },
+      const user = storedToken.user;
+      const isVerified = user.identityRecord?.status === VerificationStatus.VERIFIED;
+
+      return {
+        auth: await this.generateAuthResponse(
+          user.id,
+          user.role,
+          user.phone,
+          user.email,
+          isVerified,
+          user.athleteProfile?.id ?? null,
+          storedToken.family,
+          transaction,
+        ),
+      };
     });
-    if (revokeResult.count !== 1) {
-      await this.prisma.refreshToken.updateMany({
-        where: { family: storedToken.family },
+    if ('error' in result) throw result.error;
+    return result.auth;
+  }
+
+  /**
+   * Revokes all active refresh tokens for the user across all sessions.
+   */
+  async logout(userId: string): Promise<{ success: boolean; message: string }> {
+    await runSerializableTransaction(this.prisma, async (transaction) => {
+      await transaction.refreshToken.updateMany({
+        where: { userId },
         data: { revoked: true },
       });
-      throw new UnauthorizedException('Refresh token replay detected.');
-    }
-
-    const user = storedToken.user;
-    const isVerified = user.identityRecord?.status === VerificationStatus.VERIFIED;
-
-    return this.generateAuthResponse(
-      user.id,
-      user.role,
-      user.phone,
-      user.email,
-      isVerified,
-      user.athleteProfile?.id ?? null,
-      storedToken.family,
-    );
+    });
+    this.logger.log(`All refresh tokens revoked for user ${userId}`);
+    return { success: true, message: 'Logged out successfully' };
   }
 
   /**
@@ -423,6 +452,7 @@ export class AuthService {
     isVerified: boolean,
     athleteProfileId: string | null,
     existingFamily?: string,
+    transaction: Prisma.TransactionClient = this.prisma,
   ): Promise<AuthResponseDto> {
     // Lightweight payload
     const payload = {
@@ -444,7 +474,7 @@ export class AuthService {
     const family = existingFamily ?? crypto.randomBytes(16).toString('hex');
     const expiresAt = new Date(Date.now() + this.refreshExpirySeconds * 1000);
 
-    await this.prisma.refreshToken.create({
+    await transaction.refreshToken.create({
       data: {
         userId,
         tokenHash,

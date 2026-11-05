@@ -16,6 +16,7 @@ import {
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagger';
 import { TournamentsService } from './tournaments.service';
 import { NearbyTournamentsQueryDto } from './dto/nearby-tournaments-query.dto';
+import { NearbyPage } from '../../infrastructure/database/postgis-spatial.repository';
 import { TournamentLocationDto } from './dto/tournament-location.dto';
 import { CreateTournamentDto } from './dto/create-tournament.dto';
 import { JwtAuthGuard, AuthenticatedJwtUser } from '../../common/guards/jwt-auth.guard';
@@ -71,12 +72,12 @@ export class TournamentsController {
   })
   @ApiResponse({
     status: HttpStatus.OK,
-    description: 'Flat array of nearby tournament locations',
+    description: 'Nearby locations with next_cursor and has_more',
     type: [TournamentLocationDto],
   })
   async findNearby(
     @Query() query: NearbyTournamentsQueryDto,
-  ): Promise<readonly TournamentLocationDto[]> {
+  ): Promise<NearbyPage<TournamentLocationDto>> {
     return this.tournamentsService.findNearby(query);
   }
 

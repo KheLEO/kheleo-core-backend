@@ -9,6 +9,7 @@ import { PrismaService } from '../../infrastructure/database/prisma.service';
 import {
   PostgisSpatialRepository,
   SpatialTournamentRow,
+  NearbyPage,
 } from '../../infrastructure/database/postgis-spatial.repository';
 import { NearbyTournamentsQueryDto } from './dto/nearby-tournaments-query.dto';
 import { TournamentLocationDto } from './dto/tournament-location.dto';
@@ -67,17 +68,17 @@ export class TournamentsService {
 
   /**
    * Discovers tournaments within requested radius utilizing PostgreSQL PostGIS ST_DWithin and ST_MakePoint.
-   * Strips all relational joins and returns a flat array of TournamentLocationDto to minimize Android memory overhead.
+   * Returns distance-ordered DTOs and a keyset cursor.
    */
-  async findNearby(query: NearbyTournamentsQueryDto): Promise<readonly TournamentLocationDto[]> {
+  async findNearby(query: NearbyTournamentsQueryDto): Promise<NearbyPage<TournamentLocationDto>> {
     const point = { lat: query.lat, lng: query.lng };
     const radiusKm = query.radius_km ?? 50;
     const limit = query.limit ?? 20;
 
-    let rows: readonly SpatialTournamentRow[] = [];
+    let page: NearbyPage<SpatialTournamentRow>;
 
     try {
-      rows = await this.spatialRepo.findTournamentsWithinRadius(
+      page = await this.spatialRepo.findTournamentsWithinRadius(
         point,
         radiusKm,
         query.sport,
@@ -94,30 +95,29 @@ export class TournamentsService {
       return this.findNearbyFallback(query);
     }
 
-    return rows.map(
-      (r): TournamentLocationDto => ({
-        id: r.id,
-        name: r.name || r.title,
-        sport: r.sport,
-        status: r.status,
-        minGti: r.min_gti,
-        maxGti: r.max_gti,
-        venueName: r.venue_name,
-        venueLat: r.venue_lat,
-        venueLng: r.venue_lng,
-        distanceKm: Math.round(r.distance_km * 10) / 10,
-        startDate: new Date(r.start_date).toISOString(),
-        registrationDeadline: new Date(r.registration_deadline).toISOString(),
-        prizePool: r.prize_pool,
-        maxTeams: r.max_teams,
-        teamSize: r.team_size,
-      }),
-    );
+    const data = page.data.map((r): TournamentLocationDto => ({
+      id: r.id,
+      name: r.name || r.title,
+      sport: r.sport,
+      status: r.status,
+      minGti: r.min_gti,
+      maxGti: r.max_gti,
+      venueName: r.venue_name,
+      venueLat: r.venue_lat,
+      venueLng: r.venue_lng,
+      distanceKm: Math.round(r.distance_km * 10) / 10,
+      startDate: new Date(r.start_date).toISOString(),
+      registrationDeadline: new Date(r.registration_deadline).toISOString(),
+      prizePool: r.prize_pool,
+      maxTeams: r.max_teams,
+      teamSize: r.team_size,
+    }));
+    return { data, next_cursor: page.next_cursor, has_more: page.has_more };
   }
 
   private async findNearbyFallback(
     query: NearbyTournamentsQueryDto,
-  ): Promise<readonly TournamentLocationDto[]> {
+  ): Promise<NearbyPage<TournamentLocationDto>> {
     const point = { lat: query.lat, lng: query.lng };
     const radiusKm = query.radius_km ?? 50;
     const limit = query.limit ?? 20;
@@ -172,13 +172,13 @@ export class TournamentsService {
         (a, b) =>
           a.distance - b.distance || (a.row.id < b.row.id ? -1 : a.row.id > b.row.id ? 1 : 0),
       );
-      nearest.splice(limit);
+      nearest.splice(limit + 1);
       if (page.length < 200) break;
       const nextId = page.at(-1)!.id;
       if (scanId && nextId <= scanId) throw new Error('Nearby fallback pagination did not advance');
       scanId = nextId;
     }
-    return nearest.map(({ row, distance }) => ({
+    const data = nearest.slice(0, limit).map(({ row, distance }) => ({
       id: row.id,
       name: row.name || row.title,
       sport: row.sport,
@@ -195,6 +195,8 @@ export class TournamentsService {
       maxTeams: row.maxTeams,
       teamSize: row.teamSize,
     }));
+    const has_more = nearest.length > limit;
+    return { data, has_more, next_cursor: has_more ? data.at(-1)!.id : null };
   }
 
   /**

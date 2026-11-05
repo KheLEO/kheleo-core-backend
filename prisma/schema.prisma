@@ -467,11 +467,13 @@ model DrillSubmission {
   jointAnglesSummary Json                  @map("joint_angles_summary") @db.JsonB
   signatureHash      String                @unique @map("signature_hash") @db.VarChar(64)
   signatureVersion   DrillSignatureVersion @default(LEGACY) @map("signature_version")
+  clientPoseDigest   String?               @map("client_pose_digest") @db.VarChar(64)
   metadataVerified   Boolean               @default(false) @map("metadata_verified")
   createdAt          DateTime              @default(now()) @map("created_at") @db.Timestamptz
 
   athlete User @relation(fields: [athleteId], references: [id], onDelete: Cascade)
 
+  @@unique([athleteId, clientPoseDigest])
   @@index([athleteId, createdAt(sort: Desc)])
   @@index([sport, drillType, formScore(sort: Desc)])
   @@map("drill_submissions")
@@ -491,6 +493,7 @@ model HealthAlert {
   matchId          String?         @map("match_id") @db.Uuid
   acknowledgedAt   DateTime?       @map("acknowledged_at") @db.Timestamptz
   acknowledgedById String?         @map("acknowledged_by_id") @db.Uuid
+  baselineFields   String[]        @default([]) @map("baseline_fields")
   source           TelemetrySource @default(DEVICE_HMAC)
   createdAt        DateTime        @default(now()) @map("created_at") @db.Timestamptz
 
@@ -597,15 +600,18 @@ enum DrillSignatureVersion {
 enum TelemetrySource {
   DEVICE_HMAC
   ATHLETE_JWT
+  BLE
+  SIMULATOR
 }
 
 model WearableSession {
-  id          String          @id @default(uuid()) @db.Uuid
-  athleteId   String          @map("athlete_id") @db.Uuid
-  sessionDate DateTime        @map("session_date") @db.Date
-  source      TelemetrySource
-  observedAt  DateTime        @default(now()) @map("observed_at") @db.Timestamptz
-  athlete     User            @relation(fields: [athleteId], references: [id], onDelete: Cascade)
+  id             String          @id @default(uuid()) @db.Uuid
+  athleteId      String          @map("athlete_id") @db.Uuid
+  sessionDate    DateTime        @map("session_date") @db.Date
+  source         TelemetrySource
+  baselineFields String[]        @default([]) @map("baseline_fields")
+  observedAt     DateTime        @default(now()) @map("observed_at") @db.Timestamptz
+  athlete        User            @relation(fields: [athleteId], references: [id], onDelete: Cascade)
 
   @@unique([athleteId, sessionDate])
   @@map("wearable_sessions")

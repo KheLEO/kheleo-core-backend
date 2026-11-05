@@ -30,6 +30,7 @@ import {
   matchParticipants,
 } from '../../common/competition/match-access';
 
+import { randomUUID } from 'node:crypto';
 import { CursorPage } from '../../common/dto/cursor-page';
 
 @Injectable()
@@ -44,6 +45,13 @@ export class SafetyService {
     dto: TelemetryWebhookDto,
     source: TelemetrySource = TelemetrySource.DEVICE_HMAC,
   ): Promise<TelemetryResponseDto> {
+    if (
+      (dto.baseline_fields?.includes('spo2') && dto.spo2 !== 98) ||
+      (dto.baseline_fields?.includes('skin_temperature') && dto.skin_temperature !== 36.8)
+    )
+      throw new BadRequestException(
+        'Baseline fields must use the documented physiological defaults',
+      );
     const timestamp = dto.timestamp > 1e11 ? dto.timestamp : dto.timestamp * 1000;
     if (!Number.isFinite(timestamp) || Math.abs(Date.now() - timestamp) > 300000)
       throw new BadRequestException('Telemetry timestamp must be within 300 seconds');
@@ -55,7 +63,7 @@ export class SafetyService {
       : warning
         ? AlertSeverity.WARNING
         : AlertSeverity.NORMAL;
-    const reason = critical ? 'CRITICAL BIOMETRIC EXTREME' : 'WARNING BIOMETRIC ELEVATION';
+    const reason = `${source === TelemetrySource.SIMULATOR ? 'SIMULATOR STRESS TEST: ' : ''}${critical ? 'CRITICAL BIOMETRIC EXTREME' : 'WARNING BIOMETRIC ELEVATION'}`;
     const result = await runSerializableTransaction(this.prisma, async (tx) => {
       const profile = await tx.athleteProfile.findUnique({
         where: { userId: dto.athlete_id },
@@ -121,8 +129,13 @@ export class SafetyService {
       day.setUTCHours(0, 0, 0, 0);
       await tx.wearableSession.upsert({
         where: { athleteId_sessionDate: { athleteId: dto.athlete_id, sessionDate: day } },
-        create: { athleteId: dto.athlete_id, sessionDate: day, source },
-        update: { observedAt: new Date() },
+        create: {
+          athleteId: dto.athlete_id,
+          sessionDate: day,
+          source,
+          baselineFields: dto.baseline_fields ?? [],
+        },
+        update: { observedAt: new Date(), source, baselineFields: dto.baseline_fields ?? [] },
       });
       const since = new Date(day);
       since.setUTCDate(since.getUTCDate() - 29);
@@ -148,6 +161,7 @@ export class SafetyService {
             triggerReason: reason,
             matchPaused: paused,
             source,
+            baselineFields: dto.baseline_fields ?? [],
           },
         });
       return {
@@ -157,8 +171,11 @@ export class SafetyService {
         name: profile.user.email ?? profile.user.phone ?? `Athlete ${dto.athlete_id.slice(0, 8)}`,
       };
     });
-    if (result.paused)
+    if (critical)
       this.wsGateway.broadcastAutonomousMatchPause({
+        event_id: randomUUID(),
+        source,
+        baseline_fields: dto.baseline_fields ?? [],
         event: 'MATCH_PAUSE_ALERT',
         severity: 'CRITICAL',
         athlete_id: dto.athlete_id,
@@ -168,7 +185,10 @@ export class SafetyService {
           spo2: dto.spo2,
           skin_temperature: dto.skin_temperature,
         },
-        directive: 'MANDATORY REST: PAUSE TOURNAMENT MATCH IMMEDIATELY',
+        directive:
+          source === TelemetrySource.SIMULATOR
+            ? 'SIMULATOR STRESS TEST: MANDATORY REST'
+            : 'MANDATORY REST: PAUSE ACTIVITY IMMEDIATELY',
         tournament_id: result.tournamentId,
         bracket_id: result.bracketId,
         match_id: dto.match_id,

@@ -273,9 +273,18 @@ export function createAuthFixture(options: FixtureOptions = {}) {
         );
         return token ? { ...token, user: state.user } : null;
       },
-      updateMany: async (): Promise<{ readonly count: number }> => {
-        state.token.revoked = true;
-        return { count: 1 };
+      updateMany: async ({
+        where,
+        data,
+      }: {
+        where: Partial<Pick<RefreshToken, 'id' | 'family' | 'userId' | 'revoked'>>;
+        data: { revoked: boolean };
+      }): Promise<{ readonly count: number }> => {
+        const tokens = [state.token, ...state.createdTokens].filter((token) =>
+          Object.entries(where).every(([key, value]) => token[key as keyof RefreshToken] === value),
+        );
+        for (const token of tokens) token.revoked = data.revoked;
+        return { count: tokens.length };
       },
       create: async ({
         data,

@@ -389,7 +389,7 @@ describe('Phase 4 drill integrity and measured GTI pipelines', () => {
       TelemetrySource.ATHLETE_JWT,
     );
     assert.equal(result.status, 'CRITICAL_ALERT');
-    assert.equal(f.state.pauses.length, 0);
+    assert.equal(f.state.pauses.length, 1);
     assert.equal([...f.state.tables.healthAlert.values()][0]?.matchPaused, false);
     const outsider = { sub: randomUUID(), role: 'ORGANIZER' };
     await assert.rejects(f.services.safety.resume(outsider, MATCH_ID), /owning organizer/);
@@ -768,4 +768,87 @@ describe('Phase 4 drill integrity and measured GTI pipelines', () => {
     assert.equal(result.scoutAlertTriggered, false);
     assert.equal(f.state.scoutJobs.length, 0);
   });
+});
+
+describe('Prompt 1 labeled telemetry', () => {
+  for (const source of ['BLE', 'SIMULATOR'] as const) {
+    it(`requires athlete authentication plus HMAC for ${source}, persists provenance, and emits a critical alert`, async () => {
+      const f = await createSecurityFixture();
+      const app = await createSecurityApp(f);
+      const body = {
+        ...telemetry(),
+        source,
+        heart_rate: 205,
+        tournament_id: TOURNAMENT_ID,
+        bracket_id: BRACKET_ID,
+        ...(source === 'BLE'
+          ? { spo2: 98, skin_temperature: 36.8, baseline_fields: ['spo2', 'skin_temperature'] }
+          : {}),
+      };
+      const headers = {
+        authorization: `Bearer ${f.token()}`,
+        'idempotency-key': randomUUID(),
+        'x-device-signature': createHmac('sha256', 'fixture-telemetry-service-secret')
+          .update(JSON.stringify(body))
+          .digest('hex'),
+      };
+      try {
+        const valid = await app.inject({
+          method: 'POST',
+          url: '/api/v1/safety/telemetry-webhook',
+          headers,
+          payload: body,
+        });
+        assert.equal(valid.statusCode, 200, valid.body);
+        assert.equal(f.state.pauses.at(-1)?.source, source);
+        assert.equal(f.state.pauses.at(-1)?.tournament_id, TOURNAMENT_ID);
+        assert.equal([...f.state.tables.healthAlert.values()][0]?.source, source);
+        assert.equal([...f.state.tables.wearableSession.values()][0]?.source, source);
+        if (source === 'BLE')
+          assert.deepEqual([...f.state.tables.wearableSession.values()][0]?.baselineFields, [
+            'spo2',
+            'skin_temperature',
+          ]);
+        const tampered = await app.inject({
+          method: 'POST',
+          url: '/api/v1/safety/telemetry-webhook',
+          headers: { ...headers, 'idempotency-key': randomUUID() },
+          payload: { ...body, source: source === 'BLE' ? 'SIMULATOR' : 'BLE' },
+        });
+        assert.equal(tampered.statusCode, 403);
+        const unsigned = await app.inject({
+          method: 'POST',
+          url: '/api/v1/safety/telemetry-webhook',
+          headers: { authorization: headers.authorization, 'idempotency-key': randomUUID() },
+          payload: body,
+        });
+        assert.equal(unsigned.statusCode, 403);
+      } finally {
+        await app.close();
+      }
+    });
+  }
+});
+
+it('cannot re-award the same pose digest by changing the signed submission timestamp', async () => {
+  const f = await createSecurityFixture();
+  const body = drill({
+    joint_angles_summary: { client_pose_digest: 'a'.repeat(64), calibrationVersion: '1.0.0' },
+  });
+  await f.services.drills.submitDrill(
+    ATHLETE_ID,
+    body,
+    '1'.repeat(64),
+    DrillSignatureVersion.FULL_V2,
+  );
+  await assert.rejects(
+    f.services.drills.submitDrill(
+      ATHLETE_ID,
+      { ...body, timestamp: body.timestamp + 1 },
+      '2'.repeat(64),
+      DrillSignatureVersion.FULL_V2,
+    ),
+    /already submitted/,
+  );
+  assert.equal(f.state.tables.drillSubmission.size, 1);
 });

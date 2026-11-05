@@ -26,6 +26,9 @@ export class DrillsService {
     signatureHash: string,
     signatureVersion: DrillSignatureVersion = DrillSignatureVersion.LEGACY,
   ): Promise<DrillSubmissionResult> {
+    const rawDigest = dto.joint_angles_summary?.client_pose_digest;
+    const clientPoseDigest =
+      typeof rawDigest === 'string' && /^[a-f\d]{64}$/.test(rawDigest) ? rawDigest : undefined;
     const posturePointsAwarded = Math.round(dto.form_score * 10);
     const currentBiomechanicalScore = await runSerializableTransaction(
       this.prisma,
@@ -42,12 +45,20 @@ export class DrillsService {
         if (
           await transaction.drillSubmission.findFirst({
             where: {
-              signatureHash: { equals: signatureHash.trim().toLowerCase(), mode: 'insensitive' },
+              OR: [
+                {
+                  signatureHash: {
+                    equals: signatureHash.trim().toLowerCase(),
+                    mode: 'insensitive',
+                  },
+                },
+                ...(clientPoseDigest ? [{ athleteId, clientPoseDigest }] : []),
+              ],
             },
             select: { id: true },
           })
         )
-          throw new ConflictException('Drill signature was already submitted');
+          throw new ConflictException('Drill signature or pose series was already submitted');
         const previousSubmissionsCount = await transaction.drillSubmission.count({
           where: { athleteId: profile.userId },
         });
@@ -69,6 +80,7 @@ export class DrillsService {
             jointAnglesSummary: (dto.joint_angles_summary ?? {}) as Prisma.InputJsonValue,
             signatureHash: signatureHash.trim().toLowerCase(),
             signatureVersion,
+            clientPoseDigest,
             metadataVerified: signatureVersion !== DrillSignatureVersion.LEGACY,
           },
         });

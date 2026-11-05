@@ -4,6 +4,7 @@ import { AuthGuard } from '@nestjs/passport';
 export interface AuthenticatedJwtUser {
   readonly sub: string;
   readonly role: string;
+  readonly identityVerified?: boolean;
   readonly email?: string;
   readonly phone?: string;
 }

@@ -26,6 +26,12 @@ export interface SpatialTournamentRow {
   readonly max_teams: number;
 }
 
+export interface NearbyPage<T> {
+  readonly data: readonly T[];
+  readonly next_cursor: string | null;
+  readonly has_more: boolean;
+}
+
 @Injectable()
 export class PostgisSpatialRepository {
   constructor(private readonly prisma: PrismaService) {}
@@ -40,7 +46,7 @@ export class PostgisSpatialRepository {
     sport?: SportType,
     limit = 20,
     cursorId?: string,
-  ): Promise<readonly SpatialTournamentRow[]> {
+  ): Promise<NearbyPage<SpatialTournamentRow>> {
     const radiusMeters = radiusKm * 1000;
     const sportFilter = sport ? Prisma.sql`AND t.sport = ${sport}::"SportType"` : Prisma.empty;
     const origin = Prisma.sql`ST_SetSRID(ST_MakePoint(${point.lng}, ${point.lat}), 4326)::geography`;
@@ -64,7 +70,7 @@ export class PostgisSpatialRepository {
         OR (distance_km = ${cursorDistance}::double precision AND id > ${cursorId}::uuid)
     `
         : Prisma.empty;
-    return this.prisma.$queryRaw<SpatialTournamentRow[]>(Prisma.sql`
+    const rows = await this.prisma.$queryRaw<SpatialTournamentRow[]>(Prisma.sql`
       WITH measured AS (
         SELECT t.id, COALESCE(NULLIF(t.name, ''), t.title, 'Tournament') AS name, t.title, t.sport, t.status,
           t.min_gti::float AS min_gti, t.max_gti::float AS max_gti, t.venue_name, t.venue_lat, t.venue_lng,
@@ -73,7 +79,11 @@ export class PostgisSpatialRepository {
         FROM tournaments t WHERE t.status = 'REGISTRATION_OPEN' AND t.location IS NOT NULL
           AND ST_DWithin(t.location::geography, ${origin}, ${radiusMeters}) ${sportFilter}
       )
-      SELECT * FROM measured ${cursorFilter} ORDER BY distance_km ASC, id ASC LIMIT ${limit}
+      SELECT * FROM measured ${cursorFilter} ORDER BY distance_km ASC, id ASC LIMIT ${limit + 1}
     `);
+    const has_more = rows.length > limit;
+    const data = has_more ? rows.slice(0, limit) : rows;
+    const next_cursor = has_more && data.length > 0 ? data[data.length - 1].id : null;
+    return { data, next_cursor, has_more };
   }
 }

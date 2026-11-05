@@ -39,6 +39,7 @@ const athletePassportSelect = {
   wearableScore: true,
   matchPerfScore: true,
   posturePoints: true,
+  biomechanicalScore: true,
   sportRecords: {
     orderBy: { id: 'asc' as const },
     take: 20,
@@ -217,13 +218,19 @@ export class PassportService {
   async addOrUpdateSportRecord(
     userId: string,
     dto: AddSportRecordDto,
-    allowVerifiedFields: boolean = false,
+    actor?: AuthenticatedJwtUser,
   ): Promise<SportPassportRecord> {
+    const allowVerifiedFields =
+      actor &&
+      (actor.role !== 'ORGANIZER' || actor.identityVerified !== false) &&
+      ['ORGANIZER', 'FEDERATION_ADMIN', 'SUPER_ADMIN'].includes(actor.role);
+    if (actor && actor.sub !== userId && !allowVerifiedFields)
+      throw new ForbiddenException('You can only update your own passport');
     if (
       !allowVerifiedFields &&
       (dto.verifiedMetrics !== undefined || dto.earnedBadges !== undefined)
     ) {
-      throw new ForbiddenException('Only an administrator can write verified metrics or badges');
+      throw new ForbiddenException('Only authorized staff can write verified metrics or badges');
     }
     const profile = await this.prisma.athleteProfile.findUnique({
       where: { userId },
@@ -345,10 +352,10 @@ export class PassportService {
       isScoutSearchable: profile.isScoutSearchable,
       isProfileComplete: Boolean(
         profile.dateOfBirth &&
-          profile.gender &&
-          profile.primarySport &&
-          profile.district &&
-          profile.state,
+        profile.gender &&
+        profile.primarySport &&
+        profile.district &&
+        profile.state,
       ),
       physicalStats: {
         heightCm: profile.heightCm ? Number(profile.heightCm) : null,
@@ -359,6 +366,7 @@ export class PassportService {
       wearableScore: Number(profile.wearableScore),
       matchPerfScore: Number(profile.matchPerfScore),
       posturePoints: profile.posturePoints,
+      biomechanicalScore: Number(profile.biomechanicalScore ?? 0),
       identityStatus: profile.user.identityRecord?.status ?? VerificationStatus.UNVERIFIED,
       sportRecords,
       allBadges,

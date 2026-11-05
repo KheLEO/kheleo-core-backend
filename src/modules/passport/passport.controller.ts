@@ -144,14 +144,16 @@ export class PassportController {
     @Body() dto: AddSportRecordDto,
     @CurrentUser() user: AuthenticatedJwtUser,
   ) {
-    if (user.sub !== userId && user.role !== UserRole.SUPER_ADMIN) {
+    const privilegedRoles: readonly UserRole[] = [
+      UserRole.ORGANIZER,
+      UserRole.FEDERATION_ADMIN,
+      UserRole.SUPER_ADMIN,
+    ];
+    const isPrivileged = privilegedRoles.includes(user.role as UserRole);
+    if (user.sub !== userId && !isPrivileged) {
       throw new ForbiddenException('You can only update sports for your own passport.');
     }
-    return this.passportService.addOrUpdateSportRecord(
-      userId,
-      dto,
-      user.role === UserRole.SUPER_ADMIN,
-    );
+    return this.passportService.addOrUpdateSportRecord(userId, dto, user);
   }
 
   @Get(':userId/sports')
