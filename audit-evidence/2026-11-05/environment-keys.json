@@ -1,0 +1,138 @@
+{
+  ".env": [
+    {
+      "key": "NODE_ENV",
+      "state": "set"
+    },
+    {
+      "key": "PORT",
+      "state": "set"
+    },
+    {
+      "key": "APP_NAME",
+      "state": "set"
+    },
+    {
+      "key": "DATABASE_URL",
+      "state": "set"
+    },
+    {
+      "key": "REDIS_HOST",
+      "state": "set"
+    },
+    {
+      "key": "REDIS_PORT",
+      "state": "set"
+    },
+    {
+      "key": "REDIS_PASSWORD",
+      "state": "empty"
+    },
+    {
+      "key": "JWT_PRIVATE_KEY_PATH",
+      "state": "set"
+    },
+    {
+      "key": "JWT_PUBLIC_KEY_PATH",
+      "state": "set"
+    },
+    {
+      "key": "JWT_ACCESS_EXPIRY",
+      "state": "set"
+    },
+    {
+      "key": "JWT_REFRESH_EXPIRY",
+      "state": "set"
+    },
+    {
+      "key": "IDENTITY_PEPPER",
+      "state": "set"
+    },
+    {
+      "key": "IDENTITY_SALT_VERSION",
+      "state": "set"
+    },
+    {
+      "key": "DRILL_HMAC_SECRET",
+      "state": "set"
+    },
+    {
+      "key": "TELEMETRY_SERVICE_HMAC_SECRET",
+      "state": "set"
+    },
+    {
+      "key": "OTP_EXPIRY_SECONDS",
+      "state": "set"
+    },
+    {
+      "key": "OTP_LENGTH",
+      "state": "set"
+    }
+  ],
+  ".env.example": [
+    {
+      "key": "NODE_ENV",
+      "state": "set"
+    },
+    {
+      "key": "PORT",
+      "state": "set"
+    },
+    {
+      "key": "APP_NAME",
+      "state": "set"
+    },
+    {
+      "key": "CORS_ORIGINS",
+      "state": "set"
+    },
+    {
+      "key": "DATABASE_URL",
+      "state": "set"
+    },
+    {
+      "key": "REDIS_HOST",
+      "state": "set"
+    },
+    {
+      "key": "REDIS_PORT",
+      "state": "set"
+    },
+    {
+      "key": "REDIS_PASSWORD",
+      "state": "empty"
+    },
+    {
+      "key": "JWT_PRIVATE_KEY_PATH",
+      "state": "set"
+    },
+    {
+      "key": "JWT_PUBLIC_KEY_PATH",
+      "state": "set"
+    },
+    {
+      "key": "JWT_ACCESS_EXPIRY",
+      "state": "set"
+    },
+    {
+      "key": "JWT_REFRESH_EXPIRY",
+      "state": "set"
+    },
+    {
+      "key": "IDENTITY_PEPPER",
+      "state": "set"
+    },
+    {
+      "key": "IDENTITY_SALT_VERSION",
+      "state": "set"
+    },
+    {
+      "key": "DRILL_HMAC_SECRET",
+      "state": "set"
+    },
+    {
+      "key": "TELEMETRY_SERVICE_HMAC_SECRET",
+      "state": "set"
+    }
+  ]
+}

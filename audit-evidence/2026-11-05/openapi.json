@@ -1,0 +1,2314 @@
+{
+  "openapi": "3.0.0",
+  "paths": {
+    "/api/v1/auth/register": {
+      "post": {
+        "description": "Creates a new User and AthleteProfile. If a Government ID is provided, it is irreversibly hashed (SHA-256 + salt + pepper) and verified. Duplicate accounts attempting to reset GTI are strictly rejected.",
+        "operationId": "AuthController_register_v1",
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "Unique key (min 16 chars) to prevent duplicate submissions over flaky networks",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RegisterDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Registration successful, returns lightweight JWT tokens",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthResponseDto"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict — user already exists or Government ID is already bound to another profile"
+          }
+        },
+        "summary": "Register athlete profile with Anti-Account Reset check",
+        "tags": [
+          "Authentication & Identity"
+        ]
+      }
+    },
+    "/api/v1/auth/login": {
+      "post": {
+        "description": "Authenticates against the permanent identity ledger and returns lightweight access and refresh tokens.",
+        "operationId": "AuthController_login_v1",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LoginDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Login successful",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthResponseDto"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Login via verified contact and Government ID proof",
+        "tags": [
+          "Authentication & Identity"
+        ]
+      }
+    },
+    "/api/v1/auth/verify-government-id": {
+      "post": {
+        "description": "Hashes the government document (Aadhaar, Voter ID, Passport) and binds it uniquely to this user. Rejects if already linked to any previous profile.",
+        "operationId": "AuthController_verifyGovernmentId_v1",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VerifyGovIdDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Government ID bound and verified"
+          },
+          "409": {
+            "description": "Anti-Account Reset Loophole triggered: ID already belongs to an existing athlete"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Bind and verify Government ID to profile (Anti-Account Reset enforcement)",
+        "tags": [
+          "Authentication & Identity"
+        ]
+      }
+    },
+    "/api/v1/auth/refresh": {
+      "post": {
+        "operationId": "AuthController_refreshToken_v1",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RefreshTokenDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Tokens rotated successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthResponseDto"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Rotate refresh token and get fresh lightweight access token",
+        "tags": [
+          "Authentication & Identity"
+        ]
+      }
+    },
+    "/api/v1/auth/me": {
+      "get": {
+        "operationId": "AuthController_getProfile_v1",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Token payload"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Get current authenticated token identity",
+        "tags": [
+          "Authentication & Identity"
+        ]
+      }
+    },
+    "/api/v1/users/{id}": {
+      "get": {
+        "operationId": "UsersController_findById_v1",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "User found"
+          },
+          "404": {
+            "description": "User not found"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Get user profile by user ID",
+        "tags": [
+          "Users"
+        ]
+      },
+      "patch": {
+        "operationId": "UsersController_update_v1",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateUserDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "User updated"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Update user contact details",
+        "tags": [
+          "Users"
+        ]
+      },
+      "delete": {
+        "operationId": "UsersController_deactivate_v1",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "User deactivated"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Deactivate user account",
+        "tags": [
+          "Users"
+        ]
+      }
+    },
+    "/api/v1/passport/{userId}": {
+      "get": {
+        "description": "Returns cross-sport performance logs, earned badges, composite GTI, and verified physical stats for the specified athlete.",
+        "operationId": "PassportController_getPassport_v1",
+        "parameters": [
+          {
+            "name": "userId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Digital Sports Passport returned successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AthletePassportDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Passport not found"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Retrieve Digital Sports Passport",
+        "tags": [
+          "Digital Sports Passport"
+        ]
+      },
+      "post": {
+        "description": "Initializes a new Digital Sports Passport for an authenticated user.",
+        "operationId": "PassportController_createPassport_v1",
+        "parameters": [
+          {
+            "name": "userId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "Unique key (min 16 chars) to prevent duplicate submissions",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreatePassportDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Passport created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AthletePassportDto"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Create athlete passport profile",
+        "tags": [
+          "Digital Sports Passport"
+        ]
+      },
+      "patch": {
+        "description": "Updates bio, physical stats (height, weight, dominant side), district, and state.",
+        "operationId": "PassportController_updatePassport_v1",
+        "parameters": [
+          {
+            "name": "userId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "Idempotency key for state-altering requests over flaky mobile networks",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdatePassportDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Passport updated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AthletePassportDto"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Update basic profile metadata & verified physical stats",
+        "tags": [
+          "Digital Sports Passport"
+        ]
+      }
+    },
+    "/api/v1/passport/{userId}/sports": {
+      "post": {
+        "description": "Attaches cross-sport performance logs, badges, or roles to the athlete passport.",
+        "operationId": "PassportController_addSportRecord_v1",
+        "parameters": [
+          {
+            "name": "userId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "Idempotency key for state-altering requests over flaky mobile networks",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AddSportRecordDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Add or update multi-sport athlete record",
+        "tags": [
+          "Digital Sports Passport"
+        ]
+      },
+      "get": {
+        "operationId": "PassportController_listSportRecords_v1",
+        "parameters": [
+          {
+            "name": "userId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20,
+              "example": 20,
+              "type": "number"
+            }
+          },
+          {
+            "name": "cursor_id",
+            "required": false,
+            "in": "query",
+            "description": "Opaque cursor for next page",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Paginated sport records"
+          }
+        },
+        "summary": "List cross-sport records with cursor-based pagination",
+        "tags": [
+          "Digital Sports Passport"
+        ]
+      }
+    },
+    "/api/v1/tournaments/nearby": {
+      "get": {
+        "description": "Queries active tournaments within requested radius (km) using PostGIS ST_DWithin and ST_MakePoint. Strips relational joins and returns flat DTOs optimized for mobile networks.",
+        "operationId": "TournamentsController_findNearby_v1",
+        "parameters": [
+          {
+            "name": "lat",
+            "required": true,
+            "in": "query",
+            "description": "Latitude coordinate of searching location",
+            "schema": {
+              "example": 25.3176,
+              "type": "number"
+            }
+          },
+          {
+            "name": "lng",
+            "required": true,
+            "in": "query",
+            "description": "Longitude coordinate of searching location",
+            "schema": {
+              "example": 82.9739,
+              "type": "number"
+            }
+          },
+          {
+            "name": "radius_km",
+            "required": false,
+            "in": "query",
+            "description": "Radius in kilometers for PostGIS spatial search (default 50)",
+            "schema": {
+              "default": 50,
+              "example": 50,
+              "type": "number"
+            }
+          },
+          {
+            "name": "sport",
+            "required": false,
+            "in": "query",
+            "description": "Filter by sport type",
+            "schema": {
+              "example": "CRICKET",
+              "type": "string",
+              "enum": [
+                "CRICKET",
+                "FOOTBALL",
+                "BADMINTON",
+                "ATHLETICS",
+                "BASKETBALL",
+                "KABADDI"
+              ]
+            }
+          },
+          {
+            "name": "cursor",
+            "required": false,
+            "in": "query",
+            "description": "Cursor ID for next page of tournaments",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "description": "Number of tournaments to return (max 100)",
+            "schema": {
+              "default": 20,
+              "example": 20,
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Flat array of nearby tournament locations",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/TournamentLocationDto"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "summary": "Geospatial tournament discovery (PostGIS ST_DWithin)",
+        "tags": [
+          "Tournaments & Geospatial Discovery"
+        ]
+      }
+    },
+    "/api/v1/tournaments/{id}": {
+      "get": {
+        "operationId": "TournamentsController_findById_v1",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Tournament found"
+          },
+          "404": {
+            "description": "Tournament not found"
+          }
+        },
+        "summary": "Retrieve tournament details by ID",
+        "tags": [
+          "Tournaments & Geospatial Discovery"
+        ]
+      }
+    },
+    "/api/v1/tournaments": {
+      "post": {
+        "operationId": "TournamentsController_create_v1",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateTournamentDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Tournament created"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Create a new tournament",
+        "tags": [
+          "Tournaments & Geospatial Discovery"
+        ]
+      }
+    },
+    "/api/v1/tournaments/{tournamentId}/brackets/{bracketId}/register": {
+      "post": {
+        "description": "Validates the athlete verified Grassroots Talent Index (GTI) against bracket skill ceiling. Rejects higher-skilled players with 409 SANDBAGGING_DETECTED error payload and suggests appropriate tier. Employs Redis Idempotency-Key locking to guard against flaky network retries.",
+        "operationId": "BracketsController_register_v1",
+        "parameters": [
+          {
+            "name": "tournamentId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "bracketId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "Unique key (min 16 chars) to prevent duplicate submissions over flaky mobile networks",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RegisterBracketDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successfully registered for bracket",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BracketRegistrationResponseDto"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "SANDBAGGING_DETECTED: Athlete skill ceiling exceeded or capacity full"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Register athlete for tournament bracket (Anti-Sandbagging Gatekeeper)",
+        "tags": [
+          "Tournament Brackets & Anti-Sandbagging Gatekeeper"
+        ]
+      }
+    },
+    "/api/v1/tournaments/{tournamentId}/brackets": {
+      "get": {
+        "operationId": "BracketsController_findByTournament_v1",
+        "parameters": [
+          {
+            "name": "tournamentId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20,
+              "type": "number"
+            }
+          },
+          {
+            "name": "cursor_id",
+            "required": false,
+            "in": "query",
+            "description": "Opaque cursor for next page",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "List of brackets"
+          }
+        },
+        "summary": "List all brackets for a tournament",
+        "tags": [
+          "Tournament Brackets & Anti-Sandbagging Gatekeeper"
+        ]
+      },
+      "post": {
+        "operationId": "BracketsController_createBracket_v1",
+        "parameters": [
+          {
+            "name": "tournamentId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateBracketDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Bracket created"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Create bracket in a tournament",
+        "tags": [
+          "Tournament Brackets & Anti-Sandbagging Gatekeeper"
+        ]
+      }
+    },
+    "/api/v1/tournaments/{tournamentId}/brackets/{bracketId}/free-agents/join": {
+      "post": {
+        "description": "Enqueues an unattached athlete into the complementary role matchmaking pool. Runs Anti-Sandbagging GTI gatekeeper validation, prevents duplicate team registrations, and triggers the BullMQ role-balancing worker.",
+        "operationId": "MatchmakingController_joinPool_v1",
+        "parameters": [
+          {
+            "name": "tournamentId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "bracketId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JoinFreeAgentDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successfully joined the matchmaking pool",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FreeAgentStatusResponseDto"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "SANDBAGGING_DETECTED: Athlete skill ceiling exceeded, or already queued in tournament"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Join dynamic free agent matchmaking pool",
+        "tags": [
+          "Dynamic Free Agent Matchmaking Pool"
+        ]
+      }
+    },
+    "/api/v1/tournaments/{tournamentId}/brackets/{bracketId}/free-agents/leave": {
+      "delete": {
+        "description": "Allows an athlete to cancel and exit the queue if their status is still QUEUED.",
+        "operationId": "MatchmakingController_leavePool_v1",
+        "parameters": [
+          {
+            "name": "tournamentId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "bracketId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successfully removed from the pool"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Exit free agent queue before matching",
+        "tags": [
+          "Dynamic Free Agent Matchmaking Pool"
+        ]
+      }
+    },
+    "/api/v1/tournaments/{tournamentId}/brackets/{bracketId}/free-agents/status": {
+      "get": {
+        "description": "Returns current wait position in FIFO queue, or if already matched, returns formed team ID and assigned complementary roster.",
+        "operationId": "MatchmakingController_getStatus_v1",
+        "parameters": [
+          {
+            "name": "tournamentId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "bracketId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Queue status retrieved",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FreeAgentStatusResponseDto"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Get free agent queue status & roster details",
+        "tags": [
+          "Dynamic Free Agent Matchmaking Pool"
+        ]
+      }
+    },
+    "/api/v1/drills/submit": {
+      "post": {
+        "operationId": "DrillsController_submit_v1",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SubmitDrillDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "Drills"
+        ]
+      }
+    },
+    "/api/v1/safety/telemetry-webhook": {
+      "post": {
+        "operationId": "SafetyController_handleTelemetryWebhook_v1",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TelemetryWebhookDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "Safety"
+        ]
+      }
+    },
+    "/api/v1/gti/recalculate/{athleteId}": {
+      "post": {
+        "operationId": "GtiController_recalculate_v1",
+        "parameters": [
+          {
+            "name": "athleteId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "Gti"
+        ]
+      }
+    },
+    "/api/v1/gti/rank/{sport}/{athleteId}": {
+      "get": {
+        "operationId": "GtiController_getRank_v1",
+        "parameters": [
+          {
+            "name": "sport",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "athleteId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "district",
+            "required": true,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "Gti"
+        ]
+      }
+    },
+    "/api/v1/scouts/feed": {
+      "get": {
+        "operationId": "ScoutsController_getFeed_v1",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "Scouts"
+        ]
+      }
+    },
+    "/api/v1/scouts/alerts": {
+      "get": {
+        "operationId": "ScoutsController_getAlerts_v1",
+        "parameters": [
+          {
+            "name": "sport",
+            "required": true,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "district",
+            "required": true,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "Scouts"
+        ]
+      }
+    },
+    "/api/v1/scouts/alerts/{id}/acknowledge": {
+      "patch": {
+        "operationId": "ScoutsController_acknowledgeAlert_v1",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "Scouts"
+        ]
+      }
+    },
+    "/api/v1/heatmaps/regional": {
+      "get": {
+        "operationId": "HeatmapsController_getRegional_v1",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "Heatmaps"
+        ]
+      }
+    }
+  },
+  "info": {
+    "title": "Audit of actual controller metadata",
+    "description": "",
+    "version": "1",
+    "contact": {}
+  },
+  "tags": [],
+  "servers": [],
+  "components": {
+    "schemas": {
+      "InitialAthleteProfileDto": {
+        "type": "object",
+        "properties": {
+          "dateOfBirth": {
+            "type": "string",
+            "example": "2005-06-15"
+          },
+          "gender": {
+            "type": "string",
+            "example": "MALE"
+          },
+          "primarySport": {
+            "type": "string",
+            "enum": [
+              "CRICKET",
+              "FOOTBALL",
+              "BADMINTON",
+              "ATHLETICS",
+              "BASKETBALL",
+              "KABADDI"
+            ],
+            "example": "CRICKET"
+          },
+          "secondarySports": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "CRICKET",
+                "FOOTBALL",
+                "BADMINTON",
+                "ATHLETICS",
+                "BASKETBALL",
+                "KABADDI"
+              ]
+            }
+          },
+          "district": {
+            "type": "string",
+            "example": "Varanasi"
+          },
+          "state": {
+            "type": "string",
+            "example": "Uttar Pradesh"
+          },
+          "tierClassification": {
+            "type": "string",
+            "enum": [
+              "RURAL",
+              "TIER_3",
+              "TIER_2",
+              "TIER_1",
+              "METRO"
+            ],
+            "default": "RURAL"
+          },
+          "heightCm": {
+            "type": "number",
+            "example": 178.5
+          },
+          "weightKg": {
+            "type": "number",
+            "example": 71
+          },
+          "dominantSide": {
+            "type": "string",
+            "example": "RIGHT"
+          }
+        },
+        "required": [
+          "dateOfBirth",
+          "gender",
+          "primarySport",
+          "district",
+          "state"
+        ]
+      },
+      "GovernmentIdInputDto": {
+        "type": "object",
+        "properties": {
+          "idType": {
+            "type": "string",
+            "enum": [
+              "AADHAAR",
+              "VOTER_ID",
+              "PASSPORT",
+              "DRIVING_LICENSE",
+              "BIRTH_CERTIFICATE"
+            ],
+            "example": "AADHAAR"
+          },
+          "idNumber": {
+            "type": "string",
+            "example": "5421 8901 2345"
+          }
+        },
+        "required": [
+          "idType",
+          "idNumber"
+        ]
+      },
+      "RegisterDto": {
+        "type": "object",
+        "properties": {
+          "phone": {
+            "type": "string",
+            "example": "+919876543210"
+          },
+          "email": {
+            "type": "string",
+            "example": "athlete@kheleo.com"
+          },
+          "role": {
+            "type": "string",
+            "enum": [
+              "ATHLETE",
+              "SCOUT",
+              "UMPIRE",
+              "ORGANIZER",
+              "FEDERATION_ADMIN",
+              "SUPER_ADMIN"
+            ],
+            "default": "ATHLETE"
+          },
+          "profile": {
+            "$ref": "#/components/schemas/InitialAthleteProfileDto"
+          },
+          "governmentId": {
+            "$ref": "#/components/schemas/GovernmentIdInputDto"
+          }
+        }
+      },
+      "AuthUserSummaryDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "example": "123e4567-e89b-12d3-a456-426614174000"
+          },
+          "phone": {
+            "type": "object",
+            "example": "+919876543210",
+            "nullable": true
+          },
+          "email": {
+            "type": "object",
+            "example": "athlete@kheleo.com",
+            "nullable": true
+          },
+          "role": {
+            "type": "string",
+            "enum": [
+              "ATHLETE",
+              "SCOUT",
+              "UMPIRE",
+              "ORGANIZER",
+              "FEDERATION_ADMIN",
+              "SUPER_ADMIN"
+            ],
+            "example": "ATHLETE"
+          },
+          "isVerified": {
+            "type": "boolean",
+            "example": true
+          },
+          "athleteProfileId": {
+            "type": "object",
+            "example": "123e4567-e89b-12d3-a456-426614174001",
+            "nullable": true
+          }
+        },
+        "required": [
+          "id",
+          "phone",
+          "email",
+          "role",
+          "isVerified",
+          "athleteProfileId"
+        ]
+      },
+      "AuthResponseDto": {
+        "type": "object",
+        "properties": {
+          "accessToken": {
+            "type": "string",
+            "example": "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9..."
+          },
+          "refreshToken": {
+            "type": "string",
+            "example": "7d_refresh_token_uuid_or_jwt"
+          },
+          "tokenType": {
+            "type": "string",
+            "example": "Bearer"
+          },
+          "expiresIn": {
+            "type": "number",
+            "example": 900,
+            "description": "Expiry in seconds (15 minutes)"
+          },
+          "user": {
+            "$ref": "#/components/schemas/AuthUserSummaryDto"
+          }
+        },
+        "required": [
+          "accessToken",
+          "refreshToken",
+          "tokenType",
+          "expiresIn",
+          "user"
+        ]
+      },
+      "LoginDto": {
+        "type": "object",
+        "properties": {
+          "phone": {
+            "type": "string",
+            "example": "+919876543210"
+          },
+          "email": {
+            "type": "string",
+            "example": "athlete@kheleo.com"
+          },
+          "governmentId": {
+            "$ref": "#/components/schemas/GovernmentIdInputDto"
+          }
+        },
+        "required": [
+          "governmentId"
+        ]
+      },
+      "VerifyGovIdDto": {
+        "type": "object",
+        "properties": {
+          "idType": {
+            "type": "string",
+            "description": "Government ID document type",
+            "enum": [
+              "AADHAAR",
+              "VOTER_ID",
+              "PASSPORT",
+              "DRIVING_LICENSE",
+              "BIRTH_CERTIFICATE"
+            ],
+            "example": "AADHAAR"
+          },
+          "idNumber": {
+            "type": "string",
+            "description": "Raw government ID number (hashed irreversibly before DB storage)",
+            "example": "5421 8901 2345"
+          }
+        },
+        "required": [
+          "idType",
+          "idNumber"
+        ]
+      },
+      "RefreshTokenDto": {
+        "type": "object",
+        "properties": {
+          "refreshToken": {
+            "type": "string",
+            "description": "Valid refresh token string"
+          }
+        },
+        "required": [
+          "refreshToken"
+        ]
+      },
+      "UpdateUserDto": {
+        "type": "object",
+        "properties": {
+          "phone": {
+            "type": "string",
+            "example": "+919876543210"
+          },
+          "email": {
+            "type": "string",
+            "example": "athlete@kheleo.com"
+          }
+        }
+      },
+      "VerifiedPhysicalStatsDto": {
+        "type": "object",
+        "properties": {
+          "heightCm": {
+            "type": "object",
+            "example": 178.5,
+            "nullable": true
+          },
+          "weightKg": {
+            "type": "object",
+            "example": 71,
+            "nullable": true
+          },
+          "dominantSide": {
+            "type": "object",
+            "example": "RIGHT",
+            "nullable": true
+          }
+        },
+        "required": [
+          "heightCm",
+          "weightKg",
+          "dominantSide"
+        ]
+      },
+      "SportPassportRecordSummaryDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "example": "123e4567-e89b-12d3-a456-426614174000"
+          },
+          "sport": {
+            "type": "string",
+            "enum": [
+              "CRICKET",
+              "FOOTBALL",
+              "BADMINTON",
+              "ATHLETICS",
+              "BASKETBALL",
+              "KABADDI"
+            ],
+            "example": "CRICKET"
+          },
+          "primaryRole": {
+            "type": "string",
+            "example": "ALL_ROUNDER"
+          },
+          "secondaryRoles": {
+            "example": [
+              "FAST_BOWLER"
+            ],
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "totalMatches": {
+            "type": "number",
+            "example": 18
+          },
+          "winCount": {
+            "type": "number",
+            "example": 14
+          },
+          "winStreak": {
+            "type": "number",
+            "example": 5
+          },
+          "verifiedMetrics": {
+            "type": "object",
+            "example": {
+              "bowlingSpeedKmh": 132.4
+            }
+          },
+          "earnedBadges": {
+            "example": [
+              {
+                "id": "centurion",
+                "title": "Centurion"
+              }
+            ],
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "updatedAt": {
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "sport",
+          "primaryRole",
+          "secondaryRoles",
+          "totalMatches",
+          "winCount",
+          "winStreak",
+          "verifiedMetrics",
+          "earnedBadges",
+          "updatedAt"
+        ]
+      },
+      "AthletePassportDto": {
+        "type": "object",
+        "properties": {
+          "userId": {
+            "type": "string",
+            "example": "123e4567-e89b-12d3-a456-426614174000"
+          },
+          "athleteProfileId": {
+            "type": "string",
+            "example": "123e4567-e89b-12d3-a456-426614174001"
+          },
+          "dateOfBirth": {
+            "format": "date-time",
+            "type": "string",
+            "example": "2005-04-12"
+          },
+          "gender": {
+            "type": "string",
+            "example": "MALE"
+          },
+          "primarySport": {
+            "type": "string",
+            "enum": [
+              "CRICKET",
+              "FOOTBALL",
+              "BADMINTON",
+              "ATHLETICS",
+              "BASKETBALL",
+              "KABADDI"
+            ],
+            "example": "CRICKET"
+          },
+          "secondarySports": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "CRICKET",
+                "FOOTBALL",
+                "BADMINTON",
+                "ATHLETICS",
+                "BASKETBALL",
+                "KABADDI"
+              ]
+            }
+          },
+          "district": {
+            "type": "string",
+            "example": "Varanasi"
+          },
+          "state": {
+            "type": "string",
+            "example": "Uttar Pradesh"
+          },
+          "tierClassification": {
+            "type": "string",
+            "enum": [
+              "RURAL",
+              "TIER_3",
+              "TIER_2",
+              "TIER_1",
+              "METRO"
+            ],
+            "example": "RURAL"
+          },
+          "physicalStats": {
+            "$ref": "#/components/schemas/VerifiedPhysicalStatsDto"
+          },
+          "currentGti": {
+            "type": "number",
+            "example": 72.5,
+            "description": "Composite Grassroots Talent Index (0-100)"
+          },
+          "wearableScore": {
+            "type": "number",
+            "example": 85
+          },
+          "matchPerfScore": {
+            "type": "number",
+            "example": 78.5
+          },
+          "posturePoints": {
+            "type": "number",
+            "example": 120
+          },
+          "identityStatus": {
+            "type": "string",
+            "enum": [
+              "UNVERIFIED",
+              "VERIFIED",
+              "FLAGGED_DUPLICATE",
+              "REVOKED"
+            ],
+            "example": "VERIFIED"
+          },
+          "sportRecords": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SportPassportRecordSummaryDto"
+            }
+          },
+          "allBadges": {
+            "description": "Aggregated badges across all sports",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "userId",
+          "athleteProfileId",
+          "dateOfBirth",
+          "gender",
+          "primarySport",
+          "secondarySports",
+          "district",
+          "state",
+          "tierClassification",
+          "physicalStats",
+          "currentGti",
+          "wearableScore",
+          "matchPerfScore",
+          "posturePoints",
+          "identityStatus",
+          "sportRecords",
+          "allBadges"
+        ]
+      },
+      "CreatePassportDto": {
+        "type": "object",
+        "properties": {
+          "dateOfBirth": {
+            "type": "string",
+            "example": "2005-04-12",
+            "description": "ISO format date of birth"
+          },
+          "gender": {
+            "type": "string",
+            "example": "MALE"
+          },
+          "primarySport": {
+            "type": "string",
+            "enum": [
+              "CRICKET",
+              "FOOTBALL",
+              "BADMINTON",
+              "ATHLETICS",
+              "BASKETBALL",
+              "KABADDI"
+            ],
+            "example": "CRICKET"
+          },
+          "secondarySports": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "CRICKET",
+                "FOOTBALL",
+                "BADMINTON",
+                "ATHLETICS",
+                "BASKETBALL",
+                "KABADDI"
+              ]
+            }
+          },
+          "district": {
+            "type": "string",
+            "example": "Varanasi"
+          },
+          "state": {
+            "type": "string",
+            "example": "Uttar Pradesh"
+          },
+          "tierClassification": {
+            "type": "string",
+            "enum": [
+              "RURAL",
+              "TIER_3",
+              "TIER_2",
+              "TIER_1",
+              "METRO"
+            ],
+            "default": "RURAL"
+          },
+          "heightCm": {
+            "type": "number",
+            "example": 178.5,
+            "minimum": 50,
+            "maximum": 260
+          },
+          "weightKg": {
+            "type": "number",
+            "example": 72,
+            "minimum": 20,
+            "maximum": 200
+          },
+          "dominantSide": {
+            "type": "string",
+            "example": "RIGHT",
+            "enum": [
+              "RIGHT",
+              "LEFT",
+              "BOTH"
+            ]
+          },
+          "locationLat": {
+            "type": "number",
+            "example": 25.3176
+          },
+          "locationLng": {
+            "type": "number",
+            "example": 82.9739
+          },
+          "isScoutSearchable": {
+            "type": "boolean",
+            "default": true
+          }
+        },
+        "required": [
+          "dateOfBirth",
+          "gender",
+          "primarySport",
+          "district",
+          "state"
+        ]
+      },
+      "UpdatePassportDto": {
+        "type": "object",
+        "properties": {
+          "primarySport": {
+            "type": "string",
+            "enum": [
+              "CRICKET",
+              "FOOTBALL",
+              "BADMINTON",
+              "ATHLETICS",
+              "BASKETBALL",
+              "KABADDI"
+            ]
+          },
+          "secondarySports": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "CRICKET",
+                "FOOTBALL",
+                "BADMINTON",
+                "ATHLETICS",
+                "BASKETBALL",
+                "KABADDI"
+              ]
+            }
+          },
+          "district": {
+            "type": "string",
+            "example": "Varanasi"
+          },
+          "state": {
+            "type": "string",
+            "example": "Uttar Pradesh"
+          },
+          "tierClassification": {
+            "type": "string",
+            "enum": [
+              "RURAL",
+              "TIER_3",
+              "TIER_2",
+              "TIER_1",
+              "METRO"
+            ]
+          },
+          "heightCm": {
+            "type": "number",
+            "example": 179,
+            "minimum": 50,
+            "maximum": 260
+          },
+          "weightKg": {
+            "type": "number",
+            "example": 73.5,
+            "minimum": 20,
+            "maximum": 200
+          },
+          "dominantSide": {
+            "type": "string",
+            "example": "RIGHT",
+            "enum": [
+              "RIGHT",
+              "LEFT",
+              "BOTH"
+            ]
+          },
+          "locationLat": {
+            "type": "number",
+            "example": 25.3176
+          },
+          "locationLng": {
+            "type": "number",
+            "example": 82.9739
+          },
+          "isScoutSearchable": {
+            "type": "boolean",
+            "example": true
+          }
+        }
+      },
+      "AddSportRecordDto": {
+        "type": "object",
+        "properties": {
+          "sport": {
+            "type": "string",
+            "enum": [
+              "CRICKET",
+              "FOOTBALL",
+              "BADMINTON",
+              "ATHLETICS",
+              "BASKETBALL",
+              "KABADDI"
+            ],
+            "example": "CRICKET"
+          },
+          "primaryRole": {
+            "type": "string",
+            "example": "ALL_ROUNDER"
+          },
+          "secondaryRoles": {
+            "example": [
+              "FAST_BOWLER",
+              "MIDDLE_ORDER_BATSMAN"
+            ],
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "verifiedMetrics": {
+            "type": "object",
+            "example": {
+              "bowlingSpeedKmh": 132.4,
+              "battingStrikeRate": 145.2
+            },
+            "description": "Verified Edge-AI metrics"
+          },
+          "earnedBadges": {
+            "example": [
+              {
+                "id": "centurion",
+                "title": "Centurion",
+                "dateEarned": "2026-09-01"
+              }
+            ],
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "sport",
+          "primaryRole"
+        ]
+      },
+      "TournamentLocationDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "example": "123e4567-e89b-12d3-a456-426614174000"
+          },
+          "name": {
+            "type": "string",
+            "example": "Varanasi Premier Grassroots Cup"
+          },
+          "sport": {
+            "type": "string",
+            "example": "CRICKET"
+          },
+          "status": {
+            "type": "string",
+            "example": "REGISTRATION_OPEN"
+          },
+          "minGti": {
+            "type": "number",
+            "example": 25
+          },
+          "maxGti": {
+            "type": "number",
+            "example": 60
+          },
+          "venueName": {
+            "type": "string",
+            "example": "Sigra Stadium, Varanasi"
+          },
+          "venueLat": {
+            "type": "number",
+            "example": 25.3176
+          },
+          "venueLng": {
+            "type": "number",
+            "example": 82.9739
+          },
+          "distanceKm": {
+            "type": "number",
+            "example": 12.4,
+            "description": "Distance in kilometers from searching GPS coordinates"
+          },
+          "startDate": {
+            "type": "string",
+            "example": "2026-11-01T09:00:00.000Z"
+          },
+          "registrationDeadline": {
+            "type": "string",
+            "example": "2026-10-25T18:00:00.000Z"
+          },
+          "prizePool": {
+            "type": "number",
+            "example": 50000
+          },
+          "maxTeams": {
+            "type": "number",
+            "example": 16
+          },
+          "teamSize": {
+            "type": "number",
+            "example": 11
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "sport",
+          "status",
+          "minGti",
+          "maxGti",
+          "venueName",
+          "venueLat",
+          "venueLng",
+          "distanceKm",
+          "startDate",
+          "registrationDeadline"
+        ]
+      },
+      "CreateTournamentDto": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "example": "Varanasi Premier Grassroots Cup"
+          },
+          "sport": {
+            "type": "string",
+            "enum": [
+              "CRICKET",
+              "FOOTBALL",
+              "BADMINTON",
+              "ATHLETICS",
+              "BASKETBALL",
+              "KABADDI"
+            ],
+            "example": "CRICKET"
+          },
+          "minGti": {
+            "type": "number",
+            "example": 0
+          },
+          "maxGti": {
+            "type": "number",
+            "example": 100
+          },
+          "maxTeams": {
+            "type": "number",
+            "example": 16
+          },
+          "teamSize": {
+            "type": "number",
+            "example": 11
+          },
+          "prizePool": {
+            "type": "number",
+            "example": 25000
+          },
+          "venueName": {
+            "type": "string",
+            "example": "Sigra Stadium, Varanasi"
+          },
+          "venueLat": {
+            "type": "number",
+            "example": 25.3176
+          },
+          "venueLng": {
+            "type": "number",
+            "example": 82.9739
+          },
+          "registrationDeadline": {
+            "type": "string",
+            "example": "2026-10-25T18:00:00.000Z"
+          },
+          "startDate": {
+            "type": "string",
+            "example": "2026-11-01T09:00:00.000Z"
+          },
+          "endDate": {
+            "type": "string",
+            "example": "2026-11-05T18:00:00.000Z"
+          }
+        },
+        "required": [
+          "name",
+          "sport",
+          "maxTeams",
+          "teamSize",
+          "venueName",
+          "venueLat",
+          "venueLng",
+          "registrationDeadline",
+          "startDate",
+          "endDate"
+        ]
+      },
+      "RegisterBracketDto": {
+        "type": "object",
+        "properties": {
+          "teamId": {
+            "type": "string",
+            "description": "Optional Team UUID if registering as a team captain",
+            "example": "123e4567-e89b-12d3-a456-426614174000"
+          }
+        }
+      },
+      "BracketRegistrationResponseDto": {
+        "type": "object",
+        "properties": {
+          "registrationId": {
+            "type": "string",
+            "example": "123e4567-e89b-12d3-a456-426614174000"
+          },
+          "bracketId": {
+            "type": "string",
+            "example": "123e4567-e89b-12d3-a456-426614174001"
+          },
+          "tournamentId": {
+            "type": "string",
+            "example": "123e4567-e89b-12d3-a456-426614174002"
+          },
+          "athleteId": {
+            "type": "string",
+            "example": "123e4567-e89b-12d3-a456-426614174003"
+          },
+          "tierName": {
+            "type": "string",
+            "example": "GOLD"
+          },
+          "athleteGti": {
+            "type": "number",
+            "example": 58.4,
+            "description": "Verified GTI score captured at time of registration"
+          },
+          "status": {
+            "type": "string",
+            "example": "CONFIRMED"
+          },
+          "feePaid": {
+            "type": "number",
+            "example": 500
+          },
+          "registeredAt": {
+            "type": "string",
+            "example": "2026-10-11T13:45:00.000Z"
+          },
+          "teamId": {
+            "type": "object",
+            "example": "123e4567-e89b-12d3-a456-426614174004"
+          }
+        },
+        "required": [
+          "registrationId",
+          "bracketId",
+          "tournamentId",
+          "athleteId",
+          "tierName",
+          "athleteGti",
+          "status",
+          "feePaid",
+          "registeredAt"
+        ]
+      },
+      "CreateBracketDto": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "example": "Under-19 Gold Tier"
+          },
+          "tierName": {
+            "type": "string",
+            "example": "GOLD"
+          },
+          "minGti": {
+            "type": "number",
+            "example": 45,
+            "description": "Minimum GTI threshold for entry"
+          },
+          "maxGti": {
+            "type": "number",
+            "example": 70,
+            "description": "Maximum GTI ceiling (Anti-Sandbagging limit)"
+          },
+          "entryFee": {
+            "type": "number",
+            "example": 500,
+            "description": "Registration entry fee"
+          },
+          "maxTeams": {
+            "type": "number",
+            "example": 16,
+            "default": 16
+          },
+          "bracketType": {
+            "type": "string",
+            "enum": [
+              "SINGLE_ELIMINATION",
+              "DOUBLE_ELIMINATION",
+              "ROUND_ROBIN",
+              "SWISS"
+            ],
+            "default": "SINGLE_ELIMINATION"
+          }
+        },
+        "required": [
+          "name",
+          "tierName",
+          "minGti",
+          "maxGti"
+        ]
+      },
+      "JoinFreeAgentDto": {
+        "type": "object",
+        "properties": {
+          "primary_role": {
+            "type": "string",
+            "description": "Primary role of the athlete (e.g. BATSMAN, BOWLER, ALL_ROUNDER, WICKETKEEPER, GOALKEEPER, DEFENDER, MIDFIELDER, FORWARD)",
+            "example": "BATSMAN"
+          },
+          "secondary_role": {
+            "type": "string",
+            "description": "Optional secondary fallback role for complementary team balancing",
+            "example": "ALL_ROUNDER"
+          }
+        },
+        "required": [
+          "primary_role"
+        ]
+      },
+      "RosterMemberSummaryDto": {
+        "type": "object",
+        "properties": {
+          "user_id": {
+            "type": "string",
+            "example": "123e4567-e89b-12d3-a456-426614174000"
+          },
+          "name": {
+            "type": "string",
+            "example": "Rahul Sharma"
+          },
+          "assigned_role": {
+            "type": "string",
+            "example": "BOWLER"
+          },
+          "gti": {
+            "type": "number",
+            "example": 74.2
+          }
+        },
+        "required": [
+          "user_id",
+          "name",
+          "assigned_role",
+          "gti"
+        ]
+      },
+      "FreeAgentStatusResponseDto": {
+        "type": "object",
+        "properties": {
+          "registrationId": {
+            "type": "string",
+            "example": "123e4567-e89b-12d3-a456-426614174000"
+          },
+          "userId": {
+            "type": "string",
+            "example": "123e4567-e89b-12d3-a456-426614174001"
+          },
+          "tournamentId": {
+            "type": "string",
+            "example": "123e4567-e89b-12d3-a456-426614174002"
+          },
+          "bracketId": {
+            "type": "string",
+            "example": "123e4567-e89b-12d3-a456-426614174003"
+          },
+          "sport": {
+            "type": "string",
+            "example": "CRICKET"
+          },
+          "primaryRole": {
+            "type": "string",
+            "example": "BATSMAN"
+          },
+          "secondaryRole": {
+            "type": "object",
+            "example": "ALL_ROUNDER"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "QUEUED",
+              "MATCHING",
+              "MATCHED",
+              "CANCELLED",
+              "EVALUATING",
+              "EXPIRED",
+              "WITHDRAWN"
+            ],
+            "example": "QUEUED"
+          },
+          "waitPosition": {
+            "type": "number",
+            "example": 3,
+            "description": "Position in FIFO wait queue for bracket (1 = next)"
+          },
+          "matchedTeamId": {
+            "type": "object",
+            "example": "123e4567-e89b-12d3-a456-426614174004"
+          },
+          "teamName": {
+            "type": "object",
+            "example": "FA-Roster-A1B2"
+          },
+          "assignedRole": {
+            "type": "object",
+            "example": "BATSMAN"
+          },
+          "roster": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RosterMemberSummaryDto"
+            }
+          },
+          "joinedAt": {
+            "type": "string",
+            "example": "2026-10-11T13:50:00.000Z"
+          }
+        },
+        "required": [
+          "registrationId",
+          "userId",
+          "tournamentId",
+          "bracketId",
+          "sport",
+          "primaryRole",
+          "status",
+          "waitPosition",
+          "joinedAt"
+        ]
+      },
+      "SubmitDrillDto": {
+        "type": "object",
+        "properties": {}
+      },
+      "TelemetryWebhookDto": {
+        "type": "object",
+        "properties": {}
+      }
+    }
+  }
+}
