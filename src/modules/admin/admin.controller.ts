@@ -9,13 +9,18 @@ import {
   UseGuards,
   UseInterceptors,
 } from '@nestjs/common';
-import { SecurityAuditLog, Tournament, UserRole } from '@prisma/client';
+import { Tournament, UserRole } from '@prisma/client';
 import { AuthenticatedJwtUser, JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../../common/guards/roles.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { Roles } from '../../common/decorators/roles.decorator';
 import { IdempotencyInterceptor } from '../../common/interceptors/idempotency.interceptor';
-import { AdminService, AdminDashboardResponse, AdminUserResponse } from './admin.service';
+import {
+  AdminService,
+  AdminDashboardResponse,
+  AdminUserResponse,
+  AdminAuditRow,
+} from './admin.service';
 import {
   AdminAuditQuery,
   AdminTournamentStatusDto,
@@ -39,7 +44,8 @@ export class AdminController {
   ): Promise<CursorPage<AdminUserResponse>> {
     return this.service.users(query);
   }
-  @Patch('users/:id/status')
+  @Patch(['users/:id/status', 'users/:id/governance'])
+  @Roles(UserRole.SUPER_ADMIN)
   @UseInterceptors(IdempotencyInterceptor)
   async status(
     @CurrentUser() actor: AuthenticatedJwtUser,
@@ -53,7 +59,7 @@ export class AdminController {
   ): Promise<CursorPage<Tournament>> {
     return this.service.tournaments(query);
   }
-  @Patch('tournaments/:id/status')
+  @Patch(['tournaments/:id/status', 'tournaments/:id/moderation'])
   @UseInterceptors(IdempotencyInterceptor)
   async moderate(
     @CurrentUser() actor: AuthenticatedJwtUser,
@@ -64,7 +70,7 @@ export class AdminController {
   }
   @Get('audit-logs') async audit(
     @Query() query: AdminAuditQuery,
-  ): Promise<CursorPage<SecurityAuditLog>> {
+  ): Promise<CursorPage<AdminAuditRow>> {
     return this.service.auditLogs(query);
   }
 }

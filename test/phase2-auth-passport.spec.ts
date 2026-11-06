@@ -179,6 +179,9 @@ describe('Phase 2: Identity, Anti-Account Reset, & Passport Tests', () => {
 
     it('rejects duplicate Gov ID when existing record is found', async () => {
       const mockPrismaWithExisting = {
+        securityAuditLog: {
+          create: async ({ data }: { data: Prisma.SecurityAuditLogCreateInput }) => data,
+        },
         user: {
           findUnique: async () => ({ id: 'new-user-id', isActive: true, phone: null, email: null }),
         },

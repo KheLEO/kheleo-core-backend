@@ -417,10 +417,15 @@ describe('PostGIS baseline migration', () => {
     );
     const audit = await database.query<{
       action: string;
+      category: string;
+      severity: string;
+      actor_user_id: string | null;
+      target_id: string | null;
+      summary: string;
       resource_id: string;
       metadata: Record<string, unknown>;
     }>(
-      'SELECT action,resource_id,metadata FROM security_audit_logs WHERE resource_id=ANY($1::text[])',
+      'SELECT action,category,severity,actor_user_id,target_id,summary,resource_id,metadata FROM security_audit_logs WHERE resource_id=ANY($1::text[])',
       [[drillId, identityId, regId, alertId, resultId]],
     );
     assert.deepEqual(
@@ -436,8 +441,17 @@ describe('PostGIS baseline migration', () => {
     const drill = audit.rows.find((row) => row.resource_id === drillId)!;
     assert.equal(drill.metadata.formScore, 88);
     assert.equal(drill.metadata.metadataVerified, true);
+    assert.equal(drill.category, 'SYSTEM_EVENT');
+    const identityEvent = audit.rows.find((row) => row.action === 'GOV_ID_RELINK_ATTEMPT')!;
+    assert.equal(identityEvent.category, 'GOV_ID_RESET');
+    assert.equal(identityEvent.actor_user_id, null);
     const safety = audit.rows.find((row) => row.resource_id === alertId)!;
     assert.equal(safety.metadata.matchId, matchId);
+    assert.equal(safety.category, 'SAFETY_MATCH_PAUSE');
+    assert.equal(safety.severity, 'CRITICAL');
+    assert.equal(safety.actor_user_id, user);
+    assert.equal(safety.target_id, alertId);
+    assert.ok(safety.summary.length > 0);
     assert.equal('heart_rate' in safety.metadata, false);
     await database.query('DELETE FROM drill_submissions WHERE id=$1', [drillId]);
     assert.equal(
@@ -690,5 +704,48 @@ describe('PostGIS baseline migration', () => {
     assert.equal(averages.hr, 120);
     assert.equal(averages.spo2, 97);
     assert.equal(averages.simulator_readings, 1);
+  });
+  it('classifies and filters categorized immutable admin events without retaining a foreign-key dependency on actors', async () => {
+    const actor = await createUser();
+    const id = randomUUID();
+    await database.query(
+      `INSERT INTO security_audit_logs(id,user_id,action,resource_id,metadata) VALUES($1,$2,'ADMIN_USER_STATUS_CHANGED',$3,'{}')`,
+      [id, actor, randomUUID()],
+    );
+    const record = (
+      await database.query<{
+        category: string;
+        severity: string;
+        actor_user_id: string;
+        summary: string;
+      }>('SELECT category,severity,actor_user_id,summary FROM security_audit_logs WHERE id=$1', [
+        id,
+      ])
+    ).rows[0]!;
+    assert.equal(record.category, 'ROLE_GOVERNANCE');
+    assert.equal(record.severity, 'INFO');
+    assert.equal(record.actor_user_id, actor);
+    assert.ok(record.summary);
+    await database.query('DELETE FROM users WHERE id=$1', [actor]);
+    assert.equal(
+      (
+        await database.query<{ actor_user_id: string }>(
+          'SELECT actor_user_id FROM security_audit_logs WHERE id=$1',
+          [id],
+        )
+      ).rows[0]?.actor_user_id,
+      actor,
+    );
+    await assert.rejects(
+      database.query("UPDATE security_audit_logs SET category='DRILL_HMAC_TAMPER' WHERE id=$1", [
+        id,
+      ]),
+      /append-only/,
+    );
+    await assert.rejects(
+      database.query('DELETE FROM security_audit_logs WHERE id=$1', [id]),
+      /append-only/,
+    );
+    await assert.rejects(database.exec('TRUNCATE security_audit_logs'), /append-only/);
   });
 });

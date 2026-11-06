@@ -1,6 +1,13 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Optional } from '@nestjs/common';
 import { PrismaService } from '../../infrastructure/database/prisma.service';
 import { RedisService } from '../../infrastructure/cache/redis.service';
+
+import {
+  QueueProducerService,
+  QueueHealthStatus,
+  monitoredQueueNames,
+  unavailableQueue,
+} from '../../infrastructure/queues/queue-producer.service';
 
 type DependencyStatus = 'ok' | 'unavailable';
 
@@ -11,6 +18,15 @@ export interface HealthResponse {
   readonly uptime: number;
 }
 
+export interface OperatorHealthResponse {
+  health: HealthResponse;
+  dbLatencyMs: number | null;
+  redisLatencyMs: number | null;
+  postgisAvailable: boolean;
+  postgisLatencyMs: number | null;
+  bullmqQueuesStatus: QueueHealthStatus[];
+  observedAt: string;
+}
 @Injectable()
 export class HealthService {
   private static readonly TIMEOUT_MS = 1000;
@@ -18,6 +34,7 @@ export class HealthService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly redis: RedisService,
+    @Optional() private readonly queues?: QueueProducerService,
   ) {}
 
   async check(): Promise<HealthResponse> {
@@ -36,6 +53,48 @@ export class HealthService {
       db,
       redis,
       uptime: process.uptime(),
+    };
+  }
+
+  async diagnostics(): Promise<OperatorHealthResponse> {
+    const measure = async (operation: () => Promise<unknown>): Promise<number | null> => {
+      const started = performance.now();
+      return (await this.checkDependency(operation)) === 'ok'
+        ? Math.round((performance.now() - started) * 100) / 100
+        : null;
+    };
+    const [dbLatencyMs, redisLatencyMs, postgisLatencyMs, bullmqQueuesStatus] = await Promise.all([
+      measure(() => this.prisma.$queryRaw`SELECT 1`),
+      measure(async () => {
+        if ((await this.redis.client.ping()) !== 'PONG') throw new Error('Unexpected Redis reply');
+      }),
+      measure(async () => {
+        const rows = await this.prisma.$queryRaw<
+          Array<{ version: string }>
+        >`SELECT PostGIS_Version() AS version`;
+        if (!rows[0]?.version) throw new Error('PostGIS unavailable');
+      }),
+      this.queues?.healthStatuses() ?? Promise.resolve(monitoredQueueNames.map(unavailableQueue)),
+    ]);
+    return {
+      dbLatencyMs,
+      redisLatencyMs,
+      postgisAvailable: postgisLatencyMs !== null,
+      postgisLatencyMs,
+      bullmqQueuesStatus,
+      observedAt: new Date().toISOString(),
+      health: {
+        status:
+          dbLatencyMs !== null &&
+          redisLatencyMs !== null &&
+          postgisLatencyMs !== null &&
+          bullmqQueuesStatus.every((queue) => queue.status === 'ok')
+            ? 'ok'
+            : 'degraded',
+        db: dbLatencyMs === null ? 'unavailable' : 'ok',
+        redis: redisLatencyMs === null ? 'unavailable' : 'ok',
+        uptime: process.uptime(),
+      },
     };
   }
 

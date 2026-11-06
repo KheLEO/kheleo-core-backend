@@ -4,6 +4,7 @@ import { DrillSignatureVersion, SportType } from '@prisma/client';
 import { plainToInstance } from 'class-transformer';
 import { validateSync } from 'class-validator';
 import { FastifyRequest } from 'fastify';
+import { PrismaService } from '../../../infrastructure/database/prisma.service';
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import { SubmitDrillDto } from '../dto/submit-drill.dto';
 import { AuthenticatedJwtUser } from '../../../common/guards/jwt-auth.guard';
@@ -39,7 +40,10 @@ export function canonicalDrillPayload(athleteId: string, dto: SubmitDrillDto): s
 export class DrillSignatureGuard implements CanActivate {
   private readonly secret: string;
   private readonly allowLegacy: boolean;
-  constructor(config: ConfigService) {
+  constructor(
+    config: ConfigService,
+    private readonly prisma: PrismaService,
+  ) {
     const secret = config.get<string>('auth.drillHmacSecret');
     if (!secret && config.get<string>('app.nodeEnv', 'development') === 'production')
       throw new Error('DRILL_HMAC_SECRET must be configured in production.');
@@ -50,8 +54,41 @@ export class DrillSignatureGuard implements CanActivate {
     );
   }
 
-  canActivate(context: ExecutionContext): boolean {
+  async canActivate(context: ExecutionContext): Promise<boolean> {
     const request = context.switchToHttp().getRequest<DrillRequest>();
+    try {
+      return this.validateRequest(request);
+    } catch (error: unknown) {
+      if (error instanceof ForbiddenException) {
+        const stale = error.message.includes('timestamp expired');
+        const tampered = error.message.includes('payload tampered');
+        await this.prisma.securityAuditLog.create({
+          data: {
+            userId: request.user?.sub ?? null,
+            actorUserId: request.user?.sub ?? null,
+            action: 'DRILL_SIGNATURE_REJECTED',
+            category: 'DRILL_HMAC_TAMPER',
+            severity: tampered ? 'CRITICAL' : 'WARNING',
+            resource: 'drill_submission',
+            targetId: request.user?.sub ?? null,
+            summary: error.message.slice(0, 500),
+            ipHash: request.ip
+              ? createHmac('sha256', this.secret).update(`audit-ip:${request.ip}`).digest('hex')
+              : null,
+            metadata: {
+              reason: stale
+                ? 'STALE_TIMESTAMP'
+                : tampered
+                  ? 'INVALID_SIGNATURE'
+                  : 'REJECTED_PAYLOAD_OR_PROTOCOL',
+            },
+          },
+        });
+      }
+      throw error;
+    }
+  }
+  private validateRequest(request: DrillRequest): boolean {
     const raw = request.headers['x-drill-signature'];
     const signature = (Array.isArray(raw) ? raw[0] : raw)?.trim().toLowerCase();
     if (!signature || !/^[a-f\d]{64}$/.test(signature))

@@ -117,6 +117,22 @@ export class IdentityService {
     // Check if ID hash already exists in database
     const existing = await this.findByGovernmentId(idNumber, idType);
     if (existing) {
+      if (['REVOKED', 'FLAGGED_DUPLICATE'].includes(existing.status)) {
+        await this.prisma.securityAuditLog.create({
+          data: {
+            userId,
+            actorUserId: userId,
+            targetId: existing.userId,
+            category: 'GOV_ID_RESET',
+            severity: 'WARNING',
+            summary: 'Existing permanent identity is revoked or flagged',
+            action: 'GOV_ID_DUPLICATE_ATTEMPT',
+            resource: 'identity_verification',
+            resourceId: existing.id,
+            metadata: { outcome: 'BLOCKED_IDENTITY_ACCESS' },
+          },
+        });
+      }
       assertIdentityAccess(existing.status);
       if (existing.userId === userId) {
         // Already bound to this exact user
@@ -138,6 +154,21 @@ export class IdentityService {
       this.logger.warn(
         `Anti-Reset Loophole Triggered: User ${userId} attempted to bind Gov ID already owned by User ${existing.userId}`,
       );
+
+      await this.prisma.securityAuditLog.create({
+        data: {
+          userId,
+          actorUserId: userId,
+          targetId: existing.userId,
+          category: 'GOV_ID_RESET',
+          severity: 'WARNING',
+          summary: 'Duplicate government identity binding blocked',
+          action: 'GOV_ID_DUPLICATE_ATTEMPT',
+          resource: 'identity_verification',
+          resourceId: existing.id,
+          metadata: { outcome: 'BLOCKED_BINDING' },
+        },
+      });
 
       // Record attempted duplicate link in metadata
       await this.prisma.identityVerification.update({

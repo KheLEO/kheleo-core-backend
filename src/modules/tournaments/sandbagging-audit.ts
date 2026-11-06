@@ -20,6 +20,11 @@ export async function recordSandbaggingRejection(
     data: {
       userId,
       action: 'SANDBAGGING_DETECTED',
+      category: 'SANDBAGGING_BLOCKED',
+      severity: 'WARNING',
+      actorUserId: userId,
+      targetId: bracketId,
+      summary: 'Over-ceiling tournament entry blocked',
       resource: 'tournament',
       resourceId: tournamentId,
       metadata: { ...response, bracketId } as Prisma.InputJsonObject,

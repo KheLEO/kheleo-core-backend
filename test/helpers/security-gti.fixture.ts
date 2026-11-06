@@ -66,7 +66,8 @@ function compare(a: unknown, b: unknown): number {
   if (left === right) return 0;
   if (left === undefined || left === null) return -1;
   if (right === undefined || right === null) return 1;
-  return String(left).localeCompare(String(right), 'en', { numeric: true });
+  if (typeof left === 'number' && typeof right === 'number') return left < right ? -1 : 1;
+  return String(left) < String(right) ? -1 : 1;
 }
 function matches(row: unknown, where: unknown): boolean {
   return Object.entries(fields(where)).every(([key, expected]) => {
@@ -404,6 +405,16 @@ export async function createSecurityFixture() {
         isAcknowledged: false,
         createdAt: new Date(),
       };
+      if (model === 'securityAuditLog')
+        Object.assign(row, {
+          category: 'SYSTEM_EVENT',
+          severity: 'INFO',
+          actorUserId: null,
+          targetId: null,
+          summary: '',
+          ipHash: null,
+          metadata: null,
+        });
       write(row, args.data ?? {});
       tables[model].set(row.id, row);
       return clone(decorate(model, row));

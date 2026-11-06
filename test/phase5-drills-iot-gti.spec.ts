@@ -111,7 +111,7 @@ describe('Phase 4 drill integrity and measured GTI pipelines', () => {
 
   it('rejects Probe 2, wrong types, out-of-range frames, changed metadata, and attempted full-to-legacy downgrade', async () => {
     const f = await createSecurityFixture();
-    const guard = new DrillSignatureGuard(f.auth.config);
+    const guard = new DrillSignatureGuard(f.auth.config, f.prisma);
     const dto = drill();
     const full = signature(fullDrillPayload(ATHLETE_ID, dto));
     const legacy = signature(`${ATHLETE_ID}:${dto.drill_type}:${dto.form_score}:${dto.timestamp}`);
@@ -129,22 +129,22 @@ describe('Phase 4 drill integrity and measured GTI pipelines', () => {
       { ...dto, sport: 'INVALID' },
     ];
     for (const mutated of mutations)
-      assert.throws(
+      await assert.rejects(
         () => guard.canActivate(context(mutated, full, 'full').execution),
         ForbiddenException,
       );
-    assert.throws(
+    await assert.rejects(
       () => guard.canActivate(context(dto, legacy, 'full').execution),
       ForbiddenException,
     );
     const old = context(dto, legacy);
-    assert.equal(guard.canActivate(old.execution), true);
+    assert.equal(await guard.canActivate(old.execution), true);
     assert.equal(old.request.drillSignatureVersion, 'LEGACY');
-    assert.throws(
+    await assert.rejects(
       () => guard.canActivate(context({ ...dto, athlete_id: OPPONENT_ID }, legacy).execution),
       ForbiddenException,
     );
-    assert.throws(
+    await assert.rejects(
       () =>
         guard.canActivate(context(drill({ timestamp: Date.now() / 1000 - 350 }), legacy).execution),
       /anti-replay/,
@@ -156,7 +156,7 @@ describe('Phase 4 drill integrity and measured GTI pipelines', () => {
       ['DRIBBLE', 'CRICKET'],
       ['WICKET', 'FOOTBALL'],
     ])
-      assert.throws(
+      await assert.rejects(
         () => guard.canActivate(context({ ...dto, drill_type: type, sport }, legacy).execution),
         /does not match/,
       );
@@ -164,13 +164,13 @@ describe('Phase 4 drill integrity and measured GTI pipelines', () => {
 
   it('binds joint summaries with canonical FULL_V2 signatures and marks legacy metadata unverified', async () => {
     const f = await createSecurityFixture();
-    const guard = new DrillSignatureGuard(f.auth.config);
+    const guard = new DrillSignatureGuard(f.auth.config, f.prisma);
     const dto = drill({ joint_angles_summary: { hip: 90, knee: 40 } });
     const hash = signature(canonicalDrillPayload(ATHLETE_ID, dto));
     const valid = context({ ...dto, joint_angles_summary: { knee: 40, hip: 90 } }, hash, 'full-v2');
-    assert.equal(guard.canActivate(valid.execution), true);
+    assert.equal(await guard.canActivate(valid.execution), true);
     assert.equal(valid.request.drillSignatureVersion, 'FULL_V2');
-    assert.throws(
+    await assert.rejects(
       () =>
         guard.canActivate(
           context({ ...dto, joint_angles_summary: { hip: 99, knee: 40 } }, hash, 'full-v2')

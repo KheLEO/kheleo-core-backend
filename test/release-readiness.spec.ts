@@ -135,6 +135,7 @@ describe('Release contact authority and operational safeguards', () => {
     const f = await createSecurityFixture();
     const guard = new DrillSignatureGuard(
       configuration({ 'app.nodeEnv': 'production', 'auth.drillHmacSecret': DRILL_SECRET }),
+      f.prisma,
     );
     const dto = {
       athlete_id: ATHLETE_ID,
@@ -157,8 +158,10 @@ describe('Release contact authority and operational safeguards', () => {
           }),
         }),
       }) as unknown as ExecutionContext;
-    assert.throws(() => guard.canActivate(ctx(sign(`${ATHLETE_ID}:BOWLING:90:${dto.timestamp}`))));
-    assert.equal(guard.canActivate(ctx(sign(fullDrillPayload(ATHLETE_ID, dto)))), true);
+    await assert.rejects(() =>
+      guard.canActivate(ctx(sign(`${ATHLETE_ID}:BOWLING:90:${dto.timestamp}`))),
+    );
+    assert.equal(await guard.canActivate(ctx(sign(fullDrillPayload(ATHLETE_ID, dto)))), true);
     void f;
   });
   it('parses Redis TLS, ACL and database settings and bounds command connection behavior', () => {

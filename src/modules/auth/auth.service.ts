@@ -110,6 +110,25 @@ export class AuthService {
         dto.governmentId.idType,
       );
       if (existingRecord) {
+        if (
+          ['REVOKED', 'FLAGGED_DUPLICATE'].includes(existingRecord.status) ||
+          existingRecord.user.isRecoveryBlocked
+        ) {
+          await this.prisma.securityAuditLog.create({
+            data: {
+              userId: null,
+              actorUserId: null,
+              targetId: existingRecord.userId,
+              category: 'GOV_ID_RESET',
+              severity: 'WARNING',
+              summary: 'Existing permanent identity access blocked during registration',
+              action: 'GOV_ID_DUPLICATE_ATTEMPT',
+              resource: 'identity_verification',
+              resourceId: existingRecord.id,
+              metadata: { outcome: 'BLOCKED_IDENTITY_OR_ACCOUNT_ACCESS' },
+            },
+          });
+        }
         assertIdentityAccess(existingRecord.status);
         const existingUser = existingRecord.user;
         if (existingUser.isRecoveryBlocked)
@@ -152,7 +171,12 @@ export class AuthService {
 
         await this.prisma.securityAuditLog.create({
           data: {
-            userId: existingRecord.userId,
+            userId: null,
+            actorUserId: null,
+            targetId: existingRecord.userId,
+            category: 'GOV_ID_RESET',
+            severity: 'WARNING',
+            summary: 'Duplicate government identity blocked during signup',
             action: 'GOV_ID_DUPLICATE_ATTEMPT',
             resource: 'identity_verification',
             resourceId: existingRecord.id,

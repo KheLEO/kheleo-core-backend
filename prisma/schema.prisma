@@ -581,19 +581,42 @@ model IdempotencyRecord {
   @@map("idempotency_records")
 }
 
+enum AuditCategory {
+  GOV_ID_RESET
+  DRILL_HMAC_TAMPER
+  SANDBAGGING_BLOCKED
+  SAFETY_MATCH_PAUSE
+  ROLE_GOVERNANCE
+  TOURNAMENT_MODERATION
+  SYSTEM_EVENT
+}
+
+enum AuditSeverity {
+  INFO
+  WARNING
+  CRITICAL
+}
+
 model SecurityAuditLog {
-  id         String   @id @default(uuid()) @db.Uuid
-  userId     String?  @map("user_id") @db.Uuid
-  action     String   @db.VarChar(100)
-  resource   String?  @db.VarChar(100)
-  resourceId String?  @map("resource_id") @db.VarChar(255)
-  ipAddress  String?  @map("ip_address") @db.VarChar(45)
-  userAgent  String?  @map("user_agent") @db.Text
-  metadata   Json?    @db.JsonB
-  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz
+  category    AuditCategory @default(SYSTEM_EVENT)
+  severity    AuditSeverity @default(INFO)
+  actorUserId String?       @map("actor_user_id") @db.Uuid
+  targetId    String?       @map("target_id") @db.VarChar(255)
+  summary     String        @default("") @db.VarChar(500)
+  ipHash      String?       @map("ip_hash") @db.VarChar(64)
+  id          String        @id @default(uuid()) @db.Uuid
+  userId      String?       @map("user_id") @db.Uuid
+  action      String        @db.VarChar(100)
+  resource    String?       @db.VarChar(100)
+  resourceId  String?       @map("resource_id") @db.VarChar(255)
+  ipAddress   String?       @map("ip_address") @db.VarChar(45)
+  userAgent   String?       @map("user_agent") @db.Text
+  metadata    Json?         @db.JsonB
+  createdAt   DateTime      @default(now()) @map("created_at") @db.Timestamptz
 
   @@index([userId, createdAt(sort: Desc)])
   @@index([action, createdAt(sort: Desc)])
+  @@index([category, severity, createdAt(sort: Desc), id(sort: Desc)])
   @@map("security_audit_logs")
 }
 

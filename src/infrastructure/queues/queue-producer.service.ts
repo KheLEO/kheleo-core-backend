@@ -27,6 +27,33 @@ export interface ScoutAlertPayload {
   readonly tierClassification: string;
 }
 
+export interface QueueHealthStatus {
+  name: string;
+  status: 'ok' | 'paused' | 'unreachable';
+  latencyMs: number | null;
+  waiting: number | null;
+  active: number | null;
+  delayed: number | null;
+  failed: number | null;
+  completed: number | null;
+}
+export const monitoredQueueNames = [
+  QUEUE_GTI_CALCULATION,
+  QUEUE_MATCHMAKING,
+  QUEUE_SCOUT_ALERTS,
+] as const;
+export function unavailableQueue(name: string): QueueHealthStatus {
+  return {
+    name,
+    status: 'unreachable',
+    latencyMs: null,
+    waiting: null,
+    active: null,
+    delayed: null,
+    failed: null,
+    completed: null,
+  };
+}
 @Injectable()
 export class QueueProducerService {
   constructor(
@@ -37,6 +64,40 @@ export class QueueProducerService {
     @InjectQueue(QUEUE_SCOUT_ALERTS)
     private readonly scoutAlertQueue: Queue,
   ) {}
+
+  async healthStatuses(): Promise<QueueHealthStatus[]> {
+    return Promise.all(
+      [this.gtiCalcQueue, this.matchmakingQueue, this.scoutAlertQueue].map(async (queue) => {
+        const started = performance.now();
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        try {
+          const [counts, paused] = await Promise.race([
+            Promise.all([
+              queue.getJobCounts('waiting', 'active', 'delayed', 'failed', 'completed'),
+              queue.isPaused(),
+            ]),
+            new Promise<never>((_resolve, reject) => {
+              timer = setTimeout(() => reject(new Error('Queue health timed out')), 1000);
+            }),
+          ]);
+          return {
+            name: queue.name,
+            status: paused ? ('paused' as const) : ('ok' as const),
+            latencyMs: Math.round((performance.now() - started) * 100) / 100,
+            waiting: counts.waiting ?? 0,
+            active: counts.active ?? 0,
+            delayed: counts.delayed ?? 0,
+            failed: counts.failed ?? 0,
+            completed: counts.completed ?? 0,
+          };
+        } catch {
+          return unavailableQueue(queue.name);
+        } finally {
+          clearTimeout(timer);
+        }
+      }),
+    );
+  }
 
   async enqueueGtiRecalculation(
     payload: GtiRecalculationPayload,
