@@ -582,4 +582,113 @@ describe('PostGIS baseline migration', () => {
     assert.equal(note.rows[0]?.medical_check_note, 'Medical team dispatched');
     assert.equal(note.rows[0]?.medical_check_dispatched, true);
   });
+  it('filters production leaderboard SQL by gender, rural tier and ALL sports without cross-state collisions', async () => {
+    const district = 'Prompt 3 shared';
+    const seeded = [];
+    for (let index = 0; index < 4; index++) {
+      const profileId = await createAthlete(district);
+      const userId = (
+        await database.query<{ user_id: string }>(
+          'SELECT user_id FROM athlete_profiles WHERE id=$1',
+          [profileId],
+        )
+      ).rows[0]!.user_id;
+      await database.query(
+        `INSERT INTO identity_verifications(id,user_id,id_hash,id_type) VALUES($1,$2,$3,'AADHAAR')`,
+        [randomUUID(), userId, randomUUID().replaceAll('-', '').padEnd(64, '0')],
+      );
+      await database.query(
+        `UPDATE athlete_profiles SET state=$2,gender=$3,tier_classification=$4,primary_sport=$5,gti=0,current_gti=88 WHERE id=$1`,
+        [
+          profileId,
+          index === 3 ? 'Karnataka' : 'Maharashtra',
+          index === 2 ? 'MALE' : 'FEMALE',
+          index === 1 ? 'METRO' : 'RURAL',
+          index === 0 ? 'CRICKET' : 'FOOTBALL',
+        ],
+      );
+      seeded.push({ profileId, userId });
+    }
+    const queries: Prisma.Sql[] = [];
+    const prisma = {
+      athleteProfile: { count: async () => 1 },
+      $queryRaw: async (query: Prisma.Sql) => {
+        queries.push(query);
+        return (await database.query(query.text, query.values)).rows;
+      },
+    } as unknown as PrismaService;
+    const redis = {
+      client: {
+        zcard: async () => {
+          throw new Error('offline');
+        },
+      },
+    } as unknown as RedisService;
+    const service = new LeaderboardsService(prisma, redis);
+    const result = await service.list({
+      scope: LeaderboardScope.DISTRICT,
+      state: 'Maharashtra',
+      district,
+      sport: 'ALL',
+      gender: 'female',
+      tier: 'RURAL_AND_TIER_2_3',
+      limit: 20,
+    });
+    assert.equal(result.data.length, 1);
+    assert.equal(result.data[0]?.athlete_id, seeded[0]!.userId);
+    assert.equal(result.data[0]?.gti, 88);
+    assert.equal(result.total, 1);
+    assert.equal(result.has_more, false);
+    assert.equal(result.data[0]?.profile_id, seeded[0]!.profileId);
+    assert.ok(queries[0]?.text.includes('UPPER(p.gender)'));
+    const heatmap = new HeatmapsService({
+      $queryRaw: async (parts: TemplateStringsArray, ...values: unknown[]) => {
+        const query = Prisma.sql(parts, ...values);
+        return (await database.query(query.text, query.values)).rows;
+      },
+    } as unknown as PrismaService);
+    const regions = await heatmap.getRegionalHeatmap();
+    const shared = regions.data.filter((row) => row.district === district);
+    assert.equal(shared.length, 2);
+    assert.equal(regions.is_complete, true);
+    assert.equal(shared.find((row) => row.state === 'Maharashtra')?.average_gti, 88);
+  });
+  it('stores outreach history and telemetry aggregates in the migrated schema', async () => {
+    const user = await createUser();
+    const profile = await createAthlete('Prompt 3 outreach');
+    const history = JSON.stringify([
+      {
+        actionType: 'SHORTLIST_BOOKMARK',
+        notes: 'Follow progress',
+        organizationName: 'Academy',
+        recordedAt: '2026-11-06T00:00:00Z',
+      },
+    ]);
+    const id = randomUUID();
+    await database.query(
+      `INSERT INTO scout_dossiers(id,athlete_id,scout_id,scout_notes,organization_name,outreach_history,is_shortlisted,updated_at) VALUES($1,$2,$3,'Follow progress','Academy',$4::jsonb,true,now())`,
+      [id, profile, user, history],
+    );
+    const saved = (
+      await database.query<{ outreach_history: unknown[]; is_shortlisted: boolean }>(
+        'SELECT outreach_history,is_shortlisted FROM scout_dossiers WHERE id=$1',
+        [id],
+      )
+    ).rows[0]!;
+    assert.equal(saved.is_shortlisted, true);
+    assert.equal(saved.outreach_history.length, 1);
+    await database.query(
+      `INSERT INTO wearable_sessions(id,athlete_id,session_date,source,readings_count,heart_rate_sum,spo2_sum,simulator_readings) VALUES($1,$2,CURRENT_DATE,'BLE',2,240,194,1)`,
+      [randomUUID(), user],
+    );
+    const averages = (
+      await database.query<{ hr: number; spo2: number; simulator_readings: number }>(
+        'SELECT heart_rate_sum/readings_count AS hr,spo2_sum/readings_count AS spo2,simulator_readings FROM wearable_sessions WHERE athlete_id=$1',
+        [user],
+      )
+    ).rows[0]!;
+    assert.equal(averages.hr, 120);
+    assert.equal(averages.spo2, 97);
+    assert.equal(averages.simulator_readings, 1);
+  });
 });

@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ForbiddenException,
   CanActivate,
   ExecutionContext,
   Injectable,
@@ -26,10 +27,18 @@ export class ScoutOutreachGuard implements CanActivate {
       throw new BadRequestException('athleteId must be a UUID');
     const profile = await this.prisma.athleteProfile.findUnique({
       where: { userId: request.params.athleteId },
-      select: { isScoutSearchable: true },
+      select: {
+        isScoutSearchable: true,
+        user: { select: { isActive: true, identityRecord: { select: { status: true } } } },
+      },
     });
     if (!profile) throw new NotFoundException('Athlete passport not found');
     assertDossierVisibility(request.params.athleteId, profile.isScoutSearchable, request.user);
+    if (
+      request.user.role === 'SCOUT' &&
+      (!profile.user.isActive || profile.user.identityRecord?.status !== 'VERIFIED')
+    )
+      throw new ForbiddenException('Athlete is not available for scout discovery');
     return true;
   }
 }

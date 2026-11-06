@@ -37,7 +37,11 @@ export class ScoutsService {
 
     const where: Prisma.AthleteProfileWhereInput = {
       isScoutSearchable: true,
-      user: { isActive: true, identityRecord: { status: VerificationStatus.VERIFIED } },
+      user: {
+        role: 'ATHLETE',
+        isActive: true,
+        identityRecord: { status: VerificationStatus.VERIFIED },
+      },
       OR: [{ gti: { gte: minGti } }, { currentGti: { gte: new Prisma.Decimal(minGti) } }],
     };
 
@@ -58,7 +62,7 @@ export class ScoutsService {
         where,
         take: limit + 1,
         ...(query.cursor_id ? { cursor: { id: query.cursor_id }, skip: 1 } : {}),
-        orderBy: [{ gti: 'desc' }, { currentGti: 'desc' }, { id: 'desc' }],
+        orderBy: [{ currentGti: 'desc' }, { id: 'asc' }],
         select: {
           id: true,
           userId: true,

@@ -161,10 +161,24 @@ export class SafetyService {
         create: {
           athleteId: dto.athlete_id,
           sessionDate: day,
+          readingsCount: 1,
+          heartRateSum: dto.heart_rate,
+          spo2Sum: dto.spo2,
+          simulatorReadings: source === TelemetrySource.SIMULATOR ? 1 : 0,
+          baselineSpo2Readings: dto.baseline_fields?.includes('spo2') ? 1 : 0,
           source,
           baselineFields: dto.baseline_fields ?? [],
         },
-        update: { observedAt: new Date(), source, baselineFields: dto.baseline_fields ?? [] },
+        update: {
+          observedAt: new Date(),
+          source,
+          baselineFields: dto.baseline_fields ?? [],
+          readingsCount: { increment: 1 },
+          heartRateSum: { increment: dto.heart_rate },
+          spo2Sum: { increment: dto.spo2 },
+          simulatorReadings: { increment: source === TelemetrySource.SIMULATOR ? 1 : 0 },
+          baselineSpo2Readings: { increment: dto.baseline_fields?.includes('spo2') ? 1 : 0 },
+        },
       });
       const since = new Date(day);
       since.setUTCDate(since.getUTCDate() - 29);

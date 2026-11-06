@@ -791,7 +791,7 @@ describe('Phase 2 auth and frontend HTTP contracts', () => {
     });
   });
 
-  it('returns bounded dossier summaries for the athlete without exposing ID hashes or raw medical readings', async () => {
+  it('returns chronological dossier evidence without exposing full signatures, identity hashes or raw medical packets', async () => {
     await withAuthApp(async (fixture, app) => {
       await fixture.passports.upsertPassport(TEST_USER_ID, {
         ...profileInput,
@@ -815,13 +815,13 @@ describe('Phase 2 auth and frontend HTTP contracts', () => {
         sport: 'CRICKET',
         drillType: 'BOWLING',
         formScore: 82,
-        framesAnalyzed: 10,
+        framesAnalyzed: 40,
         flawFlags: [],
         jointAnglesSummary: {},
         signatureHash: 'private-signature',
-        signatureVersion: 'LEGACY',
+        signatureVersion: 'FULL_V2',
         clientPoseDigest: null,
-        metadataVerified: false,
+        metadataVerified: true,
         createdAt: new Date(),
       });
       fixture.state.user.healthAlerts.push({
@@ -863,7 +863,7 @@ describe('Phase 2 auth and frontend HTTP contracts', () => {
       assert.strictEqual(response.body.includes('idHash'), false);
       const select = fixture.state.profileQueries.at(-1)?.select;
       assert.ok(select && typeof select.gtiHistories === 'object' && select.gtiHistories);
-      assert.strictEqual(select.gtiHistories.take, 20);
+      assert.strictEqual(select.gtiHistories.take, undefined);
       assert.ok(
         typeof select.user === 'object' &&
           select.user &&
@@ -873,12 +873,7 @@ describe('Phase 2 auth and frontend HTTP contracts', () => {
     });
   });
 
-  for (const role of [
-    UserRole.SCOUT,
-    UserRole.ORGANIZER,
-    UserRole.FEDERATION_ADMIN,
-    UserRole.SUPER_ADMIN,
-  ]) {
+  for (const role of [UserRole.SCOUT, UserRole.FEDERATION_ADMIN, UserRole.SUPER_ADMIN]) {
     it(`allows ${role} to view the requested dossier`, async () => {
       await withAuthApp(async (fixture, app) => {
         await fixture.passports.upsertPassport(TEST_USER_ID, {

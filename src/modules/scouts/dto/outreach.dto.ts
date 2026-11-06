@@ -1,16 +1,16 @@
-import { IsIn, IsNotEmpty, IsOptional, IsString, MaxLength } from 'class-validator';
-import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { IsIn, IsOptional, IsString, MaxLength } from 'class-validator';
 import { FieldAliases } from '../../../common/decorators/field-aliases.decorator';
-
+export type OutreachAction = 'OFFER_TRIAL' | 'SPONSORSHIP_INQUIRY' | 'SHORTLIST_BOOKMARK';
 export class OutreachDto {
-  @ApiProperty({ maxLength: 4000 })
+  @IsOptional()
   @IsString()
-  @IsNotEmpty()
   @MaxLength(4000)
   @FieldAliases('scout_notes', 'scoutNotes')
-  readonly notes!: string;
-
-  @ApiPropertyOptional({ enum: ['TRIAL', 'SCHOLARSHIP'] })
+  readonly notes?: string;
+  @IsOptional()
+  @IsIn(['OFFER_TRIAL', 'SPONSORSHIP_INQUIRY', 'SHORTLIST_BOOKMARK'])
+  readonly actionType?: OutreachAction;
+  @IsOptional() @IsString() @MaxLength(200) readonly organizationName?: string;
   @IsOptional()
   @IsIn(['TRIAL', 'SCHOLARSHIP'])
   @FieldAliases('outreach_type')

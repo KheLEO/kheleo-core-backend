@@ -545,15 +545,17 @@ model GtiHistory {
 }
 
 model ScoutDossier {
-  id             String   @id @default(uuid()) @db.Uuid
-  athleteId      String   @map("athlete_id") @db.Uuid
-  scoutId        String   @map("scout_id") @db.Uuid
-  scoutNotes     String   @map("scout_notes") @db.Text
-  federationTag  String?  @map("federation_tag") @db.VarChar(100)
-  isShortlisted  Boolean  @default(false) @map("is_shortlisted")
-  pipelineStatus String   @default("DISCOVERED") @map("pipeline_status") @db.VarChar(50)
-  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz
-  updatedAt      DateTime @updatedAt @map("updated_at") @db.Timestamptz
+  id               String   @id @default(uuid()) @db.Uuid
+  athleteId        String   @map("athlete_id") @db.Uuid
+  scoutId          String   @map("scout_id") @db.Uuid
+  scoutNotes       String   @map("scout_notes") @db.Text
+  organizationName String?  @map("organization_name") @db.VarChar(200)
+  outreachHistory  Json     @default("[]") @map("outreach_history") @db.JsonB
+  federationTag    String?  @map("federation_tag") @db.VarChar(100)
+  isShortlisted    Boolean  @default(false) @map("is_shortlisted")
+  pipelineStatus   String   @default("DISCOVERED") @map("pipeline_status") @db.VarChar(50)
+  createdAt        DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt        DateTime @updatedAt @map("updated_at") @db.Timestamptz
 
   athlete AthleteProfile @relation("AthleteDossiers", fields: [athleteId], references: [id], onDelete: Cascade)
   scout   User           @relation("ScoutAuthor", fields: [scoutId], references: [id], onDelete: Cascade)
@@ -609,13 +611,18 @@ enum TelemetrySource {
 }
 
 model WearableSession {
-  id             String          @id @default(uuid()) @db.Uuid
-  athleteId      String          @map("athlete_id") @db.Uuid
-  sessionDate    DateTime        @map("session_date") @db.Date
-  source         TelemetrySource
-  baselineFields String[]        @default([]) @map("baseline_fields")
-  observedAt     DateTime        @default(now()) @map("observed_at") @db.Timestamptz
-  athlete        User            @relation(fields: [athleteId], references: [id], onDelete: Cascade)
+  readingsCount        Int             @default(0) @map("readings_count")
+  heartRateSum         Float           @default(0) @map("heart_rate_sum")
+  spo2Sum              Float           @default(0) @map("spo2_sum")
+  simulatorReadings    Int             @default(0) @map("simulator_readings")
+  baselineSpo2Readings Int             @default(0) @map("baseline_spo2_readings")
+  id                   String          @id @default(uuid()) @db.Uuid
+  athleteId            String          @map("athlete_id") @db.Uuid
+  sessionDate          DateTime        @map("session_date") @db.Date
+  source               TelemetrySource
+  baselineFields       String[]        @default([]) @map("baseline_fields")
+  observedAt           DateTime        @default(now()) @map("observed_at") @db.Timestamptz
+  athlete              User            @relation(fields: [athleteId], references: [id], onDelete: Cascade)
 
   @@unique([athleteId, sessionDate])
   @@map("wearable_sessions")

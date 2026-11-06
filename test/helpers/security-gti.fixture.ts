@@ -283,6 +283,11 @@ export async function createSecurityFixture() {
       .map((entry) => ({ ...entry, team: teamScope(String(entry.teamId)) }));
     return {
       ...row,
+      _count: {
+        scoutAlerts: [...tables.scoutAlert.values()].filter(
+          (entry) => entry.athleteId === row.id && !entry.isAcknowledged,
+        ).length,
+      },
       identityRecord:
         [...tables.identityVerification.values()].find((entry) => entry.userId === row.id) ?? null,
       athleteProfile: profile
@@ -329,7 +334,13 @@ export async function createSecurityFixture() {
     if (model === 'freeAgentRegistration')
       return { ...row, user: userBase(tables.user.get(String(row.userId))!) };
     if (model === 'athleteProfile')
-      return { ...row, user: decorate('user', tables.user.get(String(row.userId))!) };
+      return {
+        ...row,
+        sportRecords: [...tables.sportPassportRecord.values()].filter(
+          (entry) => entry.athleteId === row.id,
+        ),
+        user: decorate('user', tables.user.get(String(row.userId))!),
+      };
     if (model === 'verifiedMatchResult')
       return { ...row, bracket: decorate('bracket', tables.bracket.get(String(row.bracketId))!) };
     if (model === 'bracket')
@@ -376,7 +387,7 @@ export async function createSecurityFixture() {
         if (item !== undefined)
           row[key] =
             typeof item === 'object' && item !== null && 'increment' in item
-              ? Number(row[key]) + Number(item.increment)
+              ? Number(row[key] ?? 0) + Number(item.increment)
               : item;
       return clone(decorate(model, row));
     };

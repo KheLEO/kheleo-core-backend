@@ -13,6 +13,7 @@ export interface DistrictHeatmapRecord {
 export interface RegionalHeatmapResponse {
   readonly success: boolean;
   readonly count: number;
+  readonly is_complete: boolean;
   readonly data: DistrictHeatmapRecord[];
 }
 
@@ -49,7 +50,7 @@ export class HeatmapsService {
         WHERE district IS NOT NULL AND district <> ''
         GROUP BY state, district
         ORDER BY total_athletes DESC, state, district
-        LIMIT 500;
+        LIMIT 501;
       `;
 
       const formatted: DistrictHeatmapRecord[] = rawResults.map((r) => {
@@ -74,6 +75,7 @@ export class HeatmapsService {
 
       return {
         success: true,
+        is_complete: formatted.length <= 500,
         count: Math.min(500, formatted.length),
         data: formatted
           .sort(
@@ -143,7 +145,7 @@ export class HeatmapsService {
           if (profile.gender?.toUpperCase() === 'FEMALE') {
             entry.femaleCount += 1;
           }
-          const gtiValue = profile.gti > 0 ? profile.gti : Number(profile.currentGti) || 0;
+          const gtiValue = profile.gti !== 0 ? profile.gti : Number(profile.currentGti) || 0;
           entry.gtiSum += gtiValue;
           if (profile.locationLat != null && profile.locationLng != null) {
             entry.latSum += profile.locationLat;
@@ -187,6 +189,7 @@ export class HeatmapsService {
 
       return {
         success: true,
+        is_complete: formatted.length <= 500,
         count: Math.min(500, formatted.length),
         data: formatted
           .sort(

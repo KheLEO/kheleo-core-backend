@@ -485,6 +485,7 @@ describe('Phase 4 drill integrity and measured GTI pipelines', () => {
       w2: 0.25,
       w3: 0.4,
       calculationVersion: 'gti-v2',
+      triggerType: 'MANUAL_RECALCULATION',
       evidence: result.evidence,
       provisional: false,
     });

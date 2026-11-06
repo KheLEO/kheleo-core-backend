@@ -44,7 +44,10 @@ export class GtiService {
       ).toFixed(2),
     );
   }
-  async recalculateAthleteGti(athleteId: string): Promise<GtiComputationResult> {
+  async recalculateAthleteGti(
+    athleteId: string,
+    triggerType = 'MANUAL_RECALCULATION',
+  ): Promise<GtiComputationResult> {
     const result = await runSerializableTransaction(this.prisma, async (tx) => {
       const include = { user: { include: { identityRecord: true } } } as const;
       const profile =
@@ -94,6 +97,7 @@ export class GtiService {
             w2: 0.25,
             w3: 0.4,
             calculationVersion: 'gti-v2',
+            triggerType,
             evidence,
             provisional,
           },

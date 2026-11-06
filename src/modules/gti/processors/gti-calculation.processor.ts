@@ -21,7 +21,7 @@ export class GtiCalculationProcessor extends WorkerHost {
     );
 
     try {
-      const result = await this.gtiService.recalculateAthleteGti(athleteId);
+      const result = await this.gtiService.recalculateAthleteGti(athleteId, trigger);
       this.logger.log(
         `GTI calculated successfully for Athlete ${athleteId}: New GTI = ${result.gti}`,
       );

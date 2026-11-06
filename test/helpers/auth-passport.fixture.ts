@@ -301,7 +301,22 @@ export function createAuthFixture(options: FixtureOptions = {}) {
         args: Prisma.AthleteProfileFindUniqueArgs,
       ): Promise<TestProfile | null> => {
         state.profileQueries.push(args);
-        return state.profile;
+        if (!state.profile) return null;
+        const result = {
+          ...state.profile,
+          gtiHistories: [...state.profile.gtiHistories].sort(
+            (a, b) => a.calculatedAt.getTime() - b.calculatedAt.getTime(),
+          ),
+        };
+        if (args.select?.user)
+          result.user = {
+            ...state.user,
+            drillSubmissions: state.user.drillSubmissions
+              .filter((entry) => entry.metadataVerified && entry.signatureVersion !== 'LEGACY')
+              .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
+              .slice(0, 10),
+          };
+        return result;
       },
       findUniqueOrThrow: async (): Promise<TestProfile> => {
         if (!state.profile) throw new Error('Fixture passport was not initialized');
@@ -353,7 +368,30 @@ export function createAuthFixture(options: FixtureOptions = {}) {
       },
       findMany: async (): Promise<SportPassportRecord[]> => state.profile?.sportRecords ?? [],
     },
+    wearableSession: {
+      count: async () => 0,
+      aggregate: async () => ({
+        _sum: {
+          readingsCount: 0,
+          heartRateSum: 0,
+          spo2Sum: 0,
+          simulatorReadings: 0,
+          baselineSpo2Readings: 0,
+        },
+      }),
+    },
+    healthAlert: {
+      count: async () => state.user.healthAlerts.filter((entry) => entry.matchPaused).length,
+    },
     scoutDossier: {
+      findUnique: async ({
+        where,
+      }: {
+        where: { athleteId_scoutId: { athleteId: string; scoutId: string } };
+      }) =>
+        state.dossiers.get(
+          `${where.athleteId_scoutId.athleteId}:${where.athleteId_scoutId.scoutId}`,
+        ) ?? null,
       upsert: async ({
         where,
         create,
@@ -372,6 +410,8 @@ export function createAuthFixture(options: FixtureOptions = {}) {
           id: randomUUID(),
           ...compound,
           scoutNotes: '',
+          organizationName: null,
+          outreachHistory: [],
           federationTag: null,
           isShortlisted: false,
           pipelineStatus: 'DISCOVERED',
