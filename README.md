@@ -404,7 +404,7 @@ Private and unlicensed. See `package.json`.
 
 Phase 5 adds durable outbox delivery/retry intents, production contact proof, pending identity approval, administrative recovery blocking, Redis URL/TLS/ACL settings, and Data API isolation. Apply all migrations before startup. Queue/event recovery is at least once; clients should reconcile with durable REST state and deduplicate recovered event IDs or business IDs. Scout alert lists retain their array response and accept cursor_id/limit with X-Next-Cursor for the next page. Registration never marks fees paid without settlement.
 
-Run the complete embedded PostGIS/PGlite test suite on Node 24. CI checks the Node 20 application build, compiled probes, native PostGIS/Redis integration and container separately; its older V8 cannot load the pinned PostGIS WASM test extension.
+Run the complete embedded PostGIS/PGlite test suite on Node 24. CI checks the Node 22 application build, compiled probes, native PostGIS/Redis integration and container separately; the full pinned WASM test suite runs on Node 24.
 
 ## Prompt 1 contract and rollout changes
 

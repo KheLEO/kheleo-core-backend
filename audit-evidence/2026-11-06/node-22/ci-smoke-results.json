@@ -1,0 +1,25 @@
+{
+  "verifiedAt": "2026-11-06T00:56:12.215Z",
+  "result": "PASS",
+  "runtime": "v22.23.4",
+  "productionStart": true,
+  "health": {
+    "db": "ok",
+    "redis": "ok"
+  },
+  "docs": true,
+  "cors": true,
+  "contactProofRequired": true,
+  "nativeMigrations": true,
+  "wearableScore": 100,
+  "matchScore": 100,
+  "biomechanicalScore": 96,
+  "gti": 98.6,
+  "scoutTalentEvents": 1,
+  "scoutMedicalEvents": 0,
+  "athletePauseEvents": 0,
+  "ownerPauseEvents": 2,
+  "leaderboards": true,
+  "dashboard": true,
+  "outboxDrained": true
+}

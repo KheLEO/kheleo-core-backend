@@ -1,12 +1,38 @@
-# Production deployment
+# Production deployment: backend and all four portals
 
-This deploys the backend release; owner infrastructure, Supabase contact confirmation, document approval, and dashboard contract checks must be configured. The verified application profile uses Node 24. The Dockerfile retains Node 20 Alpine as requested for compatibility, but Node 20 is end-of-life; override `NODE_IMAGE` for production. [Node release status](https://nodejs.org/en/about/previous-releases).
+Reference topology: Node 22 (latest patched 22.x, at least 22.13), PostgreSQL 16/PostGIS, Redis 7, backend on loopback 3000, Next.js on loopback 3001, TLS ingress on `app.example.com` and `api.example.com`. Replace example hosts, credentials and paths before executing. Commands use Bash and pnpm; execute each repository's commands from its own directory. Node 24 is also verified. [Node support schedule](https://nodejs.org/en/about/previous-releases).
 
-## 1. Secrets and runtime
+## 1. Provision infrastructure
 
-Use Node 24, pnpm 10.32.0, PostgreSQL 16 with PostGIS, and Redis 7. From the repository root:
+Use a dedicated PostgreSQL database and private networking. Enable automatic backups/PITR and test restoration before loading permanent identities. Choose one database provider:
 
-```sh
+- **Railway:** create a service from `postgis/postgis:16-3.4`, set strong `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB=kheleo_core`, attach a persistent volume at `/var/lib/postgresql/data`, and use the private connection URL. Enable backups. A plain PostgreSQL template needs a PostGIS-capable image. [Railway PostgreSQL](https://docs.railway.com/databases/postgresql).
+- **RDS:** create PostgreSQL **16**, private subnets, encrypted storage, backups/PITR and a security group accepting 5432 only from application/migration hosts. Enable PostGIS as the migration owner. Use the provider CA for verified TLS; encode credentials in the URI. [RDS extension setup](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/Appendix.PostgreSQL.CommonDBATasks.Extensions.html).
+- **Supabase:** use a dedicated project with PostgreSQL 16 available in the selected region, checking `SHOW server_version` before continuing. Use the direct connection or session pooler on **5432**, including for migrations; avoid the transaction pooler on 6543 for this reference setup. The current migrations expect PostGIS in `public`. Disable the Data API or remove application schemas from its exposed schemas. If PostGIS already lives elsewhere, reconcile with a DBA; do not drop extensions with CASCADE or rewrite applied migrations. Supabase Auth can remain enabled separately. [Prisma connections](https://supabase.com/docs/guides/database/prisma).
+
+As the migration owner, on the dedicated database:
+
+```sql
+SHOW server_version;
+CREATE EXTENSION IF NOT EXISTS postgis WITH SCHEMA public;
+SELECT postgis_full_version();
+```
+
+Provision Redis **7** using a persistent service/volume, private ingress, ACL credentials and TLS when crossing trust boundaries. Set `appendonly yes`, `appendfsync everysec`, and `maxmemory-policy noeviction`; enable backups and monitor memory. Backend queues/pubsub need native TCP Redis, not a REST API. Use database 0 for backend and database 1 for frontend sessions; providers restricted to database 0 require separate instances. [Redis persistence](https://redis.io/docs/latest/management/persistence/), [BullMQ production guidance](https://docs.bullmq.io/guide/going-to-production).
+
+Provide a Node 22 service host/container with egress to PostgreSQL, Redis and Supabase Auth. Expose only TLS ingress; keep ports 3000/3001 and database ports private. Size database pools and Redis capacity for the replica count. This guide uses a single backend and frontend; shared Redis is configured for additional replicas, with load-balancer affinity required if Socket.IO polling is enabled.
+
+## 2. Configure contact verification
+
+Create/retain one Supabase Auth project. Enable email OTP and configure a production SMTP sender, delivery limits and allowed application URL. Change the email OTP template to include `{{ .Token }}` so users can enter the code in KheLEO's verification dialog. Enable phone Auth and a real SMS provider if offering phone sign-in. Use either email or phone per initial login/registration; the UI explicitly checks this. [Email OTP](https://supabase.com/docs/reference/javascript/auth-signinwithotp), [Phone OTP](https://supabase.com/docs/guides/auth/phone-login).
+
+Copy the project URL and publishable/legacy anon key to both services below. These public values are intended for browser use. Do not use a service-role key. The frontend obtains a short-lived contact proof; the backend checks confirmed ownership and issues its own RSA tokens. Government document authenticity still requires an independent administrative check. Keep the Auth project stable because platform accounts bind to its user UUID.
+
+## 3. Generate and retain backend secrets
+
+From `KheLEO-backend` on a secure deployment workstation:
+
+```bash
 corepack enable
 corepack prepare pnpm@10.32.0 --activate
 umask 077
@@ -14,154 +40,243 @@ mkdir -p keys
 openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:3072 -out keys/private.pem
 openssl pkey -in keys/private.pem -pubout -out keys/public.pem
 chmod 600 keys/private.pem
-openssl rand -hex 32  # IDENTITY_PEPPER
-openssl rand -hex 32  # DRILL_HMAC_SECRET
-openssl rand -hex 32  # TELEMETRY_SERVICE_HMAC_SECRET
-openssl rand -hex 32  # ADMIN_INVITE_CODE, only while provisioning the first admin
+openssl rand -hex 32 > keys/identity-pepper.hex
+openssl rand -hex 32 > keys/drill-hmac.hex
+openssl rand -hex 32 > keys/telemetry-hmac.hex
+openssl rand -hex 32 > keys/admin-invite.hex
 ```
 
-Store each generated value in the deployment secret manager. Keep the identity pepper and RSA keys stable across restarts and replicas; changing the pepper prevents matching existing ID hashes. Mount keys as read-only files. The process must be able to read the private key. Do not commit secrets or pass them as Docker build arguments.
+Import the generated 64-character hex values into your secret manager and the env template. Retain encrypted backups of RSA keys and identity pepper; all replicas must use the same values. Rotating the pepper without an identity migration breaks matching. Mount private keys read-only with permissions readable by the application account (Docker UID 1000). Never copy secrets into image layers, Git, build arguments or `NEXT_PUBLIC_*` variables.
 
-Set these production variables (replace bracketed values):
+## 4. Backend environment, migrations and start
+
+Create `/secure/backend.production.env` (mode 600); substitute real values, using URL-encoded credentials:
 
 ```dotenv
 NODE_ENV=production
 PORT=3000
 APP_NAME=kheleo-core-backend
-CORS_ORIGINS=https://[dashboard-host]
-DATABASE_URL=postgresql://[user]:[url-encoded-password]@[host]:5432/[database]?schema=public&connect_timeout=5&sslmode=require
-REDIS_URL=rediss://[username]:[url-encoded-password]@[redis-host]:6380/0
-JWT_PRIVATE_KEY_PATH=/run/secrets/kheleo/private.pem
-JWT_PUBLIC_KEY_PATH=/run/secrets/kheleo/public.pem
+CORS_ORIGINS=https://app.example.com
+DATABASE_URL=postgresql://kheleo:ENCODED_PASSWORD@DB_HOST:5432/kheleo_core?schema=public&sslmode=require&connect_timeout=5
+REDIS_URL=rediss://default:ENCODED_PASSWORD@REDIS_HOST:6380/0
+JWT_PRIVATE_KEY_PATH=/secure/kheleo/keys/private.pem
+JWT_PUBLIC_KEY_PATH=/secure/kheleo/keys/public.pem
 JWT_ACCESS_EXPIRY=15m
 JWT_REFRESH_EXPIRY=7d
-SUPABASE_URL=https://[project-ref].supabase.co
-SUPABASE_PUBLISHABLE_KEY=[publishable-or-legacy-anon-key]
+SUPABASE_URL=https://PROJECT.supabase.co
+SUPABASE_PUBLISHABLE_KEY=PUBLIC_PUBLISHABLE_OR_ANON_KEY
 SUPABASE_JWT_SECRET=
-ADMIN_INVITE_CODE=[generated-invite]
-IDENTITY_PEPPER=[generated-64-hex-value]
+ADMIN_INVITE_CODE=GENERATED_ADMIN_INVITE_HEX
+IDENTITY_PEPPER=GENERATED_IDENTITY_PEPPER_HEX
 IDENTITY_SALT_VERSION=1
-DRILL_HMAC_SECRET=[generated-64-hex-value]
+DRILL_HMAC_SECRET=GENERATED_DRILL_HMAC_HEX
 DRILL_ALLOW_LEGACY_SIGNATURES=false
-TELEMETRY_SERVICE_HMAC_SECRET=[generated-64-hex-value]
+TELEMETRY_SERVICE_HMAC_SECRET=GENERATED_TELEMETRY_HMAC_HEX
 ```
 
-`REDIS_URL` is optional if using `REDIS_HOST`, `REDIS_PORT`, `REDIS_USERNAME`, `REDIS_PASSWORD`, `REDIS_TLS=true|false`, and `REDIS_DB=0`. A URL takes precedence. Use `rediss://` for provider TLS; certificate verification stays enabled. For a private Railway Redis endpoint without TLS, use its private `redis://` URL. Native Redis TCP is required; a REST-only endpoint cannot run BullMQ/pub/sub. Redis database 0 belongs to this backend; use a separate database or instance for dashboard sessions.
+`REDIS_URL` takes precedence. Alternative native Redis variables are `REDIS_HOST`, `REDIS_PORT`, `REDIS_USERNAME`, `REDIS_PASSWORD`, `REDIS_TLS=true` and `REDIS_DB=0`; omit `REDIS_URL` when using them. Use `redis://` only on an appropriately protected private connection. `SUPABASE_JWT_SECRET` is optional legacy HS256 compatibility and can stay empty. Exact HTTPS CORS origins are required. Use the provider's trusted CA where required; do not disable certificate verification.
 
-`SUPABASE_JWT_SECRET` is optional legacy HS256 direct-token compatibility. The recommended login flow verifies `identityAccessToken` at Supabase Auth and then issues this backend's RSA tokens, supporting provider signing-key changes without sharing a provider signing key with the browser. Enable actual email/SMS confirmation in Supabase. Contact confirmation does not establish government-document authenticity. New production ID bindings require administrator approval after an independent check. [Supabase authenticated user verification](https://supabase.com/docs/reference/javascript/auth-getuser).
+The template is compatible with shell sourcing after substitution if values contain no unquoted shell metacharacters; otherwise have the service manager inject environment variables directly. From the backend repository:
 
-## 2. PostgreSQL and PostGIS
-
-Choose a **fresh dedicated backend database**. Back up an existing database and reconcile its schema/migration history before applying this baseline; never mark a migration applied merely to hide a failure.
-
-### Railway
-
-Provision a PostGIS-capable PostgreSQL service, for example `postgis/postgis:16-3.4`, with a persistent volume at `/var/lib/postgresql/data`. Set strong `POSTGRES_USER`, `POSTGRES_PASSWORD`, and `POSTGRES_DB`; use its private connection URL from the backend service. Plain PostgreSQL images do not necessarily contain PostGIS. Keep database ingress private, enable provider backups, and set connection limits appropriate for the replica count. [Railway PostgreSQL](https://docs.railway.com/databases/postgresql).
-
-### Supabase
-
-Create a dedicated project and copy the dashboard **Connect** direct connection or **session pooler on port 5432** URI; use direct access when the runtime supports its network address family. Do not run migrations through the transaction pooler on port 6543. [Supabase Prisma connection guidance](https://supabase.com/docs/guides/database/prisma).
-
-The committed baseline uses unqualified PostGIS types/functions and installs PostGIS in `public`. Supabase recommends a dedicated extension schema. For this baseline's Supabase compatibility profile, disable the Data API or remove `public` from its exposed schemas; the dashboard accesses data through NestJS. Supabase Auth can remain enabled separately. The release also enables RLS and revokes browser-role access on application tables. If PostGIS is already installed in another schema, stop and reconcile that installation with a DBA; do not drop it with CASCADE or rewrite applied migration checksums. Railway's dedicated PostGIS database is the simpler reference configuration. [Supabase PostGIS schema requirements](https://supabase.com/docs/guides/database/extensions/postgis).
-
-Run the following in the dedicated database's SQL console or through `psql` using the migration-owner connection:
-
-```sql
-CREATE EXTENSION IF NOT EXISTS postgis WITH SCHEMA public;
-SELECT postgis_full_version();
-```
-
-Use a private backend database role that owns the application schema/tables and can run the committed migrations. RLS denies browser/Data API roles; the trusted backend owner can access its own tables. Do not put this connection string or a Supabase service-role key in browser configuration.
-
-## 3. Redis 7
-
-Provision Redis 7 with persistence (AOF), a durable volume, a password/ACL account, and private ingress or TLS. Set `maxmemory-policy noeviction`: queue jobs and delivery locks must not be evicted as a cache policy. Monitor capacity, queue failures, and availability. Do not share this queue instance with unbounded application caches. For an existing Redis service, apply these settings through its provider configuration so they persist across restarts:
-
-```text
-appendonly yes
-maxmemory-policy noeviction
-```
-
-Set the native connection variables from step 1. Use a service account permitted to use the commands needed by cache, BullMQ and pub/sub; an excessively narrow ACL prevents workers or the Socket.IO adapter from starting. [Railway Redis](https://docs.railway.com/databases/redis).
-
-## 4. Build, migrate, and start
-
-For a host deployment, make production variables available to the process, with key paths pointing to the actual mounted files. Install/build before setting a production-only dependency installation mode:
-
-```sh
-pnpm install --frozen-lockfile --prod=false
+```bash
+set -a
+. /secure/backend.production.env
+set +a
+pnpm install --frozen-lockfile
 pnpm prisma:generate
 pnpm exec prisma validate
 pnpm exec tsc --noEmit
-pnpm test
 pnpm build
-node audit-evidence/2026-11-05/probes.cjs
 pnpm exec prisma migrate deploy
-pnpm exec prisma migrate status
+node -e "require.resolve('./dist/main.js'); require.resolve('./dist/src/main.js')"
 pnpm start:prod
 ```
 
-The start command is `node dist/main.js`. `node dist/main` also resolves, and `dist/src/main.js` is a compatibility shim. Use a process supervisor with restart-on-failure and SIGTERM forwarding. API, matchmaking/GTI/scout workers, and the outbox dispatcher run in the application process; keep at least one replica continuously running.
+Run migrations once as a release job before rolling replicas. The committed additive migration chain includes telemetry provenance and final alert-recovery provenance. Never run `migrate dev`, `db push`, or database reset against production. Reconcile existing databases against committed migration history; take a backup first. Configure a supervisor with restart-on-failure and graceful termination. Startup must fail on missing dependencies/secrets.
 
-For Docker:
+Alternatively, build the backend image:
 
-```sh
-docker build --build-arg NODE_IMAGE=node:24-alpine -t kheleo-backend:production .
+```bash
+docker build --build-arg NODE_IMAGE=node:22-alpine -t kheleo-backend:production .
 docker run -d --name kheleo-backend --restart unless-stopped \
-  --env-file /secure/path/backend.production.env \
-  --mount type=bind,src=/secure/path/kheleo-keys,dst=/run/secrets/kheleo,readonly \
+  --env-file /secure/backend.production.env \
+  --env JWT_PRIVATE_KEY_PATH=/run/secrets/kheleo/private.pem \
+  --env JWT_PUBLIC_KEY_PATH=/run/secrets/kheleo/public.pem \
+  --mount type=bind,src=/secure/kheleo/keys,dst=/run/secrets/kheleo,readonly \
   -p 127.0.0.1:3000:3000 kheleo-backend:production
+curl --fail --silent --show-error http://127.0.0.1:3000/api/v1/health
 ```
 
-The image runs as user `node` (UID 1000); provision mounted-key ownership/group permissions for that user. Migrations run before application startup and failure prevents startup. For multi-replica releases, run one migration job first, then roll replicas; Prisma's migration lock provides additional protection, not a replacement for deployment coordination. Set the platform readiness path to `/api/v1/health`. Terminate HTTPS at the ingress, proxy `/socket.io` with WebSocket upgrades, and allow sufficient shutdown time for workers/outbox delivery to drain.
+The image runs as UID 1000 and checks health. Its entrypoint also gates startup on migrations; coordinate a single release migration job for multiple replicas. Health must return HTTP 200 with `status`, `db`, and `redis` all `ok`. `/docs` is Swagger UI and `/docs-json` is the controller specification. Restrict documentation ingress to operator networks if public discovery is unnecessary.
 
-## 5. Verify the deployment
+## 5. Frontend environment, build and start
 
-Replace the URL with the deployed backend origin:
-
-```sh
-BACKEND_ORIGIN=https://[backend-host]
-curl --fail --silent --show-error "$BACKEND_ORIGIN/api/v1/health"
-curl --fail --silent --show-error -o /dev/null "$BACKEND_ORIGIN/docs"
-curl --fail --silent --show-error "$BACKEND_ORIGIN/docs-json" -o /tmp/kheleo-openapi.json
-```
-
-Health must be HTTP 200 with `{"status":"ok","db":"ok","redis":"ok","uptime":...}`. A 503 means a dependency is unavailable; do not route production traffic until resolved. `/docs` must return Swagger UI. Inspect logs for migration errors, missing keys, queue failures, or failed Redis authentication/TLS.
-
-On the isolated CI/test database only, `node scripts/smoke-production.cjs` exercises the actual production entrypoint, native services, authenticated sockets, safety acknowledgement/resume, measured GTI 98.6, scout delivery, leaderboards, dashboard, and outbox drain. Its database-name safety gate prevents running its synthetic writes against an ordinary production database. This smoke test does not contact a live Supabase project or physical sensors.
-
-## 6. Connect kheleo-web-dashboards
-
-Set the dashboard's server/public configuration using the actual variable names from its `.env.example`:
+Create `/secure/frontend.production.env` (mode 600):
 
 ```dotenv
+NODE_ENV=production
 APP_ENV=production
-APP_ORIGIN=https://[dashboard-host]
-NEST_API_URL=https://[backend-host]/api/v1
-NEXT_PUBLIC_SOCKET_ORIGIN=https://[backend-host]
+APP_ORIGIN=https://app.example.com
+NEST_API_URL=https://api.example.com/api/v1
 SESSION_STORE=redis
-REDIS_URL=rediss://[dashboard-session-user]:[password]@[redis-host]:6380/1
-NEXT_PUBLIC_SUPABASE_URL=https://[project-ref].supabase.co
-NEXT_PUBLIC_SUPABASE_ANON_KEY=[publishable-or-anon-key]
-DRILL_HMAC_SECRET=[same-server-only-drill-secret]
-TELEMETRY_SERVICE_HMAC_SECRET=[same-server-only-telemetry-secret]
+REDIS_URL=rediss://default:ENCODED_PASSWORD@REDIS_HOST:6380/1
+DRILL_HMAC_SECRET=SAME_BACKEND_DRILL_HMAC_HEX
+TELEMETRY_SERVICE_HMAC_SECRET=SAME_BACKEND_TELEMETRY_HMAC_HEX
 SAFE_EVENTS_VERIFIED=true
-SIMULATOR_INGESTION=false
-STAGING_DATA_ISOLATED=false
-DRILL_PRACTICE_INGESTION=false
+NEXT_PUBLIC_SOCKET_ORIGIN=https://api.example.com
+NEXT_PUBLIC_SUPABASE_URL=https://PROJECT.supabase.co
+NEXT_PUBLIC_SUPABASE_ANON_KEY=PUBLIC_PUBLISHABLE_OR_ANON_KEY
+NEXT_PUBLIC_TILE_URL=https://tile.openstreetmap.org/{z}/{x}/{y}.png
 ```
 
-The dashboard currently labels its Supabase settings as unused. **Before exposing production login, wire its confirmed Supabase session access token into `identityAccessToken` on backend register/login requests.** A document/contact-only request intentionally receives 401 in production. Use the returned backend access/refresh tokens for dashboard sessions and `auth.token` on both Socket.IO namespaces. Public environment variables must never contain the identity pepper, RSA private key, Supabase signing/service-role secret, or HMAC signer secrets.
+`SAFE_EVENTS_VERIFIED=true` records the operator's verification; it does not disable or enable backend authorization. Old scoring/hardware/staging flags are no longer capability gates. Private matching HMAC secrets enable validated practice and labeled BLE/simulator relay submissions. Simulator readings remain explicitly labeled and do not establish hardware or clinical attestation.
 
-Update the server relay's drill signer to the full/full-v2 contract in README and send `X-Drill-Signed-Fields: full`; legacy four-field signatures are disabled in the production profile. Do not sign arbitrary client-supplied claims without the relay's authentication/calibration policies. Simulator/practice ingestion remains off in production.
+Public variables are compiled into the browser bundle. Supply them during build and runtime; rebuild if changing Auth/socket/tile origins because CSP is also built from them. Use a tile service whose terms/capacity suit production traffic. From `KheLEO-web-dashboarss`:
 
-Create the first SUPER_ADMIN using a confirmed contact session, the temporary admin invitation, and a government identity binding. Perform an independent document check, then approve identity status through the admin API. Remove/rotate the invite after provisioning. Approve other verified identity records only through authorized administrators.
+```bash
+corepack enable
+corepack prepare pnpm@11.24.0 --activate
+set -a
+. /secure/frontend.production.env
+set +a
+pnpm install --frozen-lockfile
+pnpm contracts:check
+pnpm build
+test -d public/mediapipe
+test -d public/models
+pnpm start
+```
 
-Check from the deployed dashboard: successful session creation, `/users/profile`, tournament listing, `/gti/leaderboards`, authorized admin dashboard, socket authentication, and safety room isolation. An anonymous socket must not connect to a namespace or receive medical events. A scout must not receive another athlete's medical events. Confirm browser CORS/preflight and server-relay connectivity separately. These owner-environment checks are required before declaring the dashboard connected.
+`pnpm build` runs `assets:sync` before Next.js compilation. Deploy the complete `public/mediapipe`, `public/models`, `.next`, package files and production dependencies together. Keep the pinned model/WASM artifacts with the matching release. Use the default start script on 3001, a service supervisor and shared Redis sessions; memory sessions are rejected in production.
 
-## 7. Operations and rollback
+## 6. TLS and Socket.IO ingress
 
-Back up PostgreSQL and protect Redis persistence before releases. Monitor outbox backlog/oldest pending age and failed BullMQ jobs. Recovery is at least once: REST state is authoritative and clients must tolerate recovered notifications.
+Create DNS records for both hosts, obtain valid certificates through the hosting platform or ACME client, and redirect HTTP to HTTPS. The following belongs in Nginx's `http` context (substitute certificate locations):
+
+```nginx
+map $http_upgrade $connection_upgrade {
+    default upgrade;
+    '' close;
+}
+server {
+    listen 80;
+    server_name app.example.com api.example.com;
+    return 301 https://$host$request_uri;
+}
+server {
+    listen 443 ssl;
+    server_name app.example.com;
+    ssl_certificate /etc/letsencrypt/live/app.example.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/app.example.com/privkey.pem;
+    client_max_body_size 5m;
+    location / {
+        proxy_pass http://127.0.0.1:3001;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection $connection_upgrade;
+        proxy_read_timeout 75s;
+    }
+}
+server {
+    listen 443 ssl;
+    server_name api.example.com;
+    ssl_certificate /etc/letsencrypt/live/api.example.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/api.example.com/privkey.pem;
+    client_max_body_size 5m;
+    location /socket.io/ {
+        proxy_pass http://127.0.0.1:3000;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection $connection_upgrade;
+        proxy_read_timeout 75s;
+    }
+    location / {
+        proxy_pass http://127.0.0.1:3000;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    }
+}
+```
+
+```bash
+sudo nginx -t
+sudo systemctl reload nginx
+curl --fail https://api.example.com/api/v1/health
+curl --fail --output /dev/null https://app.example.com/login
+```
+
+`/socket.io/` is the transport path for both `/ws/events` and `/ws/matchmaking` namespaces; do not rewrite it to a namespace path. Upgrade headers must pass explicitly through Nginx. [Nginx WebSocket proxying](https://nginx.org/en/docs/http/websocket.html).
+
+## 7. Provision the initial administrator and staff
+
+Enable the temporary `ADMIN_INVITE_CODE` only for bootstrap. Use an independently checked administrator contact/document; Supabase OTP proves contact ownership, not document authenticity. The public registration form deliberately does not offer SUPER_ADMIN.
+
+On a private operator workstation, run the following from the backend repository with its production environment already loaded. Keep generated files private and remove them when complete:
+
+```bash
+umask 077
+BOOTSTRAP_DIR=$(mktemp -d)
+export BOOTSTRAP_DIR
+read -r -p 'Admin email: ' BOOTSTRAP_EMAIL
+export BOOTSTRAP_EMAIL
+node -e 'require("node:fs").writeFileSync(process.env.BOOTSTRAP_DIR+"/otp.json",JSON.stringify({email:process.env.BOOTSTRAP_EMAIL,create_user:true}))'
+curl --fail --silent --show-error "$SUPABASE_URL/auth/v1/otp" \
+  -H "apikey: $SUPABASE_PUBLISHABLE_KEY" -H 'Content-Type: application/json' \
+  --data-binary "@$BOOTSTRAP_DIR/otp.json" -o "$BOOTSTRAP_DIR/sent.json"
+read -r -s -p 'Email OTP: ' BOOTSTRAP_OTP; echo
+export BOOTSTRAP_OTP
+node -e 'require("node:fs").writeFileSync(process.env.BOOTSTRAP_DIR+"/verify.json",JSON.stringify({email:process.env.BOOTSTRAP_EMAIL,token:process.env.BOOTSTRAP_OTP,type:"email"}))'
+curl --fail --silent --show-error "$SUPABASE_URL/auth/v1/verify" \
+  -H "apikey: $SUPABASE_PUBLISHABLE_KEY" -H 'Content-Type: application/json' \
+  --data-binary "@$BOOTSTRAP_DIR/verify.json" -o "$BOOTSTRAP_DIR/proof.json"
+read -r -p 'Government ID type (AADHAAR/PASSPORT/VOTER_ID/DRIVING_LICENSE/BIRTH_CERTIFICATE): ' BOOTSTRAP_ID_TYPE
+read -r -s -p 'Government ID number: ' BOOTSTRAP_ID_NUMBER; echo
+export BOOTSTRAP_ID_TYPE BOOTSTRAP_ID_NUMBER
+node <<'NODE'
+const fs = require('node:fs');
+const dir = process.env.BOOTSTRAP_DIR;
+const proof = JSON.parse(fs.readFileSync(dir+'/proof.json','utf8'));
+if (!proof.access_token) throw new Error('No confirmed-contact token');
+fs.writeFileSync(dir+'/register.json',JSON.stringify({
+  email:process.env.BOOTSTRAP_EMAIL, identityAccessToken:proof.access_token,
+  role:'SUPER_ADMIN', adminInviteCode:process.env.ADMIN_INVITE_CODE,
+  governmentId:{idType:process.env.BOOTSTRAP_ID_TYPE,idNumber:process.env.BOOTSTRAP_ID_NUMBER}
+}));
+NODE
+curl --fail --silent --show-error https://api.example.com/api/v1/auth/register \
+  -H 'Content-Type: application/json' --data-binary "@$BOOTSTRAP_DIR/register.json" \
+  -o "$BOOTSTRAP_DIR/account.json"
+node -e 'const fs=require("node:fs");const r=JSON.parse(fs.readFileSync(process.env.BOOTSTRAP_DIR+"/account.json","utf8"));const a=r.data??r; if(!a.user||a.user.role!=="SUPER_ADMIN")throw Error("Bootstrap failed");process.stdout.write("Provisioned administrator "+a.user.id+"\n")'
+rm -rf "$BOOTSTRAP_DIR"
+unset BOOTSTRAP_OTP BOOTSTRAP_ID_NUMBER BOOTSTRAP_DIR
+```
+
+Remove `ADMIN_INVITE_CODE` from the deployed service and restart after successful bootstrap. Sign in through the frontend with the same contact, OTP and government ID. As the authorized bootstrap administrator, complete the independent identity review and approve the bound identity in `/admin/verifications`. Do not create verified users through direct SQL or change role/identity flags outside audited governance.
+
+Register ORGANIZER and SCOUT accounts through `/signup`, selecting the role and verifying the contact code. Their government identity remains pending; registration shows an approval notice. The SUPER_ADMIN reviews their documents and approves them in `/admin/verifications` (backend `PATCH /api/v1/admin/users/:id/governance`, e.g. `{"verificationStatus":"VERIFIED"}`). They can then sign in and use their role portal. Record revocation through the same governance UI; it revokes token families and disconnects sockets.
+
+## 8. Owner acceptance and operations
+
+Before opening traffic, complete these checks in the actual deployed environment:
+
+1. `/api/v1/health` is 200 with database/Redis `ok`; admin monitoring reports healthy queues/PostGIS. Verify certificate renewals, backups and restore access.
+2. Email (and SMS if enabled) codes arrive; login succeeds, sessions survive a frontend restart, logout revokes refresh families, and revoked/deactivated users cannot refresh or reconnect.
+3. Athlete creates a passport, sees all three live GTI components, traverses nearby cursor pages, submits a calibrated drill, and sees the GTI refresh. Check self-supplied badges/verified metrics are rejected.
+4. Organizer creates/edits its tournament/brackets, inspects pools/rosters and records results. Another organizer cannot edit or join private staff scopes. Verify paused matches cannot receive results before medical clearance.
+5. Authorized staff receive labeled threshold alerts and can acknowledge/resume with recorded confirmations. Athletes/scouts receive no other athlete's medical payload. Test HR >195, SpO2 <90 and temperature >39.5 using clearly labeled simulator packets on an isolated acceptance event.
+6. Scout checks National/State/District leaderboards, opt-in dossiers/shortlists/outreach and state-qualified heatmaps. Admin approves/revokes staff, moderates events and sees immutable security logs.
+7. Anonymous/forged sockets fail on both namespaces, foreign-room joins fail, CORS rejects foreign origins, and reused mutation keys cannot replay another user's response. Confirm `/socket.io/` upgrades to 101 in browser network tools.
+8. Exercise the camera and optional real BLE sensors over HTTPS on supported browsers. Validate actual device models, sports-science calibration and safety escalation with responsible staff; automated tests do not certify physical devices or clinical outcomes.
+
+Use `node scripts/smoke-production.cjs` only against an isolated database ending `_audit` or `_test`; it deliberately writes synthetic records and is not an operator production smoke command. CI exercises it with native PostGIS/Redis and synthetic credentials, not a live Supabase account.
+
+Monitor failed BullMQ jobs, oldest pending outbox age, provider errors, connection pools and Redis memory. Delivery retries are at least once; REST snapshots are authoritative. Monitor pending work with:
 
 ```sql
 SELECT kind, count(*), min(created_at)
@@ -170,6 +285,4 @@ SELECT id, kind, attempts, available_at, last_error
 FROM outbox_events WHERE delivered_at IS NULL AND attempts > 3 ORDER BY created_at;
 ```
 
-Keep delivered outbox payloads only as long as operational recovery requires; they may contain sensitive safety data. Immutable security audit snapshots have separate retention/access policies. Delete only delivered outbox rows under an approved retention policy, never pending events.
-
-For a code rollback, stop the rollout and redeploy the prior image only if compatible with the migrated schema. Keep forward migrations and fix forward when possible. For a database restore, stop writers, restore a tested backup into a fresh database, verify migration history/health, then switch connection strings. Never run `prisma migrate reset` or drop PostGIS CASCADE on production data. A restore exercise and owner-environment acceptance checks complete the operational handoff.
+Retain the previous immutable application images and matching public assets. For rollback, stop routing new traffic, preserve backups, and roll back application images only when compatible with the migrated schema; otherwise use a reviewed forward fix or tested restore. Do not delete permanent identity records or rewrite migration history to undo a release. Keep HMAC/RSA/pepper values consistent across frontend/backend replicas and releases.
