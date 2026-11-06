@@ -96,7 +96,7 @@ export class WsEventGateway implements OnGatewayInit, OnGatewayConnection, OnGat
   async handleJoinTournament(
     @ConnectedSocket() client: AuthenticatedSocket,
     @MessageBody() data: { tournamentId: string },
-  ): Promise<void> {
+  ): Promise<{ joined: true }> {
     if (!(await this.access.canJoin(client.data.user, 'tournament', data?.tournamentId)))
       throw new ForbiddenException(
         'Only the owning organizer or an administrator may subscribe to tournament events',
@@ -108,6 +108,7 @@ export class WsEventGateway implements OnGatewayInit, OnGatewayConnection, OnGat
       )
     )
       await client.join(`safety:tournament:${data.tournamentId}`);
+    return { joined: true };
   }
 
   @SubscribeMessage('join:bracket')

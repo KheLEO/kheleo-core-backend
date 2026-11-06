@@ -1,10 +1,10 @@
 {
-  "verifiedAt": "2026-11-05T16:14:23.454Z",
-  "runtime": "v24.22.1",
+  "verifiedAt": "2026-11-06T00:51:42.918Z",
+  "runtime": "v24.19.0",
   "result": "PASS",
   "results": [
     {
-      "command": "/opt/hostedtoolcache/node/24.22.1/x64/bin/node dist/main",
+      "command": "/usr/local/bin/node dist/main",
       "code": 1,
       "signal": null,
       "entrypointResolved": true,

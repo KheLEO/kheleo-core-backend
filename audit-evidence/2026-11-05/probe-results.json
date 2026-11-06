@@ -1,6 +1,6 @@
 {
-  "verifiedAt": "2026-11-05T16:14:21.019Z",
-  "baseCommit": "80db5840a6d26ff6ccdb2ca526a382cf9c1c3d57",
+  "verifiedAt": "2026-11-06T00:51:41.728Z",
+  "baseCommit": "e81a82a8796d3bf0f0883c96b0dd34932db251c5",
   "bundle": "dist/",
   "result": "PASS",
   "passed": 5,
@@ -10,7 +10,10 @@
       "probe": "cross_user_idempotency",
       "status": "PASS",
       "handlerExecutions": 2,
-      "returnedOwners": ["athlete-A", "athlete-B"]
+      "returnedOwners": [
+        "athlete-A",
+        "athlete-B"
+      ]
     },
     {
       "probe": "unsigned_drill_metadata",
@@ -59,8 +62,8 @@
       "authorizedMedicalEvents": 1
     }
   ],
-  "httpOperations": 53,
-  "httpPaths": 41,
+  "httpOperations": 65,
+  "httpPaths": 53,
   "limitations": [
     "Synthetic dependencies for cache, identity state and route inventory",
     "Real loopback Socket.IO; Redis adapter and physical sensors are not exercised by these five probes"

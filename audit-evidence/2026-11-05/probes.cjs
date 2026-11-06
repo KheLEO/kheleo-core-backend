@@ -136,14 +136,16 @@ async function main() {
   const sign = (input) =>
     crypto.createHmac('sha256', settings['auth.drillHmacSecret']).update(input).digest('hex');
   const legacy = sign(`${ACTOR}:BOWLING:90:${timestamp}`);
-  const guard = new DrillSignatureGuard(config);
+  const guard = new DrillSignatureGuard(config, {
+    securityAuditLog: { create: async ({ data }) => data },
+  });
   assert.equal(
-    guard.canActivate(
+    await guard.canActivate(
       context({ headers: { 'x-drill-signature': legacy }, body, user: { sub: ACTOR } }),
     ),
     true,
   );
-  assert.throws(
+  await assert.rejects(
     () =>
       guard.canActivate(
         context({
@@ -160,7 +162,7 @@ async function main() {
     { frames_analyzed: 301 },
     { flaw_flags: ['changed'] },
   ])
-    assert.throws(
+    await assert.rejects(
       () =>
         guard.canActivate(
           context({
@@ -357,6 +359,11 @@ async function main() {
     controller: compiled('modules/tournaments/match-results.controller.js').MatchResultsController,
     service: compiled('modules/tournaments/match-results.service.js').MatchResultsService,
   });
+  classes.push({
+    controller: compiled('modules/tournaments/organizer.controller.js').OrganizerController,
+    service: compiled('modules/tournaments/organizer.service.js').OrganizerService,
+  });
+  // The controller needs the organizer service only; this inventory never executes handlers.
   class InventoryModule {}
   Module({
     controllers: classes.map((item) => item.controller),

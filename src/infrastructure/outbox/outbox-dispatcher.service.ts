@@ -169,6 +169,15 @@ export class OutboxDispatcher implements OnApplicationBootstrap, BeforeApplicati
         const vitals = object(data.vitals ?? null);
         this.ws.broadcastAutonomousMatchPause({
           event_id: event.id,
+          ...(typeof data.alert_id === 'string' ? { alert_id: data.alert_id } : {}),
+          ...(typeof data.source === 'string' ? { source: data.source } : {}),
+          ...(Array.isArray(data.baseline_fields)
+            ? {
+                baseline_fields: data.baseline_fields.filter(
+                  (field): field is string => typeof field === 'string',
+                ),
+              }
+            : {}),
           event: 'MATCH_PAUSE_ALERT',
           severity: 'CRITICAL',
           athlete_id: str(data, 'athlete_id'),

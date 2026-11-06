@@ -453,6 +453,17 @@ describe('PostGIS baseline migration', () => {
     assert.equal(safety.target_id, alertId);
     assert.ok(safety.summary.length > 0);
     assert.equal('heart_rate' in safety.metadata, false);
+    const delivery = (
+      await database.query<{
+        payload: { alert_id: string; source: string; baseline_fields: string[] };
+      }>("SELECT payload FROM outbox_events WHERE kind='PAUSE' AND payload->>'alert_id'=$1", [
+        alertId,
+      ])
+    ).rows[0]!;
+    assert.equal(delivery.payload.alert_id, alertId);
+    assert.equal(delivery.payload.source, 'DEVICE_HMAC');
+    assert.deepEqual(delivery.payload.baseline_fields, []);
+
     await database.query('DELETE FROM drill_submissions WHERE id=$1', [drillId]);
     assert.equal(
       (await database.query('SELECT id FROM security_audit_logs WHERE resource_id=$1', [drillId]))

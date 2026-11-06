@@ -72,7 +72,7 @@ async function main() {
     });
     const result = await response.json();
     assert.ok(response.ok, `${method} ${route}: ${response.status} ${JSON.stringify(result)}`);
-    return result.data ?? result;
+    return result.success === true && typeof result.timestamp === 'string' ? result.data : result;
   }
   async function connect(actor) {
     const client = io(`${origin}/ws/events`, {
@@ -215,9 +215,22 @@ async function main() {
     }
     const scoutSocket = await connect(scout);
     const athleteSocket = await connect(athlete);
+    const ownerSocket = await connect(owner);
+    assert.equal(
+      (
+        await ownerSocket
+          .timeout(5000)
+          .emitWithAck('join:tournament', { tournamentId: tournament.id })
+      ).joined,
+      true,
+    );
     let scoutMedicalEvents = 0;
     let scoutTalentEvents = 0;
     let athletePauseEvents = 0;
+    let ownerPauseEvents = 0;
+    ownerSocket.on('MATCH_PAUSE_ALERT', () => {
+      ownerPauseEvents++;
+    });
     scoutSocket.on('MATCH_PAUSE_ALERT', () => {
       scoutMedicalEvents++;
     });
@@ -239,12 +252,26 @@ async function main() {
       (await request('/safety/telemetry-webhook', athlete, telemetry, 'POST')).status,
       'MATCH_PAUSED',
     );
-    await until(async () => athletePauseEvents > 0);
+    await until(async () => ownerPauseEvents > 0);
+    assert.equal(athletePauseEvents, 0);
     assert.equal(scoutMedicalEvents, 0);
     const alerts = await request(`/safety/alerts?tournament_id=${tournament.id}`, owner);
     assert.ok(alerts.data[0]);
-    await request(`/safety/alerts/${alerts.data[0].id}/acknowledge`, owner, {}, 'PATCH');
-    await request(`/safety/matches/${match.id}/resume`, owner, {}, 'POST');
+    await request(
+      `/safety/alerts/${alerts.data[0].id}/acknowledge`,
+      owner,
+      { medicalCheckDispatched: true, medicalCheckNote: 'Synthetic medical check dispatched' },
+      'PATCH',
+    );
+    await request(
+      `/safety/matches/${match.id}/resume`,
+      owner,
+      {
+        medicalClearanceConfirmed: true,
+        medicalClearanceNote: 'Synthetic field clearance confirmed',
+      },
+      'POST',
+    );
     const drill = {
       athlete_id: athlete.id,
       sport: 'CRICKET',
@@ -297,6 +324,34 @@ async function main() {
     const dashboard = await request('/admin/dashboard', admin);
     assert.ok(dashboard.verifiedAthletes >= 2);
     assert.equal(dashboard.health.status, 'ok');
+    assert.ok(dashboard.bullmqQueuesStatus.every((queue) => queue.status === 'ok'));
+    assert.equal(dashboard.postgisAvailable, true);
+    const summary = await request('/tournaments/organizer/summary', owner);
+    assert.ok(summary.activeTournamentsCount >= 1);
+    const owned = await request('/tournaments/organizer/mine', owner);
+    assert.ok(owned.data.some((entry) => entry.id === tournament.id));
+    const rosters = await request(
+      `/tournaments/${tournament.id}/brackets/${bracket.id}/registrations`,
+      owner,
+    );
+    assert.equal(rosters.data.length, 2);
+    const wall = await request(`/safety/tournaments/${tournament.id}/vitals`, owner);
+    assert.equal(wall.data.length, 2);
+    const dossier = await request(`/users/${athlete.id}/dossier`, scout);
+    assert.ok(dossier.recent_drills.length > 0);
+    assert.ok(dossier.gti_history.length > 0);
+    await request(
+      `/scouts/dossiers/${athlete.id}/outreach`,
+      scout,
+      { actionType: 'SHORTLIST_BOOKMARK', notes: 'Synthetic shortlist' },
+      'POST',
+    );
+    assert.equal(
+      (await request(`/users/${athlete.id}/dossier`, scout)).scout_outreach.is_shortlisted,
+      true,
+    );
+    const audits = await request('/admin/audit-logs?category=SAFETY_MATCH_PAUSE', admin);
+    assert.ok(audits.data.length > 0);
     await until(
       async () => (await prisma.outboxEvent.count({ where: { deliveredAt: null } })) === 0,
     );
@@ -317,6 +372,7 @@ async function main() {
       scoutTalentEvents,
       scoutMedicalEvents,
       athletePauseEvents,
+      ownerPauseEvents,
       leaderboards: true,
       dashboard: true,
       outboxDrained: true,

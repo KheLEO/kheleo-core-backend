@@ -42,7 +42,9 @@
           }
         },
         "summary": "Register athlete profile with Anti-Account Reset check",
-        "tags": ["Authentication & Identity"]
+        "tags": [
+          "Authentication & Identity"
+        ]
       }
     },
     "/api/v1/auth/login": {
@@ -73,7 +75,9 @@
           }
         },
         "summary": "Login via verified contact and Government ID proof",
-        "tags": ["Authentication & Identity"]
+        "tags": [
+          "Authentication & Identity"
+        ]
       }
     },
     "/api/v1/auth/verify-government-id": {
@@ -105,7 +109,9 @@
           }
         ],
         "summary": "Bind and verify Government ID to profile (Anti-Account Reset enforcement)",
-        "tags": ["Authentication & Identity"]
+        "tags": [
+          "Authentication & Identity"
+        ]
       }
     },
     "/api/v1/auth/verify-gov-id": {
@@ -137,7 +143,9 @@
           }
         ],
         "summary": "Bind and verify Government ID to profile (Anti-Account Reset enforcement)",
-        "tags": ["Authentication & Identity"]
+        "tags": [
+          "Authentication & Identity"
+        ]
       }
     },
     "/api/v1/auth/refresh": {
@@ -167,7 +175,29 @@
           }
         },
         "summary": "Rotate refresh token and get fresh lightweight access token",
-        "tags": ["Authentication & Identity"]
+        "tags": [
+          "Authentication & Identity"
+        ]
+      }
+    },
+    "/api/v1/auth/logout": {
+      "post": {
+        "operationId": "AuthController_logout_v1",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Logged out successfully"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Logout and revoke all user refresh tokens",
+        "tags": [
+          "Authentication & Identity"
+        ]
       }
     },
     "/api/v1/auth/me": {
@@ -185,7 +215,9 @@
           }
         ],
         "summary": "Get current authenticated token identity",
-        "tags": ["Authentication & Identity"]
+        "tags": [
+          "Authentication & Identity"
+        ]
       }
     },
     "/api/v1/users/profile": {
@@ -202,7 +234,9 @@
             "bearer": []
           }
         ],
-        "tags": ["Users"]
+        "tags": [
+          "Users"
+        ]
       },
       "post": {
         "operationId": "UsersController_upsertProfile_v1",
@@ -227,7 +261,9 @@
             "bearer": []
           }
         ],
-        "tags": ["Users"]
+        "tags": [
+          "Users"
+        ]
       },
       "patch": {
         "operationId": "UsersController_updateProfile_v1",
@@ -252,7 +288,9 @@
             "bearer": []
           }
         ],
-        "tags": ["Users"]
+        "tags": [
+          "Users"
+        ]
       }
     },
     "/api/v1/users/{id}/dossier": {
@@ -278,7 +316,9 @@
             "bearer": []
           }
         ],
-        "tags": ["Users"]
+        "tags": [
+          "Users"
+        ]
       }
     },
     "/api/v1/users/{id}": {
@@ -308,7 +348,9 @@
           }
         ],
         "summary": "Get user profile by user ID",
-        "tags": ["Users"]
+        "tags": [
+          "Users"
+        ]
       },
       "patch": {
         "operationId": "UsersController_update_v1",
@@ -343,7 +385,9 @@
           }
         ],
         "summary": "Update user contact details",
-        "tags": ["Users"]
+        "tags": [
+          "Users"
+        ]
       },
       "delete": {
         "operationId": "UsersController_deactivate_v1",
@@ -368,7 +412,9 @@
           }
         ],
         "summary": "Deactivate user account",
-        "tags": ["Users"]
+        "tags": [
+          "Users"
+        ]
       }
     },
     "/api/v1/passport/{userId}": {
@@ -406,7 +452,9 @@
           }
         ],
         "summary": "Retrieve Digital Sports Passport",
-        "tags": ["Digital Sports Passport"]
+        "tags": [
+          "Digital Sports Passport"
+        ]
       },
       "post": {
         "description": "Initializes a new Digital Sports Passport for an authenticated user.",
@@ -458,7 +506,9 @@
           }
         ],
         "summary": "Create athlete passport profile",
-        "tags": ["Digital Sports Passport"]
+        "tags": [
+          "Digital Sports Passport"
+        ]
       },
       "patch": {
         "description": "Updates bio, physical stats (height, weight, dominant side), district, and state.",
@@ -510,7 +560,9 @@
           }
         ],
         "summary": "Update basic profile metadata & verified physical stats",
-        "tags": ["Digital Sports Passport"]
+        "tags": [
+          "Digital Sports Passport"
+        ]
       }
     },
     "/api/v1/passport/{userId}/sports": {
@@ -557,7 +609,9 @@
           }
         ],
         "summary": "Add or update multi-sport athlete record",
-        "tags": ["Digital Sports Passport"]
+        "tags": [
+          "Digital Sports Passport"
+        ]
       },
       "get": {
         "operationId": "PassportController_listSportRecords_v1",
@@ -598,7 +652,9 @@
           }
         },
         "summary": "List cross-sport records with cursor-based pagination",
-        "tags": ["Digital Sports Passport"]
+        "tags": [
+          "Digital Sports Passport"
+        ]
       }
     },
     "/api/v1/tournaments": {
@@ -631,7 +687,14 @@
             "in": "query",
             "schema": {
               "type": "string",
-              "enum": ["CRICKET", "FOOTBALL", "BADMINTON", "ATHLETICS", "BASKETBALL", "KABADDI"]
+              "enum": [
+                "CRICKET",
+                "FOOTBALL",
+                "BADMINTON",
+                "ATHLETICS",
+                "BASKETBALL",
+                "KABADDI"
+              ]
             }
           },
           {
@@ -665,7 +728,9 @@
             "description": ""
           }
         },
-        "tags": ["Tournaments & Geospatial Discovery"]
+        "tags": [
+          "Tournaments & Geospatial Discovery"
+        ]
       },
       "post": {
         "operationId": "TournamentsController_create_v1",
@@ -691,7 +756,9 @@
           }
         ],
         "summary": "Create a new tournament",
-        "tags": ["Tournaments & Geospatial Discovery"]
+        "tags": [
+          "Tournaments & Geospatial Discovery"
+        ]
       }
     },
     "/api/v1/tournaments/{id}": {
@@ -727,7 +794,9 @@
             "bearer": []
           }
         ],
-        "tags": ["Tournaments & Geospatial Discovery"]
+        "tags": [
+          "Tournaments & Geospatial Discovery"
+        ]
       },
       "delete": {
         "operationId": "TournamentsController_delete_v1",
@@ -751,7 +820,9 @@
             "bearer": []
           }
         ],
-        "tags": ["Tournaments & Geospatial Discovery"]
+        "tags": [
+          "Tournaments & Geospatial Discovery"
+        ]
       },
       "get": {
         "operationId": "TournamentsController_findById_v1",
@@ -774,7 +845,9 @@
           }
         },
         "summary": "Retrieve tournament details by ID",
-        "tags": ["Tournaments & Geospatial Discovery"]
+        "tags": [
+          "Tournaments & Geospatial Discovery"
+        ]
       }
     },
     "/api/v1/tournaments/nearby": {
@@ -821,7 +894,14 @@
             "schema": {
               "example": "CRICKET",
               "type": "string",
-              "enum": ["CRICKET", "FOOTBALL", "BADMINTON", "ATHLETICS", "BASKETBALL", "KABADDI"]
+              "enum": [
+                "CRICKET",
+                "FOOTBALL",
+                "BADMINTON",
+                "ATHLETICS",
+                "BASKETBALL",
+                "KABADDI"
+              ]
             }
           },
           {
@@ -847,7 +927,7 @@
         ],
         "responses": {
           "200": {
-            "description": "Flat array of nearby tournament locations",
+            "description": "Nearby locations with next_cursor and has_more",
             "content": {
               "application/json": {
                 "schema": {
@@ -861,7 +941,9 @@
           }
         },
         "summary": "Geospatial tournament discovery (PostGIS ST_DWithin)",
-        "tags": ["Tournaments & Geospatial Discovery"]
+        "tags": [
+          "Tournaments & Geospatial Discovery"
+        ]
       }
     },
     "/api/v1/tournaments/{tournamentId}/brackets/{bracketId}/register": {
@@ -926,7 +1008,9 @@
           }
         ],
         "summary": "Register athlete for tournament bracket (Anti-Sandbagging Gatekeeper)",
-        "tags": ["Tournament Brackets & Anti-Sandbagging Gatekeeper"]
+        "tags": [
+          "Tournament Brackets & Anti-Sandbagging Gatekeeper"
+        ]
       }
     },
     "/api/v1/tournaments/{tournamentId}/brackets": {
@@ -968,7 +1052,9 @@
           }
         },
         "summary": "List all brackets for a tournament",
-        "tags": ["Tournament Brackets & Anti-Sandbagging Gatekeeper"]
+        "tags": [
+          "Tournament Brackets & Anti-Sandbagging Gatekeeper"
+        ]
       },
       "post": {
         "operationId": "BracketsController_createBracket_v1",
@@ -1003,7 +1089,9 @@
           }
         ],
         "summary": "Create bracket in a tournament",
-        "tags": ["Tournament Brackets & Anti-Sandbagging Gatekeeper"]
+        "tags": [
+          "Tournament Brackets & Anti-Sandbagging Gatekeeper"
+        ]
       }
     },
     "/api/v1/tournaments/{tournamentId}/brackets/{bracketId}": {
@@ -1047,7 +1135,9 @@
             "bearer": []
           }
         ],
-        "tags": ["Tournament Brackets & Anti-Sandbagging Gatekeeper"]
+        "tags": [
+          "Tournament Brackets & Anti-Sandbagging Gatekeeper"
+        ]
       },
       "delete": {
         "operationId": "BracketsController_deleteBracket_v1",
@@ -1079,7 +1169,9 @@
             "bearer": []
           }
         ],
-        "tags": ["Tournament Brackets & Anti-Sandbagging Gatekeeper"]
+        "tags": [
+          "Tournament Brackets & Anti-Sandbagging Gatekeeper"
+        ]
       }
     },
     "/api/v1/tournaments/{tournamentId}/brackets/{bracketId}/free-agents/join": {
@@ -1135,7 +1227,9 @@
           }
         ],
         "summary": "Join dynamic free agent matchmaking pool",
-        "tags": ["Dynamic Free Agent Matchmaking Pool"]
+        "tags": [
+          "Dynamic Free Agent Matchmaking Pool"
+        ]
       }
     },
     "/api/v1/tournaments/{tournamentId}/brackets/{bracketId}/free-agents/leave": {
@@ -1171,7 +1265,9 @@
           }
         ],
         "summary": "Exit free agent queue before matching",
-        "tags": ["Dynamic Free Agent Matchmaking Pool"]
+        "tags": [
+          "Dynamic Free Agent Matchmaking Pool"
+        ]
       }
     },
     "/api/v1/tournaments/{tournamentId}/brackets/{bracketId}/free-agents/status": {
@@ -1214,7 +1310,9 @@
           }
         ],
         "summary": "Get free agent queue status & roster details",
-        "tags": ["Dynamic Free Agent Matchmaking Pool"]
+        "tags": [
+          "Dynamic Free Agent Matchmaking Pool"
+        ]
       }
     },
     "/api/v1/drills/submit": {
@@ -1236,7 +1334,9 @@
             "description": ""
           }
         },
-        "tags": ["Drills"]
+        "tags": [
+          "Drills"
+        ]
       }
     },
     "/api/v1/safety/telemetry-webhook": {
@@ -1258,7 +1358,9 @@
             "description": ""
           }
         },
-        "tags": ["Safety"]
+        "tags": [
+          "Safety"
+        ]
       }
     },
     "/api/v1/safety/alerts": {
@@ -1270,7 +1372,9 @@
             "description": ""
           }
         },
-        "tags": ["Safety"]
+        "tags": [
+          "Safety"
+        ]
       }
     },
     "/api/v1/safety/alerts/{id}/acknowledge": {
@@ -1286,12 +1390,24 @@
             }
           }
         ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AcknowledgeSafetyDto"
+              }
+            }
+          }
+        },
         "responses": {
           "200": {
             "description": ""
           }
         },
-        "tags": ["Safety"]
+        "tags": [
+          "Safety"
+        ]
       }
     },
     "/api/v1/safety/matches/{matchId}/resume": {
@@ -1307,12 +1423,110 @@
             }
           }
         ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ResumeSafetyDto"
+              }
+            }
+          }
+        },
         "responses": {
           "200": {
             "description": ""
           }
         },
-        "tags": ["Safety"]
+        "tags": [
+          "Safety"
+        ]
+      }
+    },
+    "/api/v1/safety/tournaments/{tournamentId}/vitals": {
+      "get": {
+        "operationId": "SafetyController_vitals_v1",
+        "parameters": [
+          {
+            "name": "tournamentId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20,
+              "type": "number"
+            }
+          },
+          {
+            "name": "cursor_id",
+            "required": false,
+            "in": "query",
+            "description": "Opaque cursor for next page",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "Safety"
+        ]
+      }
+    },
+    "/api/v1/safety/tournaments/{tournamentId}/alerts": {
+      "get": {
+        "operationId": "SafetyController_history_v1",
+        "parameters": [
+          {
+            "name": "tournamentId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20,
+              "type": "number"
+            }
+          },
+          {
+            "name": "cursor_id",
+            "required": false,
+            "in": "query",
+            "description": "Opaque cursor for next page",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "Safety"
+        ]
       }
     },
     "/api/v1/gti/recalculate/{athleteId}": {
@@ -1333,7 +1547,9 @@
             "description": ""
           }
         },
-        "tags": ["Gti"]
+        "tags": [
+          "Gti"
+        ]
       }
     },
     "/api/v1/gti/leaderboards": {
@@ -1345,7 +1561,9 @@
             "description": ""
           }
         },
-        "tags": ["Gti"]
+        "tags": [
+          "Gti"
+        ]
       }
     },
     "/api/v1/gti/rank/{sport}/{athleteId}": {
@@ -1382,7 +1600,9 @@
             "description": ""
           }
         },
-        "tags": ["Gti"]
+        "tags": [
+          "Gti"
+        ]
       }
     },
     "/api/v1/scouts/dossiers/{athleteId}/outreach": {
@@ -1413,7 +1633,9 @@
             "description": ""
           }
         },
-        "tags": ["Scouts"]
+        "tags": [
+          "Scouts"
+        ]
       }
     },
     "/api/v1/scouts/feed": {
@@ -1425,7 +1647,9 @@
             "description": ""
           }
         },
-        "tags": ["Scouts"]
+        "tags": [
+          "Scouts"
+        ]
       }
     },
     "/api/v1/scouts/alerts": {
@@ -1437,7 +1661,9 @@
             "description": ""
           }
         },
-        "tags": ["Scouts"]
+        "tags": [
+          "Scouts"
+        ]
       }
     },
     "/api/v1/scouts/alerts/{id}/acknowledge": {
@@ -1458,7 +1684,9 @@
             "description": ""
           }
         },
-        "tags": ["Scouts"]
+        "tags": [
+          "Scouts"
+        ]
       }
     },
     "/api/v1/heatmaps/regional": {
@@ -1470,7 +1698,9 @@
             "description": ""
           }
         },
-        "tags": ["Heatmaps"]
+        "tags": [
+          "Heatmaps"
+        ]
       }
     },
     "/api/v1/admin/dashboard": {
@@ -1482,7 +1712,9 @@
             "description": ""
           }
         },
-        "tags": ["Admin"]
+        "tags": [
+          "Admin"
+        ]
       }
     },
     "/api/v1/admin/users": {
@@ -1494,12 +1726,14 @@
             "description": ""
           }
         },
-        "tags": ["Admin"]
+        "tags": [
+          "Admin"
+        ]
       }
     },
     "/api/v1/admin/users/{id}/status": {
       "patch": {
-        "operationId": "AdminController_status_v1",
+        "operationId": "AdminController_status[0]_v1",
         "parameters": [
           {
             "name": "id",
@@ -1525,7 +1759,42 @@
             "description": ""
           }
         },
-        "tags": ["Admin"]
+        "tags": [
+          "Admin"
+        ]
+      }
+    },
+    "/api/v1/admin/users/{id}/governance": {
+      "patch": {
+        "operationId": "AdminController_status[1]_v1",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AdminUserStatusDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "Admin"
+        ]
       }
     },
     "/api/v1/admin/tournaments": {
@@ -1537,12 +1806,14 @@
             "description": ""
           }
         },
-        "tags": ["Admin"]
+        "tags": [
+          "Admin"
+        ]
       }
     },
     "/api/v1/admin/tournaments/{id}/status": {
       "patch": {
-        "operationId": "AdminController_moderate_v1",
+        "operationId": "AdminController_moderate[0]_v1",
         "parameters": [
           {
             "name": "id",
@@ -1568,7 +1839,42 @@
             "description": ""
           }
         },
-        "tags": ["Admin"]
+        "tags": [
+          "Admin"
+        ]
+      }
+    },
+    "/api/v1/admin/tournaments/{id}/moderation": {
+      "patch": {
+        "operationId": "AdminController_moderate[1]_v1",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AdminTournamentStatusDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "Admin"
+        ]
       }
     },
     "/api/v1/admin/audit-logs": {
@@ -1580,7 +1886,9 @@
             "description": ""
           }
         },
-        "tags": ["Admin"]
+        "tags": [
+          "Admin"
+        ]
       }
     },
     "/api/v1/health": {
@@ -1596,7 +1904,9 @@
           }
         },
         "summary": "Public database and Redis readiness check",
-        "tags": ["Health"]
+        "tags": [
+          "Health"
+        ]
       }
     },
     "/api/v1/tournaments/{tournamentId}/brackets/{bracketId}/matches/record-result": {
@@ -1643,7 +1953,283 @@
             "description": ""
           }
         },
-        "tags": ["MatchResults"]
+        "tags": [
+          "MatchResults"
+        ]
+      }
+    },
+    "/api/v1/tournaments/{tournamentId}/brackets/{bracketId}/matches/results": {
+      "post": {
+        "operationId": "MatchResultsController_results_v1",
+        "parameters": [
+          {
+            "name": "tournamentId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "bracketId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "idempotency-key",
+            "required": true,
+            "in": "header",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OrganizerMatchResultDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "MatchResults"
+        ]
+      }
+    },
+    "/api/v1/tournaments/organizer/summary": {
+      "get": {
+        "operationId": "OrganizerController_summary_v1",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "Organizer"
+        ]
+      }
+    },
+    "/api/v1/tournaments/organizer/mine": {
+      "get": {
+        "operationId": "OrganizerController_mine_v1",
+        "parameters": [
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20,
+              "type": "number"
+            }
+          },
+          {
+            "name": "cursor_id",
+            "required": false,
+            "in": "query",
+            "description": "Opaque cursor for next page",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "Organizer"
+        ]
+      }
+    },
+    "/api/v1/tournaments/{tournamentId}/brackets/{bracketId}/registrations": {
+      "get": {
+        "operationId": "OrganizerController_registrations_v1",
+        "parameters": [
+          {
+            "name": "tournamentId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "bracketId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20,
+              "type": "number"
+            }
+          },
+          {
+            "name": "cursor_id",
+            "required": false,
+            "in": "query",
+            "description": "Opaque cursor for next page",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "Organizer"
+        ]
+      }
+    },
+    "/api/v1/tournaments/{tournamentId}/brackets/{bracketId}/free-agents/pool": {
+      "get": {
+        "operationId": "OrganizerController_pool_v1",
+        "parameters": [
+          {
+            "name": "tournamentId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "bracketId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20,
+              "type": "number"
+            }
+          },
+          {
+            "name": "cursor_id",
+            "required": false,
+            "in": "query",
+            "description": "Opaque cursor for next page",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "Organizer"
+        ]
+      }
+    },
+    "/api/v1/tournaments/{tournamentId}/brackets/{bracketId}/free-agents/process": {
+      "post": {
+        "operationId": "OrganizerController_process_v1",
+        "parameters": [
+          {
+            "name": "tournamentId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "bracketId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "Organizer"
+        ]
+      }
+    },
+    "/api/v1/tournaments/{tournamentId}/sandbagging-logs": {
+      "get": {
+        "operationId": "OrganizerController_logs_v1",
+        "parameters": [
+          {
+            "name": "tournamentId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20,
+              "type": "number"
+            }
+          },
+          {
+            "name": "cursor_id",
+            "required": false,
+            "in": "query",
+            "description": "Opaque cursor for next page",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "tags": [
+          "Organizer"
+        ]
       }
     }
   },
@@ -1677,14 +2263,28 @@
           },
           "primarySport": {
             "type": "string",
-            "enum": ["CRICKET", "FOOTBALL", "BADMINTON", "ATHLETICS", "BASKETBALL", "KABADDI"],
+            "enum": [
+              "CRICKET",
+              "FOOTBALL",
+              "BADMINTON",
+              "ATHLETICS",
+              "BASKETBALL",
+              "KABADDI"
+            ],
             "example": "CRICKET"
           },
           "secondarySports": {
             "type": "array",
             "items": {
               "type": "string",
-              "enum": ["CRICKET", "FOOTBALL", "BADMINTON", "ATHLETICS", "BASKETBALL", "KABADDI"]
+              "enum": [
+                "CRICKET",
+                "FOOTBALL",
+                "BADMINTON",
+                "ATHLETICS",
+                "BASKETBALL",
+                "KABADDI"
+              ]
             }
           },
           "district": {
@@ -1697,7 +2297,13 @@
           },
           "tierClassification": {
             "type": "string",
-            "enum": ["RURAL", "TIER_3", "TIER_2", "TIER_1", "METRO"],
+            "enum": [
+              "RURAL",
+              "TIER_3",
+              "TIER_2",
+              "TIER_1",
+              "METRO"
+            ],
             "default": "RURAL"
           },
           "heightCm": {
@@ -1713,14 +2319,26 @@
             "example": "RIGHT"
           }
         },
-        "required": ["dateOfBirth", "gender", "primarySport", "district", "state"]
+        "required": [
+          "dateOfBirth",
+          "gender",
+          "primarySport",
+          "district",
+          "state"
+        ]
       },
       "GovernmentIdInputDto": {
         "type": "object",
         "properties": {
           "idType": {
             "type": "string",
-            "enum": ["AADHAAR", "VOTER_ID", "PASSPORT", "DRIVING_LICENSE", "BIRTH_CERTIFICATE"],
+            "enum": [
+              "AADHAAR",
+              "VOTER_ID",
+              "PASSPORT",
+              "DRIVING_LICENSE",
+              "BIRTH_CERTIFICATE"
+            ],
             "example": "AADHAAR"
           },
           "idNumber": {
@@ -1728,7 +2346,10 @@
             "example": "5421 8901 2345"
           }
         },
-        "required": ["idType", "idNumber"]
+        "required": [
+          "idType",
+          "idNumber"
+        ]
       },
       "RegisterDto": {
         "type": "object",
@@ -1747,7 +2368,14 @@
           },
           "role": {
             "type": "string",
-            "enum": ["ATHLETE", "SCOUT", "UMPIRE", "ORGANIZER", "FEDERATION_ADMIN", "SUPER_ADMIN"],
+            "enum": [
+              "ATHLETE",
+              "SCOUT",
+              "UMPIRE",
+              "ORGANIZER",
+              "FEDERATION_ADMIN",
+              "SUPER_ADMIN"
+            ],
             "default": "ATHLETE"
           },
           "adminInviteCode": {
@@ -1781,7 +2409,14 @@
           },
           "role": {
             "type": "string",
-            "enum": ["ATHLETE", "SCOUT", "UMPIRE", "ORGANIZER", "FEDERATION_ADMIN", "SUPER_ADMIN"],
+            "enum": [
+              "ATHLETE",
+              "SCOUT",
+              "UMPIRE",
+              "ORGANIZER",
+              "FEDERATION_ADMIN",
+              "SUPER_ADMIN"
+            ],
             "example": "ATHLETE"
           },
           "isVerified": {
@@ -1794,7 +2429,14 @@
             "nullable": true
           }
         },
-        "required": ["id", "phone", "email", "role", "isVerified", "athleteProfileId"]
+        "required": [
+          "id",
+          "phone",
+          "email",
+          "role",
+          "isVerified",
+          "athleteProfileId"
+        ]
       },
       "AuthResponseDto": {
         "type": "object",
@@ -1820,7 +2462,13 @@
             "$ref": "#/components/schemas/AuthUserSummaryDto"
           }
         },
-        "required": ["accessToken", "refreshToken", "tokenType", "expiresIn", "user"]
+        "required": [
+          "accessToken",
+          "refreshToken",
+          "tokenType",
+          "expiresIn",
+          "user"
+        ]
       },
       "LoginDto": {
         "type": "object",
@@ -1841,7 +2489,9 @@
             "$ref": "#/components/schemas/GovernmentIdInputDto"
           }
         },
-        "required": ["governmentId"]
+        "required": [
+          "governmentId"
+        ]
       },
       "VerifyGovIdDto": {
         "type": "object",
@@ -1849,7 +2499,13 @@
           "idType": {
             "type": "string",
             "description": "Government ID document type",
-            "enum": ["AADHAAR", "VOTER_ID", "PASSPORT", "DRIVING_LICENSE", "BIRTH_CERTIFICATE"],
+            "enum": [
+              "AADHAAR",
+              "VOTER_ID",
+              "PASSPORT",
+              "DRIVING_LICENSE",
+              "BIRTH_CERTIFICATE"
+            ],
             "example": "AADHAAR"
           },
           "idNumber": {
@@ -1858,7 +2514,10 @@
             "example": "5421 8901 2345"
           }
         },
-        "required": ["idType", "idNumber"]
+        "required": [
+          "idType",
+          "idNumber"
+        ]
       },
       "RefreshTokenDto": {
         "type": "object",
@@ -1868,14 +2527,23 @@
             "description": "Valid refresh token string"
           }
         },
-        "required": ["refreshToken"]
+        "required": [
+          "refreshToken"
+        ]
       },
       "PassportSportInputDto": {
         "type": "object",
         "properties": {
           "sport": {
             "type": "string",
-            "enum": ["CRICKET", "FOOTBALL", "BADMINTON", "ATHLETICS", "BASKETBALL", "KABADDI"]
+            "enum": [
+              "CRICKET",
+              "FOOTBALL",
+              "BADMINTON",
+              "ATHLETICS",
+              "BASKETBALL",
+              "KABADDI"
+            ]
           },
           "primaryRole": {
             "type": "string"
@@ -1887,7 +2555,10 @@
             }
           }
         },
-        "required": ["sport", "primaryRole"]
+        "required": [
+          "sport",
+          "primaryRole"
+        ]
       },
       "UpdatePassportDto": {
         "type": "object",
@@ -1903,14 +2574,28 @@
           },
           "primarySport": {
             "type": "string",
-            "enum": ["CRICKET", "FOOTBALL", "BADMINTON", "ATHLETICS", "BASKETBALL", "KABADDI"],
+            "enum": [
+              "CRICKET",
+              "FOOTBALL",
+              "BADMINTON",
+              "ATHLETICS",
+              "BASKETBALL",
+              "KABADDI"
+            ],
             "example": "CRICKET"
           },
           "secondarySports": {
             "type": "array",
             "items": {
               "type": "string",
-              "enum": ["CRICKET", "FOOTBALL", "BADMINTON", "ATHLETICS", "BASKETBALL", "KABADDI"]
+              "enum": [
+                "CRICKET",
+                "FOOTBALL",
+                "BADMINTON",
+                "ATHLETICS",
+                "BASKETBALL",
+                "KABADDI"
+              ]
             }
           },
           "district": {
@@ -1923,7 +2608,13 @@
           },
           "tierClassification": {
             "type": "string",
-            "enum": ["RURAL", "TIER_3", "TIER_2", "TIER_1", "METRO"],
+            "enum": [
+              "RURAL",
+              "TIER_3",
+              "TIER_2",
+              "TIER_1",
+              "METRO"
+            ],
             "default": "RURAL"
           },
           "heightCm": {
@@ -1941,7 +2632,11 @@
           "dominantSide": {
             "type": "string",
             "example": "RIGHT",
-            "enum": ["RIGHT", "LEFT", "BOTH"]
+            "enum": [
+              "RIGHT",
+              "LEFT",
+              "BOTH"
+            ]
           },
           "locationLat": {
             "type": "number",
@@ -1995,7 +2690,11 @@
             "nullable": true
           }
         },
-        "required": ["heightCm", "weightKg", "dominantSide"]
+        "required": [
+          "heightCm",
+          "weightKg",
+          "dominantSide"
+        ]
       },
       "SportPassportRecordSummaryDto": {
         "type": "object",
@@ -2006,7 +2705,14 @@
           },
           "sport": {
             "type": "string",
-            "enum": ["CRICKET", "FOOTBALL", "BADMINTON", "ATHLETICS", "BASKETBALL", "KABADDI"],
+            "enum": [
+              "CRICKET",
+              "FOOTBALL",
+              "BADMINTON",
+              "ATHLETICS",
+              "BASKETBALL",
+              "KABADDI"
+            ],
             "example": "CRICKET"
           },
           "primaryRole": {
@@ -2014,7 +2720,9 @@
             "example": "ALL_ROUNDER"
           },
           "secondaryRoles": {
-            "example": ["FAST_BOWLER"],
+            "example": [
+              "FAST_BOWLER"
+            ],
             "type": "array",
             "items": {
               "type": "string"
@@ -2092,7 +2800,14 @@
           },
           "primarySport": {
             "type": "string",
-            "enum": ["CRICKET", "FOOTBALL", "BADMINTON", "ATHLETICS", "BASKETBALL", "KABADDI"],
+            "enum": [
+              "CRICKET",
+              "FOOTBALL",
+              "BADMINTON",
+              "ATHLETICS",
+              "BASKETBALL",
+              "KABADDI"
+            ],
             "example": "CRICKET",
             "nullable": true
           },
@@ -2100,7 +2815,14 @@
             "type": "array",
             "items": {
               "type": "string",
-              "enum": ["CRICKET", "FOOTBALL", "BADMINTON", "ATHLETICS", "BASKETBALL", "KABADDI"]
+              "enum": [
+                "CRICKET",
+                "FOOTBALL",
+                "BADMINTON",
+                "ATHLETICS",
+                "BASKETBALL",
+                "KABADDI"
+              ]
             }
           },
           "district": {
@@ -2113,7 +2835,13 @@
           },
           "tierClassification": {
             "type": "string",
-            "enum": ["RURAL", "TIER_3", "TIER_2", "TIER_1", "METRO"],
+            "enum": [
+              "RURAL",
+              "TIER_3",
+              "TIER_2",
+              "TIER_1",
+              "METRO"
+            ],
             "example": "RURAL"
           },
           "locationLat": {
@@ -2150,9 +2878,19 @@
             "type": "number",
             "example": 120
           },
+          "biomechanicalScore": {
+            "type": "number",
+            "example": 65,
+            "description": "Biomechanical form score (0-100)"
+          },
           "identityStatus": {
             "type": "string",
-            "enum": ["UNVERIFIED", "VERIFIED", "FLAGGED_DUPLICATE", "REVOKED"],
+            "enum": [
+              "UNVERIFIED",
+              "VERIFIED",
+              "FLAGGED_DUPLICATE",
+              "REVOKED"
+            ],
             "example": "VERIFIED"
           },
           "sportRecords": {
@@ -2188,6 +2926,7 @@
           "wearableScore",
           "matchPerfScore",
           "posturePoints",
+          "biomechanicalScore",
           "identityStatus",
           "sportRecords",
           "allBadges"
@@ -2207,14 +2946,28 @@
           },
           "primarySport": {
             "type": "string",
-            "enum": ["CRICKET", "FOOTBALL", "BADMINTON", "ATHLETICS", "BASKETBALL", "KABADDI"],
+            "enum": [
+              "CRICKET",
+              "FOOTBALL",
+              "BADMINTON",
+              "ATHLETICS",
+              "BASKETBALL",
+              "KABADDI"
+            ],
             "example": "CRICKET"
           },
           "secondarySports": {
             "type": "array",
             "items": {
               "type": "string",
-              "enum": ["CRICKET", "FOOTBALL", "BADMINTON", "ATHLETICS", "BASKETBALL", "KABADDI"]
+              "enum": [
+                "CRICKET",
+                "FOOTBALL",
+                "BADMINTON",
+                "ATHLETICS",
+                "BASKETBALL",
+                "KABADDI"
+              ]
             }
           },
           "district": {
@@ -2227,7 +2980,13 @@
           },
           "tierClassification": {
             "type": "string",
-            "enum": ["RURAL", "TIER_3", "TIER_2", "TIER_1", "METRO"],
+            "enum": [
+              "RURAL",
+              "TIER_3",
+              "TIER_2",
+              "TIER_1",
+              "METRO"
+            ],
             "default": "RURAL"
           },
           "heightCm": {
@@ -2245,7 +3004,11 @@
           "dominantSide": {
             "type": "string",
             "example": "RIGHT",
-            "enum": ["RIGHT", "LEFT", "BOTH"]
+            "enum": [
+              "RIGHT",
+              "LEFT",
+              "BOTH"
+            ]
           },
           "locationLat": {
             "type": "number",
@@ -2266,14 +3029,27 @@
             }
           }
         },
-        "required": ["dateOfBirth", "gender", "primarySport", "district", "state"]
+        "required": [
+          "dateOfBirth",
+          "gender",
+          "primarySport",
+          "district",
+          "state"
+        ]
       },
       "AddSportRecordDto": {
         "type": "object",
         "properties": {
           "sport": {
             "type": "string",
-            "enum": ["CRICKET", "FOOTBALL", "BADMINTON", "ATHLETICS", "BASKETBALL", "KABADDI"],
+            "enum": [
+              "CRICKET",
+              "FOOTBALL",
+              "BADMINTON",
+              "ATHLETICS",
+              "BASKETBALL",
+              "KABADDI"
+            ],
             "example": "CRICKET"
           },
           "primaryRole": {
@@ -2281,7 +3057,10 @@
             "example": "ALL_ROUNDER"
           },
           "secondaryRoles": {
-            "example": ["FAST_BOWLER", "MIDDLE_ORDER_BATSMAN"],
+            "example": [
+              "FAST_BOWLER",
+              "MIDDLE_ORDER_BATSMAN"
+            ],
             "type": "array",
             "items": {
               "type": "string"
@@ -2309,7 +3088,10 @@
             }
           }
         },
-        "required": ["sport", "primaryRole"]
+        "required": [
+          "sport",
+          "primaryRole"
+        ]
       },
       "UpdateTournamentDto": {
         "type": "object",
@@ -2319,7 +3101,14 @@
           },
           "sport": {
             "type": "string",
-            "enum": ["CRICKET", "FOOTBALL", "BADMINTON", "ATHLETICS", "BASKETBALL", "KABADDI"]
+            "enum": [
+              "CRICKET",
+              "FOOTBALL",
+              "BADMINTON",
+              "ATHLETICS",
+              "BASKETBALL",
+              "KABADDI"
+            ]
           },
           "status": {
             "type": "string",
@@ -2377,6 +3166,10 @@
           },
           "endDate": {
             "type": "string"
+          },
+          "rulesConfig": {
+            "type": "object",
+            "description": "Role quotas and first/second/third prize allocation"
           }
         }
       },
@@ -2468,7 +3261,14 @@
           },
           "sport": {
             "type": "string",
-            "enum": ["CRICKET", "FOOTBALL", "BADMINTON", "ATHLETICS", "BASKETBALL", "KABADDI"]
+            "enum": [
+              "CRICKET",
+              "FOOTBALL",
+              "BADMINTON",
+              "ATHLETICS",
+              "BASKETBALL",
+              "KABADDI"
+            ]
           },
           "status": {
             "type": "string",
@@ -2526,6 +3326,10 @@
           },
           "endDate": {
             "type": "string"
+          },
+          "rulesConfig": {
+            "type": "object",
+            "description": "Role quotas and first/second/third prize allocation"
           }
         },
         "required": [
@@ -2637,10 +3441,24 @@
           },
           "bracketType": {
             "type": "string",
-            "enum": ["SINGLE_ELIMINATION", "DOUBLE_ELIMINATION", "ROUND_ROBIN", "SWISS"]
+            "enum": [
+              "SINGLE_ELIMINATION",
+              "DOUBLE_ELIMINATION",
+              "ROUND_ROBIN",
+              "SWISS"
+            ]
+          },
+          "config": {
+            "type": "object",
+            "description": "Role quotas and first/second/third prize allocation"
           }
         },
-        "required": ["name", "tierName", "minGti", "maxGti"]
+        "required": [
+          "name",
+          "tierName",
+          "minGti",
+          "maxGti"
+        ]
       },
       "UpdateBracketDto": {
         "type": "object",
@@ -2671,7 +3489,16 @@
           },
           "bracketType": {
             "type": "string",
-            "enum": ["SINGLE_ELIMINATION", "DOUBLE_ELIMINATION", "ROUND_ROBIN", "SWISS"]
+            "enum": [
+              "SINGLE_ELIMINATION",
+              "DOUBLE_ELIMINATION",
+              "ROUND_ROBIN",
+              "SWISS"
+            ]
+          },
+          "config": {
+            "type": "object",
+            "description": "Role quotas and first/second/third prize allocation"
           }
         }
       },
@@ -2689,7 +3516,9 @@
             "example": "ALL_ROUNDER"
           }
         },
-        "required": ["primary_role"]
+        "required": [
+          "primary_role"
+        ]
       },
       "RosterMemberSummaryDto": {
         "type": "object",
@@ -2711,7 +3540,12 @@
             "example": 74.2
           }
         },
-        "required": ["user_id", "name", "assigned_role", "gti"]
+        "required": [
+          "user_id",
+          "name",
+          "assigned_role",
+          "gti"
+        ]
       },
       "FreeAgentStatusResponseDto": {
         "type": "object",
@@ -2805,19 +3639,17 @@
         "type": "object",
         "properties": {}
       },
+      "AcknowledgeSafetyDto": {
+        "type": "object",
+        "properties": {}
+      },
+      "ResumeSafetyDto": {
+        "type": "object",
+        "properties": {}
+      },
       "OutreachDto": {
         "type": "object",
-        "properties": {
-          "notes": {
-            "type": "string",
-            "maxLength": 4000
-          },
-          "outreachType": {
-            "type": "string",
-            "enum": ["TRIAL", "SCHOLARSHIP"]
-          }
-        },
-        "required": ["notes"]
+        "properties": {}
       },
       "AdminUserStatusDto": {
         "type": "object",
@@ -2828,6 +3660,10 @@
         "properties": {}
       },
       "RecordMatchResultDto": {
+        "type": "object",
+        "properties": {}
+      },
+      "OrganizerMatchResultDto": {
         "type": "object",
         "properties": {}
       }

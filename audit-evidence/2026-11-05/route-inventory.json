@@ -25,6 +25,11 @@
     "operationId": "AuthController_refreshToken_v1"
   },
   {
+    "method": "POST",
+    "path": "/api/v1/auth/logout",
+    "operationId": "AuthController_logout_v1"
+  },
+  {
     "method": "GET",
     "path": "/api/v1/auth/me",
     "operationId": "AuthController_getProfile_v1"
@@ -185,6 +190,16 @@
     "operationId": "SafetyController_resume_v1"
   },
   {
+    "method": "GET",
+    "path": "/api/v1/safety/tournaments/{tournamentId}/vitals",
+    "operationId": "SafetyController_vitals_v1"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/safety/tournaments/{tournamentId}/alerts",
+    "operationId": "SafetyController_history_v1"
+  },
+  {
     "method": "POST",
     "path": "/api/v1/gti/recalculate/{athleteId}",
     "operationId": "GtiController_recalculate_v1"
@@ -237,7 +252,12 @@
   {
     "method": "PATCH",
     "path": "/api/v1/admin/users/{id}/status",
-    "operationId": "AdminController_status_v1"
+    "operationId": "AdminController_status[0]_v1"
+  },
+  {
+    "method": "PATCH",
+    "path": "/api/v1/admin/users/{id}/governance",
+    "operationId": "AdminController_status[1]_v1"
   },
   {
     "method": "GET",
@@ -247,7 +267,12 @@
   {
     "method": "PATCH",
     "path": "/api/v1/admin/tournaments/{id}/status",
-    "operationId": "AdminController_moderate_v1"
+    "operationId": "AdminController_moderate[0]_v1"
+  },
+  {
+    "method": "PATCH",
+    "path": "/api/v1/admin/tournaments/{id}/moderation",
+    "operationId": "AdminController_moderate[1]_v1"
   },
   {
     "method": "GET",
@@ -263,5 +288,40 @@
     "method": "POST",
     "path": "/api/v1/tournaments/{tournamentId}/brackets/{bracketId}/matches/record-result",
     "operationId": "MatchResultsController_record_v1"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/tournaments/{tournamentId}/brackets/{bracketId}/matches/results",
+    "operationId": "MatchResultsController_results_v1"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/tournaments/organizer/summary",
+    "operationId": "OrganizerController_summary_v1"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/tournaments/organizer/mine",
+    "operationId": "OrganizerController_mine_v1"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/tournaments/{tournamentId}/brackets/{bracketId}/registrations",
+    "operationId": "OrganizerController_registrations_v1"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/tournaments/{tournamentId}/brackets/{bracketId}/free-agents/pool",
+    "operationId": "OrganizerController_pool_v1"
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/tournaments/{tournamentId}/brackets/{bracketId}/free-agents/process",
+    "operationId": "OrganizerController_process_v1"
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/tournaments/{tournamentId}/sandbagging-logs",
+    "operationId": "OrganizerController_logs_v1"
   }
 ]

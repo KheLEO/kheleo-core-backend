@@ -1,5 +1,5 @@
-# Node 20 compatibility is retained as requested. Deploy with NODE_IMAGE=node:24-alpine.
-ARG NODE_IMAGE=node:20-alpine
+# Node 22 is the production reference; CI also verifies Node 24.
+ARG NODE_IMAGE=node:22-alpine
 FROM ${NODE_IMAGE} AS base
 ENV COREPACK_HOME=/opt/corepack COREPACK_ENABLE_DOWNLOAD_PROMPT=0
 RUN apk add --no-cache openssl tini \
