@@ -1,0 +1,35 @@
+services:
+  - type: web
+    name: kheleo-core-backend
+    runtime: node
+    plan: standard
+    region: singapore
+    buildCommand: pnpm install --frozen-lockfile && pnpm prisma:generate && pnpm build
+    preDeployCommand: npx prisma migrate deploy
+    startCommand: pnpm start:prod
+    healthCheckPath: /api/v1/health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 3000
+      - key: APP_NAME
+        value: kheleo-core-backend
+      - key: DATABASE_URL
+        sync: false
+      - key: REDIS_HOST
+        sync: false
+      - key: REDIS_PORT
+        sync: false
+      - key: REDIS_PASSWORD
+        sync: false
+      - key: IDENTITY_PEPPER
+        sync: false
+      - key: IDENTITY_SALT_VERSION
+        value: "1"
+      - key: DRILL_HMAC_SECRET
+        sync: false
+      - key: TELEMETRY_SERVICE_HMAC_SECRET
+        sync: false
+      - key: CORS_ORIGINS
+        value: "http://localhost:3000"
