@@ -13,6 +13,7 @@ import {
   ValidationPipe,
 } from '@nestjs/common';
 import { LoginDto } from '../src/modules/auth/dto/login.dto';
+import { VerifyGovIdDto } from '../src/modules/auth/dto/verify-gov-id.dto';
 import { createAuthFixture, TEST_DOCUMENT } from './helpers/auth-passport.fixture';
 import { JwtStrategy } from '../src/modules/auth/strategies/jwt.strategy';
 import { decode } from 'jsonwebtoken';
@@ -163,12 +164,15 @@ describe('Phase 2: Identity, Anti-Account Reset, & Passport Tests', () => {
       );
     });
 
-    it('normalizes spaces and hyphens so identical IDs produce identical hashes', () => {
-      const hash1 = identityService.hashGovernmentId('5421 8901 2345', GovIdType.AADHAAR);
-      const hash2 = identityService.hashGovernmentId('5421-8901-2345', GovIdType.AADHAAR);
-      const hash3 = identityService.hashGovernmentId('542189012345', GovIdType.AADHAAR);
+    it('normalizes spaces and hyphens so identical IDs produce identical hashes and defaults to AADHAAR', () => {
+      const hash1 = identityService.hashGovernmentId('5421 8901 2345');
+      const hash2 = identityService.hashGovernmentId(' 5421-8901-2345 ');
+      const hash3 = identityService.hashGovernmentId('542189012345');
+      const hash4 = identityService.hashGovernmentId(' \t 5421--8901   2345 \n');
       assert.strictEqual(hash1, hash2);
       assert.strictEqual(hash2, hash3);
+      assert.strictEqual(hash3, hash4);
+      assert.strictEqual(hash1, identityService.hashGovernmentId('542189012345', GovIdType.AADHAAR));
     });
 
     it('produces different hashes for different ID types', () => {
@@ -268,7 +272,6 @@ describe('Phase 2 auth, identity rotation, and passport regressions', () => {
     [],
     'invalid',
     { idType: 'AADHAAR' },
-    { idNumber: TEST_DOCUMENT },
   ]) {
     it(`rejects malformed login governmentId ${JSON.stringify(governmentId)} through ValidationPipe`, async () => {
       const pipe = new ValidationPipe({
@@ -282,6 +285,120 @@ describe('Phase 2 auth, identity rotation, and passport regressions', () => {
       );
     });
   }
+
+  describe('Aadhaar-only verification, default idType, and status synchronization', () => {
+    it('defaults idType to AADHAAR and succeeds when registering without specifying idType', async () => {
+      const fixture = createAuthFixture();
+      fixture.state.user.identityRecord = null;
+      const result = await fixture.auth.register({
+        email: 'default-aadhaar-reg@fixture.test',
+        governmentId: {
+          idNumber: TEST_DOCUMENT,
+        } as unknown as { idType: GovIdType; idNumber: string },
+      });
+      assert.strictEqual(result.user.isVerified, true);
+      assert.strictEqual(fixture.state.createdIdentities[0]?.idType, GovIdType.AADHAAR);
+    });
+
+    it('defaults idType to AADHAAR and succeeds when logging in without specifying idType', async () => {
+      const fixture = createAuthFixture();
+      const pipe = new ValidationPipe({
+        transform: true,
+        whitelist: true,
+        forbidNonWhitelisted: true,
+      });
+      const transformedDto = (await pipe.transform(
+        {
+          phone: login.phone,
+          governmentId: { idNumber: TEST_DOCUMENT },
+        },
+        { type: 'body', metatype: LoginDto },
+      )) as LoginDto;
+
+      assert.strictEqual(transformedDto.governmentId.idType, GovIdType.AADHAAR);
+      const result = await fixture.auth.login(transformedDto);
+      assert.strictEqual(result.user.id, fixture.state.user.id);
+      assert.strictEqual(result.user.isVerified, true);
+    });
+
+    it('defaults idType to AADHAAR and succeeds when logging in with top-level idNumber', async () => {
+      const fixture = createAuthFixture();
+      const pipe = new ValidationPipe({
+        transform: true,
+        whitelist: true,
+        forbidNonWhitelisted: true,
+      });
+      const transformedDto = (await pipe.transform(
+        {
+          phone: login.phone,
+          idNumber: TEST_DOCUMENT,
+        },
+        { type: 'body', metatype: LoginDto },
+      )) as LoginDto;
+
+      assert.strictEqual(transformedDto.governmentId.idType, GovIdType.AADHAAR);
+      const result = await fixture.auth.login(transformedDto);
+      assert.strictEqual(result.user.id, fixture.state.user.id);
+      assert.strictEqual(result.user.isVerified, true);
+    });
+
+    it('defaults idType to AADHAAR and succeeds when verifying Government ID without specifying idType', async () => {
+      const fixture = createAuthFixture();
+      fixture.state.user.identityRecord = null;
+      const pipe = new ValidationPipe({
+        transform: true,
+        whitelist: true,
+        forbidNonWhitelisted: true,
+      });
+      const dto = (await pipe.transform(
+        { idNumber: TEST_DOCUMENT },
+        { type: 'body', metatype: VerifyGovIdDto },
+      )) as VerifyGovIdDto;
+
+      assert.strictEqual(dto.idType, GovIdType.AADHAAR);
+      const verification = await fixture.auth.verifyGovernmentId(fixture.state.user.id, dto);
+      assert.strictEqual(verification.verified, true);
+      assert.strictEqual(fixture.state.createdIdentities[0]?.idType, GovIdType.AADHAAR);
+    });
+
+    it('accepts nested governmentId object in VerifyGovIdDto without specifying idType', async () => {
+      const fixture = createAuthFixture();
+      fixture.state.user.identityRecord = null;
+      const pipe = new ValidationPipe({
+        transform: true,
+        whitelist: true,
+        forbidNonWhitelisted: true,
+      });
+      const dto = (await pipe.transform(
+        { governmentId: { idNumber: TEST_DOCUMENT } },
+        { type: 'body', metatype: VerifyGovIdDto },
+      )) as VerifyGovIdDto;
+
+      assert.strictEqual(dto.idType, GovIdType.AADHAAR);
+      assert.strictEqual(dto.idNumber, TEST_DOCUMENT);
+      const verification = await fixture.auth.verifyGovernmentId(fixture.state.user.id, dto);
+      assert.strictEqual(verification.verified, true);
+      assert.strictEqual(fixture.state.createdIdentities[0]?.idType, GovIdType.AADHAAR);
+    });
+
+    it('synchronizes isVerified: true and identityStatus: VERIFIED across auth/me and passport endpoints', async () => {
+      const fixture = createAuthFixture();
+      await fixture.passports.getOrCreatePassport(fixture.state.user.id);
+
+      const me = await fixture.auth.getMe({
+        sub: fixture.state.user.id,
+        role: fixture.state.user.role,
+        email: fixture.state.user.email ?? undefined,
+        phone: fixture.state.user.phone ?? undefined,
+      });
+      const passport = await fixture.passports.getPassport(fixture.state.user.id);
+
+      assert.strictEqual(me.isVerified, true);
+      assert.strictEqual(me.identityStatus, 'VERIFIED');
+      assert.strictEqual(passport.identityStatus, 'VERIFIED');
+      assert.strictEqual(passport.identityStatus, me.identityStatus);
+    });
+  });
 
   it('guards AuthService.login independently of the validation pipe', async () => {
     const fixture = createAuthFixture();

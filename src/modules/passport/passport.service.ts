@@ -78,6 +78,10 @@ export class PassportService {
    * Retrieves the full Digital Sports Passport:
    * Cross-sport performance logs, badges, and verified physical stats.
    */
+  async getPassport(userId: string, viewer?: AuthenticatedJwtUser): Promise<AthletePassportDto> {
+    return this.getPassportByUserId(userId, viewer);
+  }
+
   async getPassportByUserId(
     userId: string,
     viewer?: AuthenticatedJwtUser,
@@ -96,7 +100,17 @@ export class PassportService {
     if (viewer?.role === 'SCOUT' && viewer.sub !== userId && !profile.isScoutSearchable) {
       throw new ForbiddenException('Athlete profile is not opted into scout discovery');
     }
-    return this.mapToAthletePassportDto(profile);
+
+    let identityStatus = profile.user?.identityRecord?.status;
+    if (!identityStatus) {
+      const record = await this.prisma.identityVerification.findUnique({
+        where: { userId },
+        select: { status: true },
+      });
+      identityStatus = record?.status ?? VerificationStatus.UNVERIFIED;
+    }
+
+    return this.mapToAthletePassportDto(profile, identityStatus);
   }
 
   /**
@@ -200,7 +214,18 @@ export class PassportService {
       return { profile, previous };
     });
     await this.leaderboards?.syncAthlete(userId, result.previous);
-    return this.mapToAthletePassportDto(result.profile);
+
+    let identityStatus = result.profile.user?.identityRecord?.status;
+    if (!identityStatus) {
+      const record = await this.prisma.identityVerification.findUnique({
+        where: { userId },
+        select: { status: true },
+      });
+      identityStatus =
+        record?.status ?? user.identityRecord?.status ?? VerificationStatus.UNVERIFIED;
+    }
+
+    return this.mapToAthletePassportDto(result.profile, identityStatus);
   }
 
   async updatePassport(userId: string, dto: UpdatePassportDto): Promise<AthletePassportDto> {
@@ -315,7 +340,10 @@ export class PassportService {
   /**
    * Helper mapper to structure the complete AthletePassportDto.
    */
-  private mapToAthletePassportDto(profile: AthletePassportRecord): AthletePassportDto {
+  private mapToAthletePassportDto(
+    profile: AthletePassportRecord,
+    identityStatusOverride?: VerificationStatus,
+  ): AthletePassportDto {
     const sportRecords: SportPassportRecordSummaryDto[] = profile.sportRecords.map((sr) => ({
       id: sr.id,
       sport: sr.sport,
@@ -367,7 +395,10 @@ export class PassportService {
       matchPerfScore: Number(profile.matchPerfScore),
       posturePoints: profile.posturePoints,
       biomechanicalScore: Number(profile.biomechanicalScore ?? 0),
-      identityStatus: profile.user.identityRecord?.status ?? VerificationStatus.UNVERIFIED,
+      identityStatus:
+        identityStatusOverride ??
+        profile.user?.identityRecord?.status ??
+        VerificationStatus.UNVERIFIED,
       sportRecords,
       allBadges,
     };

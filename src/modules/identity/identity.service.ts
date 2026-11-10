@@ -1,4 +1,10 @@
-import { Injectable, ConflictException, NotFoundException, Logger } from '@nestjs/common';
+import {
+  Injectable,
+  ConflictException,
+  NotFoundException,
+  BadRequestException,
+  Logger,
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../../infrastructure/database/prisma.service';
 import { GovIdType, IdentityVerification, Prisma, VerificationStatus } from '@prisma/client';
@@ -33,7 +39,40 @@ export class IdentityService {
     return this.defaultSaltVersion;
   }
 
-  computeCandidateHashes(idNumber: string, idType: GovIdType): readonly string[] {
+  normalizeId(rawId: string): string {
+    return rawId.trim().replace(/[\s-]+/g, '').toUpperCase();
+  }
+
+  validateId(rawId: string, idType: GovIdType = GovIdType.AADHAAR): string {
+    const normalized = this.normalizeId(rawId);
+    const nodeEnv = this.configService.get<string>('app.nodeEnv') ?? process.env.NODE_ENV;
+    const appEnv = this.configService.get<string>('app.appEnv') ?? process.env.APP_ENV;
+    const isProduction = nodeEnv === 'production';
+    const isTest = appEnv === 'test' || nodeEnv === 'test';
+
+    if (idType === GovIdType.AADHAAR) {
+      if (isProduction && !isTest) {
+        if (!/^\d{12}$/.test(normalized)) {
+          throw new BadRequestException('Aadhaar must be a 12-digit numeric string in production.');
+        }
+      } else {
+        if (normalized.length < 4 || normalized.length > 12) {
+          throw new BadRequestException('Aadhaar ID must be between 4 and 12 characters.');
+        }
+      }
+    } else {
+      if (normalized.length < 4) {
+        throw new BadRequestException('Government ID must be at least 4 characters.');
+      }
+    }
+
+    return normalized;
+  }
+
+  computeCandidateHashes(
+    idNumber: string,
+    idType: GovIdType = GovIdType.AADHAAR,
+  ): readonly string[] {
     return [...new Set([this.defaultSaltVersion, 1])].map((version) =>
       this.hashGovernmentId(idNumber, idType, version),
     );
@@ -41,7 +80,7 @@ export class IdentityService {
 
   async findByGovernmentId(
     idNumber: string,
-    idType: GovIdType,
+    idType: GovIdType = GovIdType.AADHAAR,
   ): Promise<IdentityRecordWithUser | null> {
     for (const hash of this.computeCandidateHashes(idNumber, idType)) {
       const record = await this.findByIdHash(hash);
@@ -56,10 +95,10 @@ export class IdentityService {
    */
   hashGovernmentId(
     idNumber: string,
-    idType: GovIdType,
+    idType: GovIdType = GovIdType.AADHAAR,
     saltVersion = this.defaultSaltVersion,
   ): string {
-    const normalizedId = idNumber.trim().toUpperCase().replace(/[\s-]/g, '');
+    const normalizedId = this.normalizeId(idNumber);
     const domainSalt = `kheleo_anti_reset_v${saltVersion}_${idType}`;
     const payload = `${normalizedId}:${domainSalt}:${this.pepper}`;
 
@@ -104,8 +143,9 @@ export class IdentityService {
   async verifyAndBindGovernmentId(
     userId: string,
     idNumber: string,
-    idType: GovIdType,
+    idType: GovIdType = GovIdType.AADHAAR,
   ): Promise<IdentityVerification> {
+    this.validateId(idNumber, idType);
     const user = await this.prisma.user.findUnique({ where: { id: userId } });
     if (!user) {
       throw new NotFoundException(`User with ID ${userId} does not exist.`);

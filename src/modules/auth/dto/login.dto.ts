@@ -1,15 +1,18 @@
-import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { ApiPropertyOptional } from '@nestjs/swagger';
 import {
   IsDefined,
   IsEmail,
+  IsEnum,
   IsNotEmptyObject,
   IsOptional,
   IsString,
   MaxLength,
   Matches,
+  ValidateIf,
   ValidateNested,
 } from 'class-validator';
-import { Type } from 'class-transformer';
+import { Expose, plainToInstance, Transform, TransformFnParams, Type } from 'class-transformer';
+import { GovIdType } from '@prisma/client';
 import { GovernmentIdInputDto } from './register.dto';
 
 export class LoginDto {
@@ -34,10 +37,48 @@ export class LoginDto {
   @IsEmail()
   readonly email?: string;
 
-  @ApiProperty({ type: GovernmentIdInputDto })
-  @IsDefined()
+  @ApiPropertyOptional({ type: GovernmentIdInputDto })
+  @Expose()
+  @ValidateIf((o: LoginDto) => !o.idNumber || o.governmentId !== undefined)
+  @IsDefined({ message: 'governmentId or idNumber is required' })
   @IsNotEmptyObject()
   @ValidateNested()
   @Type(() => GovernmentIdInputDto)
+  @Transform(
+    ({ value, obj }: TransformFnParams) => {
+      const source =
+        value && typeof value === 'object' && !Array.isArray(value)
+          ? value
+          : obj?.idNumber
+            ? {
+                idNumber: obj.idNumber,
+                idType: obj.idType ?? GovIdType.AADHAAR,
+              }
+            : value;
+      if (source && typeof source === 'object' && !Array.isArray(source)) {
+        return plainToInstance(GovernmentIdInputDto, {
+          ...source,
+          idType: (source as { idType?: GovIdType }).idType ?? GovIdType.AADHAAR,
+        });
+      }
+      return value;
+    },
+    { toClassOnly: true },
+  )
   readonly governmentId!: GovernmentIdInputDto;
+
+  @ApiPropertyOptional({ example: '5421 8901 2345' })
+  @IsOptional()
+  @IsString()
+  readonly idNumber?: string;
+
+  @ApiPropertyOptional({ enum: GovIdType, example: GovIdType.AADHAAR, default: GovIdType.AADHAAR })
+  @IsOptional()
+  @IsEnum(GovIdType)
+  @Transform(
+    ({ value }: TransformFnParams): unknown =>
+      value === undefined || value === null ? GovIdType.AADHAAR : value,
+    { toClassOnly: true },
+  )
+  readonly idType?: GovIdType;
 }

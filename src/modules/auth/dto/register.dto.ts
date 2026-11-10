@@ -15,14 +15,19 @@ import {
   MinLength,
   ValidateNested,
 } from 'class-validator';
-import { Type } from 'class-transformer';
+import { Expose, plainToInstance, Transform, TransformFnParams, Type } from 'class-transformer';
 import { GovIdType, SportType, TierClassification, UserRole } from '@prisma/client';
 
 export class GovernmentIdInputDto {
-  @ApiProperty({ enum: GovIdType, example: GovIdType.AADHAAR })
+  @ApiPropertyOptional({ enum: GovIdType, example: GovIdType.AADHAAR, default: GovIdType.AADHAAR })
+  @IsOptional()
   @IsEnum(GovIdType)
-  @IsNotEmpty()
-  readonly idType!: GovIdType;
+  @Transform(
+    ({ value }: TransformFnParams): unknown =>
+      value === undefined || value === null ? GovIdType.AADHAAR : value,
+    { toClassOnly: true },
+  )
+  readonly idType: GovIdType = GovIdType.AADHAAR;
 
   @ApiProperty({ example: '5421 8901 2345' })
   @IsString()
@@ -130,8 +135,45 @@ export class RegisterDto {
   readonly profile?: InitialAthleteProfileDto;
 
   @ApiPropertyOptional({ type: GovernmentIdInputDto })
+  @Expose()
   @IsOptional()
   @ValidateNested()
   @Type(() => GovernmentIdInputDto)
+  @Transform(
+    ({ value, obj }: TransformFnParams) => {
+      const source =
+        value && typeof value === 'object' && !Array.isArray(value)
+          ? value
+          : obj?.idNumber
+            ? {
+                idNumber: obj.idNumber,
+                idType: obj.idType ?? GovIdType.AADHAAR,
+              }
+            : value;
+      if (source && typeof source === 'object' && !Array.isArray(source)) {
+        return plainToInstance(GovernmentIdInputDto, {
+          ...source,
+          idType: (source as { idType?: GovIdType }).idType ?? GovIdType.AADHAAR,
+        });
+      }
+      return value;
+    },
+    { toClassOnly: true },
+  )
   readonly governmentId?: GovernmentIdInputDto;
+
+  @ApiPropertyOptional({ example: '5421 8901 2345' })
+  @IsOptional()
+  @IsString()
+  readonly idNumber?: string;
+
+  @ApiPropertyOptional({ enum: GovIdType, example: GovIdType.AADHAAR, default: GovIdType.AADHAAR })
+  @IsOptional()
+  @IsEnum(GovIdType)
+  @Transform(
+    ({ value }: TransformFnParams): unknown =>
+      value === undefined || value === null ? GovIdType.AADHAAR : value,
+    { toClassOnly: true },
+  )
+  readonly idType?: GovIdType;
 }

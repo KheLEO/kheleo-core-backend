@@ -10,7 +10,7 @@ import {
   SetMetadata,
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth, ApiHeader } from '@nestjs/swagger';
-import { AuthService, GovernmentIdVerificationResponse } from './auth.service';
+import { AuthService, AuthMeResponse, GovernmentIdVerificationResponse } from './auth.service';
 import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
 import { VerifyGovIdDto } from './dto/verify-gov-id.dto';
@@ -130,9 +130,9 @@ export class AuthController {
   @Get('me')
   @UseGuards(JwtAuthGuard)
   @ApiBearerAuth()
-  @ApiOperation({ summary: 'Get current authenticated token identity' })
-  @ApiResponse({ status: HttpStatus.OK, description: 'Token payload' })
-  getProfile(@CurrentUser() user: AuthenticatedJwtUser): AuthenticatedJwtUser {
-    return user;
+  @ApiOperation({ summary: 'Get current authenticated token identity and identity verification status' })
+  @ApiResponse({ status: HttpStatus.OK, description: 'Token payload with synchronized identity verification status' })
+  async getProfile(@CurrentUser() user: AuthenticatedJwtUser): Promise<AuthMeResponse> {
+    return this.authService.getMe(user);
   }
 }

@@ -505,7 +505,6 @@ describe('Phase 2 auth and frontend HTTP contracts', () => {
         [],
         'invalid',
         { idType: 'AADHAAR' },
-        { idNumber: TEST_DOCUMENT },
       ]) {
         const response = await app.inject({
           method: 'POST',
@@ -516,6 +515,15 @@ describe('Phase 2 auth and frontend HTTP contracts', () => {
         assert.strictEqual(response.statusCode, 400, response.body);
         assert.strictEqual(response.body.includes('TypeError'), false);
       }
+
+      // Omitting idType automatically defaults to AADHAAR and succeeds
+      const validResponse = await app.inject({
+        method: 'POST',
+        url: '/api/v1/auth/login',
+        headers: authenticatedHeaders(),
+        payload: { phone: '+919000000001', governmentId: { idNumber: TEST_DOCUMENT } },
+      });
+      assert.strictEqual(validResponse.statusCode, 200, validResponse.body);
     });
   });
 

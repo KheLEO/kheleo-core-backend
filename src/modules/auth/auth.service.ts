@@ -19,8 +19,19 @@ import * as crypto from 'node:crypto';
 import { runSerializableTransaction } from '../../common/database/serializable-transaction';
 import { assertAccountAccess, assertIdentityAccess } from '../../common/auth/account-access';
 import { loadLocalJwtKeys, tokenDurationSeconds } from './jwt-keys';
+import { AuthenticatedJwtUser } from '../../common/guards/jwt-auth.guard';
 
 import { verifyContactProof } from './contact-proof';
+
+export interface AuthMeResponse {
+  readonly sub: string;
+  readonly role: UserRole;
+  readonly email: string | null;
+  readonly phone: string | null;
+  readonly isVerified: boolean;
+  readonly identityStatus: VerificationStatus | 'VERIFIED' | 'UNVERIFIED' | 'FLAGGED_DUPLICATE' | 'REVOKED';
+  readonly athleteProfileId: string | null;
+}
 
 export interface GovernmentIdVerificationResponse {
   readonly message: string;
@@ -67,10 +78,20 @@ export class AuthService {
       throw new ConflictException('Either phone number or email address is required.');
     }
 
+    const govId =
+      dto.governmentId ??
+      (dto.idNumber ? { idNumber: dto.idNumber, idType: dto.idType ?? GovIdType.AADHAAR } : undefined);
+    const effectiveGovId = govId
+      ? {
+          idNumber: govId.idNumber,
+          idType: govId.idType ?? GovIdType.AADHAAR,
+        }
+      : undefined;
+
     const publicRoles: readonly UserRole[] = [UserRole.ATHLETE, UserRole.ORGANIZER, UserRole.SCOUT];
     const role = dto.role ?? UserRole.ATHLETE;
     const pendingStaff = role === UserRole.ORGANIZER || role === UserRole.SCOUT;
-    if (pendingStaff && !dto.governmentId)
+    if (pendingStaff && !effectiveGovId)
       throw new BadRequestException(
         'Organizer and scout signup requires an identity for administrator review',
       );
@@ -99,15 +120,16 @@ export class AuthService {
     const production =
       this.configService.get<string>('app.nodeEnv', 'development') === 'production';
     let precomputedIdHash: string | null = null;
-    if (dto.governmentId) {
+    if (effectiveGovId) {
+      this.identityService.validateId(effectiveGovId.idNumber, effectiveGovId.idType);
       precomputedIdHash = this.identityService.hashGovernmentId(
-        dto.governmentId.idNumber,
-        dto.governmentId.idType,
+        effectiveGovId.idNumber,
+        effectiveGovId.idType,
       );
 
       const existingRecord = await this.identityService.findByGovernmentId(
-        dto.governmentId.idNumber,
-        dto.governmentId.idType,
+        effectiveGovId.idNumber,
+        effectiveGovId.idType,
       );
       if (existingRecord) {
         if (
@@ -247,12 +269,12 @@ export class AuthService {
         profileId = profile.id;
       }
 
-      if (dto.governmentId && precomputedIdHash) {
+      if (effectiveGovId && precomputedIdHash) {
         await tx.identityVerification.create({
           data: {
             userId: newUser.id,
             idHash: precomputedIdHash,
-            idType: dto.governmentId.idType,
+            idType: effectiveGovId.idType,
             saltVersion: this.identityService.getConfiguredSaltVersion(),
             status:
               production || pendingStaff
@@ -281,13 +303,26 @@ export class AuthService {
    * Log into Kheleo using phone or email.
    */
   async login(dto: LoginDto): Promise<AuthResponseDto> {
+    const govId =
+      dto.governmentId ??
+      (dto.idNumber ? { idNumber: dto.idNumber, idType: dto.idType ?? GovIdType.AADHAAR } : undefined);
+    const effectiveGovId = govId
+      ? {
+          idNumber: govId.idNumber,
+          idType: govId.idType ?? GovIdType.AADHAAR,
+        }
+      : undefined;
+
     if (
-      typeof dto.governmentId?.idNumber !== 'string' ||
-      !dto.governmentId.idNumber.trim() ||
-      !Object.values(GovIdType).includes(dto.governmentId.idType)
+      !effectiveGovId ||
+      typeof effectiveGovId.idNumber !== 'string' ||
+      !effectiveGovId.idNumber.trim() ||
+      !Object.values(GovIdType).includes(effectiveGovId.idType)
     ) {
       throw new BadRequestException('governmentId with idType and idNumber is required');
     }
+    this.identityService.validateId(effectiveGovId.idNumber, effectiveGovId.idType);
+
     if (!dto.phone && !dto.email) {
       throw new UnauthorizedException('Either phone or email must be provided to log in.');
     }
@@ -320,7 +355,7 @@ export class AuthService {
 
     const storedHash = Buffer.from(user.identityRecord.idHash, 'hex');
     const identityMatches = this.identityService
-      .computeCandidateHashes(dto.governmentId.idNumber, dto.governmentId.idType)
+      .computeCandidateHashes(effectiveGovId.idNumber, effectiveGovId.idType)
       .map(
         (hash) =>
           storedHash.length === 32 && crypto.timingSafeEqual(Buffer.from(hash, 'hex'), storedHash),
@@ -350,10 +385,15 @@ export class AuthService {
     userId: string,
     dto: VerifyGovIdDto,
   ): Promise<GovernmentIdVerificationResponse> {
+    const rawIdNumber = dto.idNumber ?? dto.governmentId?.idNumber;
+    const rawIdType = dto.idType ?? dto.governmentId?.idType ?? GovIdType.AADHAAR;
+    if (!rawIdNumber) {
+      throw new BadRequestException('Government ID number is required');
+    }
     const record = await this.identityService.verifyAndBindGovernmentId(
       userId,
-      dto.idNumber,
-      dto.idType,
+      rawIdNumber,
+      rawIdType,
     );
 
     const owner = await this.prisma.user.findUniqueOrThrow({
@@ -463,6 +503,51 @@ export class AuthService {
     });
     this.logger.log(`All refresh tokens revoked for user ${userId}`);
     return { success: true, message: 'Logged out successfully' };
+  }
+
+  /**
+   * Retrieves current authenticated user profile synchronized with IdentityVerification ledger.
+   */
+  async getMe(jwtUser: AuthenticatedJwtUser): Promise<AuthMeResponse> {
+    const user = await this.prisma.user.findUnique({
+      where: { id: jwtUser.sub },
+      select: {
+        id: true,
+        role: true,
+        email: true,
+        phone: true,
+        athleteProfile: { select: { id: true } },
+        identityRecord: { select: { status: true } },
+      },
+    });
+
+    if (!user) {
+      const isVerified = Boolean(jwtUser.identityVerified);
+      return {
+        sub: jwtUser.sub,
+        role: (jwtUser.role as UserRole) ?? UserRole.ATHLETE,
+        email: jwtUser.email ?? null,
+        phone: jwtUser.phone ?? null,
+        isVerified,
+        identityStatus: isVerified ? VerificationStatus.VERIFIED : VerificationStatus.UNVERIFIED,
+        athleteProfileId: null,
+      };
+    }
+
+    const identityStatus =
+      user.identityRecord?.status ??
+      (jwtUser.identityVerified ? VerificationStatus.VERIFIED : VerificationStatus.UNVERIFIED);
+    const isVerified = identityStatus === VerificationStatus.VERIFIED;
+
+    return {
+      sub: user.id,
+      role: user.role,
+      email: jwtUser.email ?? user.email ?? null,
+      phone: jwtUser.phone ?? user.phone ?? null,
+      isVerified,
+      identityStatus,
+      athleteProfileId: user.athleteProfile?.id ?? null,
+    };
   }
 
   /**
