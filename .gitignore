@@ -11,10 +11,6 @@ node_modules/
 .env.local
 .env.*.local
 
-# Keys & Certificates
-keys/
-
-
 # IDE
 .vscode/
 .idea/

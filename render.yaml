@@ -33,3 +33,4 @@ services:
         sync: false
       - key: CORS_ORIGINS
         value: "http://localhost:3000"
+

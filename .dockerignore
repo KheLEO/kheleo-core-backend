@@ -5,9 +5,6 @@ build
 .git
 .env
 .env.*
-keys
-**/*.pem
-**/*.key
 **/*.log
 coverage
 test
