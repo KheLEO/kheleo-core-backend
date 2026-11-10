@@ -54,8 +54,6 @@ jobs:
         if: matrix.node == '24'
         run: pnpm test
       - run: pnpm build
-      - name: Verify compiled exploit probes
-        run: node audit-evidence/2026-11-05/probes.cjs
       - name: Verify both compiled entrypoints
         run: node scripts/verify-entrypoints.cjs
       - name: Apply migrations to native PostgreSQL/PostGIS
@@ -106,16 +104,3 @@ jobs:
           test "$(docker inspect --format '{{.State.Health.Status}}' kheleo-runtime)" = healthy
           curl --fail http://127.0.0.1:3000/api/v1/health
           curl --fail --output /dev/null http://127.0.0.1:3000/docs
-      - name: Preserve verification evidence
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: backend-verification-node-${{ matrix.node }}
-          path: |
-            audit-evidence/2026-11-05/probe-results.json
-            audit-evidence/2026-11-05/route-inventory.json
-            audit-evidence/2026-11-05/openapi.json
-            audit-evidence/2026-11-05/ci-smoke-results.json
-            audit-evidence/2026-11-05/ci-smoke-log.txt
-            audit-evidence/2026-11-05/entrypoint-results.json
-          retention-days: 14

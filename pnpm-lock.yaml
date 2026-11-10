@@ -93,9 +93,6 @@ importers:
       '@nestjs/cli':
         specifier: ^11.0.5
         version: 11.0.24(@types/node@22.20.5)
-      '@nestjs/schematics':
-        specifier: ^11.0.2
-        version: 11.1.0(chokidar@4.0.3)(typescript@5.9.3)
       '@types/jsonwebtoken':
         specifier: ^9.0.9
         version: 9.0.10

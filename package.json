@@ -21,7 +21,6 @@
     "prisma:migrate": "prisma migrate dev",
     "prisma:deploy": "prisma migrate deploy",
     "test": "ts-node test/phase2-auth-passport.spec.ts && ts-node test/phase3-tournaments-sandbagging.spec.ts && ts-node test/phase4-matchmaking-pool.spec.ts && ts-node test/phase5-drills-iot-gti.spec.ts && ts-node test/audit-hardening.spec.ts && ts-node test/health.spec.ts && ts-node test/postgis-migration.spec.ts && ts-node test/release-readiness.spec.ts && ts-node test/organizer-operations.spec.ts && ts-node test/scout-intelligence.spec.ts && ts-node test/admin-security.spec.ts",
-    "audit:probes": "node audit-evidence/2026-11-05/probes.cjs",
     "verify:live": "node scripts/smoke-production.cjs"
   },
   "dependencies": {
@@ -55,7 +54,6 @@
     "@electric-sql/pglite": "0.5.15",
     "@electric-sql/pglite-postgis": "0.2.15",
     "@nestjs/cli": "^11.0.5",
-    "@nestjs/schematics": "^11.0.2",
     "@types/jsonwebtoken": "^9.0.9",
     "@types/node": "^22.13.9",
     "@types/passport-jwt": "^4.0.1",

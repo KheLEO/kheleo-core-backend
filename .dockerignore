@@ -8,6 +8,5 @@ build
 **/*.log
 coverage
 test
-audit-evidence
 .github
 .DS_Store

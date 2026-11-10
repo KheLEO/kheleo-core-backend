@@ -4,7 +4,6 @@ import { appConfig } from './app.config';
 import { authConfig } from './auth.config';
 import { databaseConfig } from './database.config';
 import { redisConfig } from './redis.config';
-import { queueConfig } from './queue.config';
 
 import { validateEnvironment } from './validate-environment';
 
@@ -13,7 +12,7 @@ import { validateEnvironment } from './validate-environment';
     ConfigModule.forRoot({
       isGlobal: true,
       validate: validateEnvironment,
-      load: [appConfig, authConfig, databaseConfig, redisConfig, queueConfig],
+      load: [appConfig, authConfig, databaseConfig, redisConfig],
       envFilePath: ['.env'],
     }),
   ],
