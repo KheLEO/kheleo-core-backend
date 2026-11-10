@@ -16,8 +16,13 @@ RUN DATABASE_URL=postgresql://generate:generate@127.0.0.1:5432/generate pnpm ins
 COPY tsconfig.json tsconfig.build.json nest-cli.json ./
 COPY scripts/create-entrypoint-shim.cjs ./scripts/create-entrypoint-shim.cjs
 COPY src ./src
-COPY keys ./keys
-RUN pnpm prisma:generate && pnpm build \
+COPY keys* ./keys/
+RUN mkdir -p keys \
+    && if [ ! -f keys/private.pem ]; then \
+         openssl genrsa -out keys/private.pem 2048 \
+         && openssl rsa -in keys/private.pem -outform PEM -pubout -out keys/public.pem; \
+       fi \
+    && pnpm prisma:generate && pnpm build \
     && pnpm prune --prod
 
 FROM base AS production
