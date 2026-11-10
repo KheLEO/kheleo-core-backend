@@ -1,5 +1,6 @@
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
+const path = require('node:path');
 const { spawn } = require('node:child_process');
 const { createServer } = require('node:net');
 const { randomUUID, randomBytes, createHmac } = require('node:crypto');
@@ -377,6 +378,10 @@ async function main() {
       dashboard: true,
       outboxDrained: true,
     };
+    const outputDir = path.dirname(outputPath);
+    if (!fs.existsSync(outputDir)) {
+      fs.mkdirSync(outputDir, { recursive: true });
+    }
     fs.writeFileSync(outputPath, JSON.stringify(report, null, 2) + '\n');
     process.stdout.write(JSON.stringify(report, null, 2) + '\n');
   } catch (error) {
@@ -388,7 +393,12 @@ async function main() {
       const value = process.env[name];
       if (value) safeLogs = safeLogs.split(value).join('[redacted]');
     }
-    fs.writeFileSync('audit-evidence/2026-11-05/ci-smoke-log.txt', safeLogs);
+    const logPath = 'audit-evidence/2026-11-05/ci-smoke-log.txt';
+    const logDir = path.dirname(logPath);
+    if (!fs.existsSync(logDir)) {
+      fs.mkdirSync(logDir, { recursive: true });
+    }
+    fs.writeFileSync(logPath, safeLogs);
     process.stderr.write(safeLogs + '\n');
     throw error;
   } finally {

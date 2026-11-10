@@ -1,4 +1,5 @@
 const fs = require('node:fs');
+const path = require('node:path');
 const { spawn } = require('node:child_process');
 async function verify(command, args) {
   return new Promise((resolve, reject) => {
@@ -71,8 +72,13 @@ async function verify(command, args) {
     scope:
       'Entrypoint/module resolution only; native production boot is verified separately by smoke-production.cjs',
   };
+  const targetPath = 'audit-evidence/2026-11-05/entrypoint-results.json';
+  const targetDir = path.dirname(targetPath);
+  if (!fs.existsSync(targetDir)) {
+    fs.mkdirSync(targetDir, { recursive: true });
+  }
   fs.writeFileSync(
-    'audit-evidence/2026-11-05/entrypoint-results.json',
+    targetPath,
     JSON.stringify(report, null, 2) + '\n',
   );
   process.stdout.write(JSON.stringify(report, null, 2) + '\n');
