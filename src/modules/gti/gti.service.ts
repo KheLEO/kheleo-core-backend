@@ -6,6 +6,7 @@ import { WsEventGateway } from '../../infrastructure/realtime/ws-event.gateway';
 import { runSerializableTransaction } from '../../common/database/serializable-transaction';
 import { LeaderboardsService } from '../leaderboards/leaderboards.service';
 import { LeaderboardPage, LeaderboardsQueryDto } from '../leaderboards/leaderboards.dto';
+import { normalizeLocationName } from '../../common/constants/india-locations';
 import { assertAccountAccess } from '../../common/auth/account-access';
 
 export interface GtiComputationResult {
@@ -181,7 +182,12 @@ export class GtiService {
     return this.recalculateAthleteGti(athleteId);
   }
   async getLeaderboards(query: LeaderboardsQueryDto): Promise<LeaderboardPage> {
-    return this.leaderboards.list(query);
+    const normalizedQuery: LeaderboardsQueryDto = {
+      ...query,
+      state: query.state ? normalizeLocationName(query.state) : undefined,
+      district: query.district ? normalizeLocationName(query.district) : undefined,
+    };
+    return this.leaderboards.list(normalizedQuery);
   }
   async getLeaderboardRank(
     sport: string,
@@ -189,6 +195,7 @@ export class GtiService {
     district?: string,
   ): Promise<number | null> {
     if (!Object.values(SportType).some((value) => value === sport)) return null;
-    return this.leaderboards.rank(sport as SportType, athleteId, district);
+    const normalizedDistrict = district ? normalizeLocationName(district) : undefined;
+    return this.leaderboards.rank(sport as SportType, athleteId, normalizedDistrict);
   }
 }

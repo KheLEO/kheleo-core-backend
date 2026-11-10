@@ -2,6 +2,7 @@ import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../infrastructure/database/prisma.service';
 import { ScoutFeedQueryDto } from './dto/scout-feed-query.dto';
 import { Prisma, SportType, VerificationStatus } from '@prisma/client';
+import { normalizeLocationName } from '../../common/constants/india-locations';
 
 export interface ProspectSummary {
   readonly athlete_id: string;
@@ -53,7 +54,24 @@ export class ScoutsService {
     }
 
     if (query.district) {
-      where.district = { equals: query.district, mode: 'insensitive' };
+      const canonicalDistrict = normalizeLocationName(query.district);
+      const districtHyphen = canonicalDistrict.replace(/\s+/g, '-');
+      const districtSpace = canonicalDistrict.replace(/-/g, ' ');
+      const rawHyphen = query.district.replace(/\s+/g, '-');
+      const rawSpace = query.district.replace(/-/g, ' ');
+      where.district = {
+        in: [
+          ...new Set([
+            query.district,
+            canonicalDistrict,
+            districtHyphen,
+            districtSpace,
+            rawHyphen,
+            rawSpace,
+          ]),
+        ],
+        mode: 'insensitive',
+      };
     }
 
     const [total, profiles] = await Promise.all([
@@ -135,7 +153,26 @@ export class ScoutsService {
       },
     };
     if (sport) where.sport = sport;
-    if (district) where.district = district;
+    if (district) {
+      const canonicalDistrict = normalizeLocationName(district);
+      const districtHyphen = canonicalDistrict.replace(/\s+/g, '-');
+      const districtSpace = canonicalDistrict.replace(/-/g, ' ');
+      const rawHyphen = district.replace(/\s+/g, '-');
+      const rawSpace = district.replace(/-/g, ' ');
+      where.district = {
+        in: [
+          ...new Set([
+            district,
+            canonicalDistrict,
+            districtHyphen,
+            districtSpace,
+            rawHyphen,
+            rawSpace,
+          ]),
+        ],
+        mode: 'insensitive',
+      };
+    }
 
     return this.prisma.scoutAlert.findMany({
       where,

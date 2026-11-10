@@ -14,11 +14,12 @@ import {
   ValidateNested,
 } from 'class-validator';
 import { SportType, TierClassification } from '@prisma/client';
-import { Type } from 'class-transformer';
+import { Transform, TransformFnParams, Type } from 'class-transformer';
 import {
   FieldAliases,
   NestedArrayAliases,
 } from '../../../common/decorators/field-aliases.decorator';
+import { normalizeDominantSide } from '../../../common/constants/india-locations';
 
 export class PassportSportInputDto {
   @ApiProperty({ enum: SportType })
@@ -102,10 +103,13 @@ export class CreatePassportDto {
   @FieldAliases('weight_kg')
   readonly weightKg?: number;
 
-  @ApiPropertyOptional({ example: 'RIGHT', enum: ['RIGHT', 'LEFT', 'BOTH'] })
+  @ApiPropertyOptional({ example: 'RIGHT', enum: ['RIGHT', 'LEFT', 'BOTH', 'AMBIDEXTROUS'] })
   @IsOptional()
   @IsString()
   @FieldAliases('dominant_side')
+  @Transform(({ value }: TransformFnParams) => normalizeDominantSide(value) ?? value, {
+    toClassOnly: true,
+  })
   readonly dominantSide?: string;
 
   @ApiPropertyOptional({ example: 25.3176 })

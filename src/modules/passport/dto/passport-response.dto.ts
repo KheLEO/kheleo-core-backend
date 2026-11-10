@@ -78,6 +78,9 @@ export class AthletePassportDto {
   @ApiProperty({ nullable: true, type: Number })
   readonly locationLng!: number | null;
 
+  @ApiProperty({ example: 'RIGHT', nullable: true })
+  readonly dominantSide?: string | null;
+
   @ApiProperty()
   readonly isScoutSearchable!: boolean;
 

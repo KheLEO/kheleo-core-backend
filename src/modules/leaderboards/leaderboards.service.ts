@@ -3,6 +3,7 @@ import { isUUID } from 'class-validator';
 import { Prisma, SportType, VerificationStatus } from '@prisma/client';
 import { PrismaService } from '../../infrastructure/database/prisma.service';
 import { RedisService } from '../../infrastructure/cache/redis.service';
+import { normalizeLocationName } from '../../common/constants/india-locations';
 import {
   LeaderboardCursor,
   LeaderboardRow,
@@ -34,18 +35,20 @@ export class LeaderboardsService {
       const keysFor = (
         value:
           { primarySport: SportType | null; state: string; district: string } | null | undefined,
-      ): string[] =>
-        value?.primarySport
-          ? [
-              `leaderboard:global:ALL`,
-              `leaderboard:state:${value.state}:ALL`,
-              `leaderboard:district:${value.state}:${value.district}:ALL`,
-              `leaderboard:global:${value.primarySport}`,
-              `leaderboard:state:${value.state}:${value.primarySport}`,
-              `leaderboard:district:${value.district}:${value.primarySport}`,
-              `leaderboard:district:${value.state}:${value.district}:${value.primarySport}`,
-            ]
-          : [];
+      ): string[] => {
+        if (!value?.primarySport) return [];
+        const state = normalizeLocationName(value.state);
+        const district = normalizeLocationName(value.district);
+        return [
+          `leaderboard:global:ALL`,
+          `leaderboard:state:${state}:ALL`,
+          `leaderboard:district:${state}:${district}:ALL`,
+          `leaderboard:global:${value.primarySport}`,
+          `leaderboard:state:${state}:${value.primarySport}`,
+          `leaderboard:district:${district}:${value.primarySport}`,
+          `leaderboard:district:${state}:${district}:${value.primarySport}`,
+        ];
+      };
       const keys =
         profile &&
         profile.primarySport &&
@@ -84,11 +87,13 @@ export class LeaderboardsService {
       throw new BadRequestException('state is required for STATE and DISTRICT scopes');
     if (query.scope === LeaderboardScope.DISTRICT && !query.district?.trim())
       throw new BadRequestException('district is required for DISTRICT scope');
+    const state = query.state ? normalizeLocationName(query.state) : '';
+    const district = query.district ? normalizeLocationName(query.district) : '';
     return query.scope === LeaderboardScope.NATIONAL
       ? `leaderboard:global:${query.sport ?? 'ALL'}`
       : query.scope === LeaderboardScope.STATE
-        ? `leaderboard:state:${query.state}:${query.sport ?? 'ALL'}`
-        : `leaderboard:district:${query.state}:${query.district}:${query.sport ?? 'ALL'}`;
+        ? `leaderboard:state:${state}:${query.sport ?? 'ALL'}`
+        : `leaderboard:district:${state}:${district}:${query.sport ?? 'ALL'}`;
   }
   private cursor(raw: string | undefined, scope: string): LeaderboardCursor | undefined {
     if (!raw) return undefined;
@@ -161,12 +166,26 @@ export class LeaderboardsService {
     const scopeKey = filtered ? `${key}:${query.tier ?? 'ALL'}:${query.gender ?? ''}` : key;
     if (query.cursor && query.cursor_id)
       throw new BadRequestException('Use one leaderboard cursor');
+    const normalizedState = query.state ? normalizeLocationName(query.state) : undefined;
+    const normalizedDistrict = query.district ? normalizeLocationName(query.district) : undefined;
     const where: Prisma.AthleteProfileWhereInput = {
       primarySport: query.sport && query.sport !== 'ALL' ? query.sport : { not: null },
       isScoutSearchable: true,
       user: { role: 'ATHLETE', isActive: true, identityRecord: { status: 'VERIFIED' } },
-      ...(query.scope !== LeaderboardScope.NATIONAL ? { state: query.state } : {}),
-      ...(query.scope === LeaderboardScope.DISTRICT ? { district: query.district } : {}),
+      ...(query.scope !== LeaderboardScope.NATIONAL
+        ? {
+            state: normalizedState
+              ? { in: [query.state!, normalizedState], mode: 'insensitive' }
+              : query.state,
+          }
+        : {}),
+      ...(query.scope === LeaderboardScope.DISTRICT
+        ? {
+            district: normalizedDistrict
+              ? { in: [query.district!, normalizedDistrict], mode: 'insensitive' }
+              : query.district,
+          }
+        : {}),
       ...(query.tier === 'RURAL_AND_TIER_2_3'
         ? {
             OR: [
@@ -247,11 +266,15 @@ export class LeaderboardsService {
     const state =
       query.scope === LeaderboardScope.NATIONAL
         ? Prisma.empty
-        : Prisma.sql`AND p.state = ${query.state}`;
+        : normalizedState
+          ? Prisma.sql`AND (p.state ILIKE ${query.state} OR p.state ILIKE ${normalizedState} OR REPLACE(p.state, '-', ' ') ILIKE REPLACE(${query.state}, '-', ' '))`
+          : Prisma.sql`AND p.state = ${query.state}`;
     const district =
       query.scope !== LeaderboardScope.DISTRICT
         ? Prisma.empty
-        : Prisma.sql`AND p.district = ${query.district}`;
+        : normalizedDistrict
+          ? Prisma.sql`AND (p.district ILIKE ${query.district} OR p.district ILIKE ${normalizedDistrict} OR REPLACE(p.district, '-', ' ') ILIKE REPLACE(${query.district}, '-', ' '))`
+          : Prisma.sql`AND p.district = ${query.district}`;
     const sport =
       query.sport && query.sport !== 'ALL'
         ? Prisma.sql`AND p.primary_sport = ${query.sport}::"SportType"`
@@ -283,11 +306,15 @@ export class LeaderboardsService {
   }
 
   async rank(sport: SportType, athleteId: string, district?: string): Promise<number | null> {
+    const normalizedDistrict = district ? normalizeLocationName(district) : undefined;
+    const districtFilter = district
+      ? Prisma.sql`AND (p.district ILIKE ${district} OR p.district ILIKE ${normalizedDistrict!} OR REPLACE(p.district, '-', ' ') ILIKE REPLACE(${district}, '-', ' '))`
+      : Prisma.empty;
     const rows = await this.prisma.$queryRaw<Array<{ rank: number }>>(Prisma.sql`
       WITH ranked AS (
         SELECT p.user_id, ROW_NUMBER() OVER (ORDER BY COALESCE(NULLIF(p.gti,0),p.current_gti,0) DESC,p.user_id DESC)::int AS rank
         FROM athlete_profiles p JOIN users u ON u.id=p.user_id JOIN identity_verifications i ON i.user_id=u.id
-        WHERE p.primary_sport=${sport}::"SportType" AND p.is_scout_searchable AND u.is_active AND u.role='ATHLETE' AND i.status='VERIFIED' ${district ? Prisma.sql`AND p.district=${district}` : Prisma.empty}
+        WHERE p.primary_sport=${sport}::"SportType" AND p.is_scout_searchable AND u.is_active AND u.role='ATHLETE' AND i.status='VERIFIED' ${districtFilter}
       ) SELECT rank FROM ranked WHERE user_id=${athleteId}::uuid`);
     return rows[0]?.rank ?? null;
   }

@@ -582,6 +582,23 @@ describe('Phase 2 auth, identity rotation, and passport regressions', () => {
       ForbiddenException,
     );
   });
+
+  it('normalizes Jharkhand Seraikela-Kharsawan district and auto-populates centroid when GPS omitted', async () => {
+    const fixture = createAuthFixture();
+    const result = await fixture.passports.upsertPassport(fixture.state.user.id, {
+      state: 'Jharkhand',
+      district: 'Seraikela-Kharsawan',
+      dominantSide: 'BOTH',
+    });
+    assert.strictEqual(result.state, 'Jharkhand');
+    assert.strictEqual(result.district, 'Seraikela Kharsawan');
+    assert.strictEqual(result.dominantSide, 'AMBIDEXTROUS');
+    assert.strictEqual(result.physicalStats.dominantSide, 'AMBIDEXTROUS');
+    assert.strictEqual(typeof result.locationLat, 'number');
+    assert.strictEqual(typeof result.locationLng, 'number');
+    assert.strictEqual(result.locationLat, 22.78);
+    assert.strictEqual(result.locationLng, 86.01);
+  });
 });
 
 describe('Prompt 1 token families and passport trust boundaries', () => {

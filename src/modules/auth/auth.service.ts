@@ -20,6 +20,11 @@ import { runSerializableTransaction } from '../../common/database/serializable-t
 import { assertAccountAccess, assertIdentityAccess } from '../../common/auth/account-access';
 import { loadLocalJwtKeys, tokenDurationSeconds } from './jwt-keys';
 import { AuthenticatedJwtUser } from '../../common/guards/jwt-auth.guard';
+import {
+  isValidStateAndDistrict,
+  normalizeDominantSide,
+  resolveCoordinatesForLocation,
+} from '../../common/constants/india-locations';
 
 import { verifyContactProof } from './contact-proof';
 
@@ -248,6 +253,28 @@ export class AuthService {
 
       let profileId: string | undefined;
       if (role === UserRole.ATHLETE && dto.profile) {
+        const locationValidation = isValidStateAndDistrict(dto.profile.state, dto.profile.district);
+        const appEnv = this.configService.get<string>('app.appEnv') ?? process.env.APP_ENV;
+        const isTest = appEnv === 'test' || this.configService.get<string>('app.nodeEnv') === 'test';
+        if (production && !isTest && !locationValidation.valid) {
+          throw new BadRequestException(
+            `Invalid state and district combination: ${dto.profile.state}, ${dto.profile.district}`,
+          );
+        }
+
+        const canonicalState = locationValidation.canonicalState || dto.profile.state.trim();
+        const canonicalDistrict =
+          locationValidation.canonicalDistrict || dto.profile.district.trim();
+
+        const coords = resolveCoordinatesForLocation(
+          canonicalState,
+          canonicalDistrict,
+          dto.profile.locationLat,
+          dto.profile.locationLng,
+        );
+
+        const normalizedDominant = normalizeDominantSide(dto.profile.dominantSide);
+
         const profile = await tx.athleteProfile.create({
           data: {
             userId: newUser.id,
@@ -255,12 +282,14 @@ export class AuthService {
             gender: dto.profile.gender,
             primarySport: dto.profile.primarySport,
             secondarySports: dto.profile.secondarySports ?? [],
-            district: dto.profile.district,
-            state: dto.profile.state,
+            district: canonicalDistrict,
+            state: canonicalState,
             tierClassification: dto.profile.tierClassification,
             heightCm: dto.profile.heightCm,
             weightKg: dto.profile.weightKg,
-            dominantSide: dto.profile.dominantSide,
+            dominantSide: normalizedDominant ?? dto.profile.dominantSide,
+            locationLat: coords.lat,
+            locationLng: coords.lng,
             currentGti: 30.0,
             wearableScore: 50.0,
             matchPerfScore: 50.0,

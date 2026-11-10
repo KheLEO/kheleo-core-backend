@@ -4,7 +4,9 @@ import {
   NotFoundException,
   ConflictException,
   ForbiddenException,
+  BadRequestException,
 } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../../infrastructure/database/prisma.service';
 import { CreatePassportDto } from './dto/create-passport.dto';
 import { UpdatePassportDto } from './dto/update-passport.dto';
@@ -16,6 +18,11 @@ import { Prisma, SportPassportRecord, VerificationStatus } from '@prisma/client'
 import { runSerializableTransaction } from '../../common/database/serializable-transaction';
 import { assertAccountAccess } from '../../common/auth/account-access';
 import { AuthenticatedJwtUser } from '../../common/guards/jwt-auth.guard';
+import {
+  isValidStateAndDistrict,
+  normalizeDominantSide,
+  resolveCoordinatesForLocation,
+} from '../../common/constants/india-locations';
 
 import { LeaderboardsService } from '../leaderboards/leaderboards.service';
 
@@ -72,6 +79,7 @@ export class PassportService {
   constructor(
     private readonly prisma: PrismaService,
     @Optional() private readonly leaderboards?: LeaderboardsService,
+    @Optional() private readonly configService?: ConfigService,
   ) {}
 
   /**
@@ -140,19 +148,53 @@ export class PassportService {
     });
     if (!user) throw new NotFoundException('User does not exist.');
     assertAccountAccess(user);
+    let canonicalState = dto.state;
+    let canonicalDistrict = dto.district;
+    if (dto.state || dto.district) {
+      const locationValidation = isValidStateAndDistrict(dto.state ?? '', dto.district ?? '');
+      if (locationValidation.canonicalState) {
+        canonicalState = locationValidation.canonicalState;
+      }
+      if (locationValidation.canonicalDistrict) {
+        canonicalDistrict = locationValidation.canonicalDistrict;
+      }
+
+      const nodeEnv = this.configService?.get<string>('app.nodeEnv') ?? process.env.NODE_ENV;
+      const appEnv = this.configService?.get<string>('app.appEnv') ?? process.env.APP_ENV;
+      const isProduction = nodeEnv === 'production';
+      const isTest = appEnv === 'test' || nodeEnv === 'test';
+      if (isProduction && !isTest && dto.state && dto.district && !locationValidation.valid) {
+        throw new BadRequestException(
+          `Invalid state and district combination: ${dto.state}, ${dto.district}`,
+        );
+      }
+    }
+
+    const resolvedCoords =
+      canonicalState || canonicalDistrict || dto.locationLat != null || dto.locationLng != null
+        ? resolveCoordinatesForLocation(
+            canonicalState ?? '',
+            canonicalDistrict ?? '',
+            dto.locationLat,
+            dto.locationLng,
+          )
+        : undefined;
+
+    const normalizedDominant = normalizeDominantSide(dto.dominantSide);
+
     const metadata = {
       dateOfBirth: dto.dateOfBirth ? new Date(dto.dateOfBirth) : undefined,
       gender: dto.gender,
       primarySport: dto.primarySport,
       secondarySports: dto.secondarySports ?? undefined,
-      district: dto.district ?? undefined,
-      state: dto.state ?? undefined,
+      district: canonicalDistrict ?? undefined,
+      state: canonicalState ?? undefined,
       tierClassification: dto.tierClassification ?? undefined,
       heightCm: dto.heightCm,
       weightKg: dto.weightKg,
-      dominantSide: dto.dominantSide,
-      locationLat: dto.locationLat,
-      locationLng: dto.locationLng,
+      dominantSide: normalizedDominant ?? dto.dominantSide,
+      locationLat: dto.locationLat ?? resolvedCoords?.lat,
+      locationLng: dto.locationLng ?? resolvedCoords?.lng,
       isScoutSearchable: dto.isScoutSearchable ?? undefined,
     };
     const result = await runSerializableTransaction(this.prisma, async (transaction) => {
@@ -171,6 +213,16 @@ export class PassportService {
           primarySport: metadata.primarySport ?? null,
           district: metadata.district ?? '',
           state: metadata.state ?? '',
+          locationLat:
+            metadata.locationLat ??
+            (resolvedCoords
+              ? resolvedCoords.lat
+              : resolveCoordinatesForLocation(metadata.state ?? '', metadata.district ?? '').lat),
+          locationLng:
+            metadata.locationLng ??
+            (resolvedCoords
+              ? resolvedCoords.lng
+              : resolveCoordinatesForLocation(metadata.state ?? '', metadata.district ?? '').lng),
           isScoutSearchable: metadata.isScoutSearchable ?? false,
         },
         select: { id: true, primarySport: true, secondarySports: true },
@@ -375,9 +427,16 @@ export class PassportService {
       district: profile.district,
       state: profile.state,
       tierClassification: profile.tierClassification,
-      locationLat: profile.locationLat,
-      locationLng: profile.locationLng,
+      locationLat:
+        profile.locationLat != null
+          ? Number(profile.locationLat)
+          : resolveCoordinatesForLocation(profile.state, profile.district).lat,
+      locationLng:
+        profile.locationLng != null
+          ? Number(profile.locationLng)
+          : resolveCoordinatesForLocation(profile.state, profile.district).lng,
       isScoutSearchable: profile.isScoutSearchable,
+      dominantSide: normalizeDominantSide(profile.dominantSide) ?? profile.dominantSide,
       isProfileComplete: Boolean(
         profile.dateOfBirth &&
         profile.gender &&
@@ -388,7 +447,7 @@ export class PassportService {
       physicalStats: {
         heightCm: profile.heightCm ? Number(profile.heightCm) : null,
         weightKg: profile.weightKg ? Number(profile.weightKg) : null,
-        dominantSide: profile.dominantSide,
+        dominantSide: normalizeDominantSide(profile.dominantSide) ?? profile.dominantSide,
       },
       currentGti: Number(profile.currentGti),
       wearableScore: Number(profile.wearableScore),

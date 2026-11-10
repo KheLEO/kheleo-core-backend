@@ -1,5 +1,9 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../../infrastructure/database/prisma.service';
+import {
+  normalizeLocationName,
+  resolveCoordinatesForLocation,
+} from '../../common/constants/india-locations';
 
 export interface DistrictHeatmapRecord {
   readonly state: string;
@@ -61,6 +65,13 @@ export class HeatmapsService {
           } catch {
             parsedCentroid = null;
           }
+        }
+        if (!parsedCentroid && r.state && r.district) {
+          const coords = resolveCoordinatesForLocation(r.state, r.district);
+          parsedCentroid = {
+            type: 'Point',
+            coordinates: [Number(coords.lng.toFixed(6)), Number(coords.lat.toFixed(6))],
+          };
         }
 
         return {
@@ -125,12 +136,13 @@ export class HeatmapsService {
         });
 
         for (const profile of profiles) {
-          const district = profile.district || 'UNKNOWN';
-          const key = JSON.stringify([profile.state, district]);
+          const canonicalState = normalizeLocationName(profile.state || '');
+          const canonicalDistrict = normalizeLocationName(profile.district || 'UNKNOWN');
+          const key = JSON.stringify([canonicalState, canonicalDistrict]);
           if (!districtMap.has(key)) {
             districtMap.set(key, {
-              state: profile.state,
-              district,
+              state: canonicalState,
+              district: canonicalDistrict,
               total: 0,
               femaleCount: 0,
               gtiSum: 0,
@@ -173,6 +185,12 @@ export class HeatmapsService {
             centroid = {
               type: 'Point',
               coordinates: [Number(avgLng.toFixed(6)), Number(avgLat.toFixed(6))],
+            };
+          } else if (stats.state && stats.district) {
+            const coords = resolveCoordinatesForLocation(stats.state, stats.district);
+            centroid = {
+              type: 'Point',
+              coordinates: [Number(coords.lng.toFixed(6)), Number(coords.lat.toFixed(6))],
             };
           }
 

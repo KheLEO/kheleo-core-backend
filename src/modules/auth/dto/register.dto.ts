@@ -17,6 +17,7 @@ import {
 } from 'class-validator';
 import { Expose, plainToInstance, Transform, TransformFnParams, Type } from 'class-transformer';
 import { GovIdType, SportType, TierClassification, UserRole } from '@prisma/client';
+import { normalizeDominantSide } from '../../../common/constants/india-locations';
 
 export class GovernmentIdInputDto {
   @ApiPropertyOptional({ enum: GovIdType, example: GovIdType.AADHAAR, default: GovIdType.AADHAAR })
@@ -89,10 +90,27 @@ export class InitialAthleteProfileDto {
   @Max(350)
   readonly weightKg?: number;
 
-  @ApiPropertyOptional({ example: 'RIGHT' })
+  @ApiPropertyOptional({ example: 'RIGHT', enum: ['RIGHT', 'LEFT', 'BOTH', 'AMBIDEXTROUS'] })
   @IsOptional()
   @IsString()
+  @Transform(({ value }: TransformFnParams) => normalizeDominantSide(value) ?? value, {
+    toClassOnly: true,
+  })
   readonly dominantSide?: string;
+
+  @ApiPropertyOptional({ example: 25.3176 })
+  @IsOptional()
+  @IsNumber()
+  @Min(-90)
+  @Max(90)
+  readonly locationLat?: number;
+
+  @ApiPropertyOptional({ example: 82.9739 })
+  @IsOptional()
+  @IsNumber()
+  @Min(-180)
+  @Max(180)
+  readonly locationLng?: number;
 }
 
 export class RegisterDto {
