@@ -874,3 +874,124 @@ it('cannot re-award the same pose digest by changing the signed submission times
   );
   assert.equal(f.state.tables.drillSubmission.size, 1);
 });
+
+describe('Interim Competition GTI weighting while Drills & Wearables are under production', () => {
+  it('computes effective GTI from match performance in Interim Competition Mode and breaches 85 Elite Scout threshold', async () => {
+    const f = await createSecurityFixture();
+    f.setProfile({
+      biomechanicalScore: 0,
+      trainingConsistencyScore: 0,
+      matchPerformanceScore: 90,
+    });
+    const matchResultId = randomUUID();
+    f.state.tables.verifiedMatchResult.set(matchResultId, {
+      id: matchResultId,
+      bracketId: BRACKET_ID,
+      participantAthleteIds: [ATHLETE_ID, OPPONENT_ID],
+    });
+
+    const result = await f.services.gti.recalculateAthleteGti(ATHLETE_ID);
+    assert.equal(result.gti, 90);
+    assert.equal(result.provisional, false);
+    assert.deepEqual(result.evidence, {
+      biomechanical: 'NOT_AVAILABLE',
+      wearable: 'NOT_AVAILABLE',
+      matchPerformance: 'VERIFIED',
+    });
+    assert.equal(result.eliteBreached, true);
+    assert.equal(result.scoutAlertTriggered, true);
+    assert.equal(f.state.tables.scoutAlert.size, 1);
+
+    const history = [...f.state.tables.gtiHistory.values()].at(-1)!;
+    assert.deepEqual(history.calculationFactors, {
+      w1: 0,
+      w2: 0,
+      w3: 1,
+      calculationVersion: 'gti-v2',
+      triggerType: 'MANUAL_RECALCULATION',
+      evidence: result.evidence,
+      provisional: false,
+    });
+  });
+
+  it('normalizes weights across active modules in Partial Telemetry Mode when Drills + Matches are active', async () => {
+    const f = await createSecurityFixture();
+    f.setProfile({
+      biomechanicalScore: 90,
+      trainingConsistencyScore: 0,
+      matchPerformanceScore: 80,
+    });
+    const drillId = randomUUID();
+    f.state.tables.drillSubmission.set(drillId, { id: drillId, athleteId: ATHLETE_ID });
+    const matchResultId = randomUUID();
+    f.state.tables.verifiedMatchResult.set(matchResultId, {
+      id: matchResultId,
+      bracketId: BRACKET_ID,
+      participantAthleteIds: [ATHLETE_ID, OPPONENT_ID],
+    });
+
+    const result = await f.services.gti.recalculateAthleteGti(ATHLETE_ID);
+    // Active weights: w1 = 0.35 / 0.75 = 0.4667, w3 = 0.40 / 0.75 = 0.5333
+    // Expected GTI = Math.min(100, 90 * 0.4667 + 0 * 0 + 80 * 0.5333) = 42.003 + 42.664 = 84.67
+    assert.equal(result.gti, 84.67);
+    assert.equal(result.provisional, false);
+    assert.deepEqual(result.evidence, {
+      biomechanical: 'VERIFIED',
+      wearable: 'NOT_AVAILABLE',
+      matchPerformance: 'VERIFIED',
+    });
+  });
+
+  it('applies standard patent weights in Full-Telemetry Mode when all modules are active', async () => {
+    const f = await createSecurityFixture();
+    f.setProfile({
+      biomechanicalScore: 80,
+      trainingConsistencyScore: 80,
+      matchPerformanceScore: 80,
+    });
+    const drillId = randomUUID();
+    f.state.tables.drillSubmission.set(drillId, { id: drillId, athleteId: ATHLETE_ID });
+    const sessionId = randomUUID();
+    f.state.tables.wearableSession.set(sessionId, { id: sessionId, athleteId: ATHLETE_ID });
+    const matchResultId = randomUUID();
+    f.state.tables.verifiedMatchResult.set(matchResultId, {
+      id: matchResultId,
+      bracketId: BRACKET_ID,
+      participantAthleteIds: [ATHLETE_ID, OPPONENT_ID],
+    });
+
+    const result = await f.services.gti.recalculateAthleteGti(ATHLETE_ID);
+    assert.equal(result.gti, 80);
+    assert.equal(result.provisional, false);
+    assert.deepEqual(result.evidence, {
+      biomechanical: 'VERIFIED',
+      wearable: 'VERIFIED',
+      matchPerformance: 'VERIFIED',
+    });
+    assert.equal(result.eliteBreached, false);
+  });
+
+  it('is completely null-safe when athlete has zero rows across all telemetry and passport records', async () => {
+    const f = await createSecurityFixture();
+    f.setProfile({
+      biomechanicalScore: 0,
+      trainingConsistencyScore: 0,
+      matchPerformanceScore: 0,
+    });
+    f.state.tables.drillSubmission.clear();
+    f.state.tables.wearableSession.clear();
+    f.state.tables.healthAlert.clear();
+    f.state.tables.verifiedMatchResult.clear();
+    f.state.tables.sportPassportRecord.clear();
+
+    const result = await f.services.gti.recalculateAthleteGti(ATHLETE_ID);
+    assert.equal(result.gti, 0);
+    assert.equal(result.provisional, true);
+    assert.deepEqual(result.evidence, {
+      biomechanical: 'NOT_AVAILABLE',
+      wearable: 'NOT_AVAILABLE',
+      matchPerformance: 'NOT_AVAILABLE',
+    });
+    assert.equal(result.scoutAlertTriggered, false);
+  });
+});

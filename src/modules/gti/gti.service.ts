@@ -37,11 +37,15 @@ export class GtiService {
     biomechanicalScore: number,
     wearableScore: number,
     matchPerfScore: number,
+    weights?: { w1: number; w2: number; w3: number },
   ): number {
+    const w1 = weights?.w1 ?? 0.35;
+    const w2 = weights?.w2 ?? 0.25;
+    const w3 = weights?.w3 ?? 0.4;
     return Number(
       Math.min(
         100,
-        Math.max(0, biomechanicalScore * 0.35 + wearableScore * 0.25 + matchPerfScore * 0.4),
+        Math.max(0, biomechanicalScore * w1 + wearableScore * w2 + matchPerfScore * w3),
       ).toFixed(2),
     );
   }
@@ -56,30 +60,87 @@ export class GtiService {
         (await tx.athleteProfile.findUnique({ where: { id: athleteId }, include }));
       if (!profile) throw new NotFoundException('Athlete profile not found');
       assertAccountAccess(profile.user);
-      const biomechanicalScore = profile.biomechanicalScore;
-      const wearableScore = profile.trainingConsistencyScore;
-      const matchPerformanceScore = profile.matchPerformanceScore;
-      const gti = this.computeCompositeGti(
-        biomechanicalScore,
-        wearableScore,
-        matchPerformanceScore,
-      );
-      const [drills, sessions, matches] = await Promise.all([
+      const biomechanicalScore = profile.biomechanicalScore ?? 0;
+      const wearableScore = profile.trainingConsistencyScore ?? 0;
+      const matchPerformanceScore = profile.matchPerformanceScore ?? 0;
+
+      const [drills, sessions, healthAlerts, matches, sportRecords] = await Promise.all([
         tx.drillSubmission.count({ where: { athleteId: profile.userId } }),
         tx.wearableSession.count({ where: { athleteId: profile.userId } }),
+        tx.healthAlert.count({ where: { athleteId: profile.userId } }),
         tx.verifiedMatchResult.count({
           where: {
             participantAthleteIds: { has: profile.userId },
             bracket: { tournament: { sport: profile.primarySport ?? undefined } },
           },
         }),
+        tx.sportPassportRecord.findMany({
+          where: { athleteId: profile.id },
+          select: { totalMatches: true },
+        }),
       ]);
+
+      const totalMatches = (sportRecords ?? []).reduce(
+        (sum, r) => sum + (r.totalMatches || 0),
+        0,
+      );
+      const hasDrillData = drills > 0 || biomechanicalScore > 0;
+      const hasWearableData = sessions > 0 || healthAlerts > 0 || wearableScore > 0;
+      const hasVerifiedMatches = matches > 0 || totalMatches > 0;
+      const hasRecordedMatchActivity = hasVerifiedMatches || matchPerformanceScore !== 50;
+
       const evidence: GtiComputationResult['evidence'] = {
         biomechanical: drills > 0 ? 'VERIFIED' : 'NOT_AVAILABLE',
-        wearable: sessions > 0 ? 'VERIFIED' : 'NOT_AVAILABLE',
-        matchPerformance: matches > 0 ? 'VERIFIED' : 'NOT_AVAILABLE',
+        wearable: sessions > 0 || healthAlerts > 0 ? 'VERIFIED' : 'NOT_AVAILABLE',
+        matchPerformance: hasVerifiedMatches ? 'VERIFIED' : 'NOT_AVAILABLE',
       };
-      const provisional = Object.values(evidence).some((status) => status !== 'VERIFIED');
+
+      let w1 = 0.35;
+      let w2 = 0.25;
+      let w3 = 0.40;
+
+      if (hasDrillData && hasWearableData) {
+        // Case 1: Standard Full-Telemetry Mode
+        w1 = 0.35;
+        w2 = 0.25;
+        w3 = 0.40;
+      } else if (!hasDrillData && !hasWearableData && hasRecordedMatchActivity) {
+        // Case 2: Interim Tournament Competition Mode (Drills & Wearables under production)
+        w1 = 0.0;
+        w2 = 0.0;
+        w3 = 1.0;
+      } else if (hasDrillData || hasWearableData || hasRecordedMatchActivity) {
+        // Case 3: Partial Telemetry Mode
+        const rawW1 = hasDrillData ? 0.35 : 0;
+        const rawW2 = hasWearableData ? 0.25 : 0;
+        const rawW3 = hasRecordedMatchActivity ? 0.40 : 0;
+        const activeWeightSum = rawW1 + rawW2 + rawW3;
+        if (activeWeightSum > 0) {
+          w1 = Number((rawW1 / activeWeightSum).toFixed(4));
+          w2 = Number((rawW2 / activeWeightSum).toFixed(4));
+          w3 = Number((rawW3 / activeWeightSum).toFixed(4));
+        }
+      } else {
+        w1 = 0.35;
+        w2 = 0.25;
+        w3 = 0.40;
+      }
+
+      const gti = this.computeCompositeGti(
+        biomechanicalScore,
+        wearableScore,
+        matchPerformanceScore,
+        { w1, w2, w3 },
+      );
+
+      const activeEvidenceStatuses: Array<'VERIFIED' | 'NOT_AVAILABLE'> = [];
+      if (hasDrillData) activeEvidenceStatuses.push(evidence.biomechanical);
+      if (hasWearableData) activeEvidenceStatuses.push(evidence.wearable);
+      if (hasRecordedMatchActivity) activeEvidenceStatuses.push(evidence.matchPerformance);
+
+      const provisional =
+        activeEvidenceStatuses.length === 0 ||
+        activeEvidenceStatuses.some((status) => status !== 'VERIFIED');
       const previousGti = profile.gti || Number(profile.currentGti);
       // Only write the derived composite. Component writers own their respective scores.
       await tx.athleteProfile.update({
@@ -94,9 +155,9 @@ export class GtiService {
           matchScore: new Prisma.Decimal(matchPerformanceScore),
           compositeGti: new Prisma.Decimal(gti),
           calculationFactors: {
-            w1: 0.35,
-            w2: 0.25,
-            w3: 0.4,
+            w1,
+            w2,
+            w3,
             calculationVersion: 'gti-v2',
             triggerType,
             evidence,
@@ -130,7 +191,7 @@ export class GtiService {
               data: {
                 athleteId: profile.userId,
                 sport: String(profile.primarySport),
-                district: profile.district,
+                district: profile.district ?? '',
                 gtiScore: gti,
               },
             })
@@ -155,8 +216,8 @@ export class GtiService {
         athleteId: result.profile.userId,
         newGti: result.gti,
         sport: String(result.profile.primarySport),
-        district: result.profile.district,
-        state: result.profile.state,
+        district: result.profile.district ?? '',
+        state: result.profile.state ?? '',
         tierClassification: result.profile.tierClassification,
       });
     this.ws.broadcastGtiUpdated({
