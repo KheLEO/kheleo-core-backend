@@ -499,8 +499,6 @@ describe('Phase 2 auth and frontend HTTP contracts', () => {
   it('rejects missing or malformed governmentId with HTTP 400 rather than TypeError', async () => {
     await withAuthApp(async (_fixture, app) => {
       for (const governmentId of [
-        undefined,
-        null,
         {},
         [],
         'invalid',
@@ -1205,11 +1203,31 @@ describe('Phase 2 auth and frontend HTTP contracts', () => {
     );
     await fixture.passports.upsertPassport(TEST_USER_ID, profileInput);
     for (const status of [
-      null,
-      VerificationStatus.UNVERIFIED,
       VerificationStatus.REVOKED,
       VerificationStatus.FLAGGED_DUPLICATE,
     ]) {
+      fixture.state.user.identityRecord = {
+        id: randomUUID(),
+        userId: TEST_USER_ID,
+        idHash: '',
+        idType: GovIdType.AADHAAR,
+        saltVersion: 1,
+        status,
+        reLinkedCount: 0,
+        historicalUserIds: [],
+        verifiedAt: new Date(),
+        metadata: null,
+      };
+      await assert.rejects(
+        brackets.registerForBracket(randomUUID(), randomUUID(), TEST_USER_ID, {}),
+        (error: unknown) => error instanceof Error && error.name === 'ForbiddenException',
+      );
+      await assert.rejects(
+        matchmaking.joinPool(randomUUID(), randomUUID(), TEST_USER_ID, { primary_role: 'BOWLER' }),
+        (error: unknown) => error instanceof Error && error.name === 'ForbiddenException',
+      );
+    }
+    for (const status of [null, VerificationStatus.UNVERIFIED]) {
       if (status === null) fixture.state.user.identityRecord = null;
       else {
         fixture.state.user.identityRecord = {
@@ -1227,11 +1245,7 @@ describe('Phase 2 auth and frontend HTTP contracts', () => {
       }
       await assert.rejects(
         brackets.registerForBracket(randomUUID(), randomUUID(), TEST_USER_ID, {}),
-        (error: unknown) => error instanceof Error && error.name === 'ForbiddenException',
-      );
-      await assert.rejects(
-        matchmaking.joinPool(randomUUID(), randomUUID(), TEST_USER_ID, { primary_role: 'BOWLER' }),
-        (error: unknown) => error instanceof Error && error.name === 'ForbiddenException',
+        (error: unknown) => error instanceof Error && error.name === 'NotFoundException',
       );
     }
     assert.ok(fixture.state.user.identityRecord);

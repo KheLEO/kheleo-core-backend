@@ -108,6 +108,11 @@ function matches(row: unknown, where: unknown): boolean {
         Array.isArray(condition.in) &&
         condition.in.some((value: unknown) => compare(actual, value) === 0)
       );
+    if ('notIn' in condition)
+      return (
+        Array.isArray(condition.notIn) &&
+        !condition.notIn.some((value: unknown) => compare(actual, value) === 0)
+      );
     if ('not' in condition && compare(actual, condition.not) === 0) return false;
     if ('gt' in condition && compare(actual, condition.gt) <= 0) return false;
     if ('gte' in condition && compare(actual, condition.gte) < 0) return false;

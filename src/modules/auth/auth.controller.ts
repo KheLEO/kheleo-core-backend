@@ -99,6 +99,30 @@ export class AuthController {
     return this.authService.verifyGovernmentId(user.sub, dto);
   }
 
+  @Post('digilocker/initiate')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Initiate DigiLocker verification flow (coming soon placeholder)',
+  })
+  @ApiResponse({
+    status: HttpStatus.OK,
+    description: 'DigiLocker integration status response',
+  })
+  async initiateDigiLocker(): Promise<{
+    status: string;
+    provider: string;
+    isLegit: boolean;
+    message: string;
+  }> {
+    return {
+      status: 'COMING_SOON',
+      provider: 'DIGILOCKER',
+      isLegit: false,
+      message:
+        'DigiLocker integration coming up soon. Once live, you will be able to verify your identity directly via DigiLocker to earn your Legit badge.',
+    };
+  }
+
   @Post('refresh')
   @SetMetadata(FRESH_IDEMPOTENCY_KEY, true)
   @HttpCode(HttpStatus.OK)

@@ -126,6 +126,8 @@ export function createAuthFixture(options: FixtureOptions = {}) {
   const now = new Date();
   const user: TestUser = {
     id: TEST_USER_ID,
+    name: 'Test Athlete',
+    passwordHash: null,
     phone: '+919000000001',
     email: 'athlete@fixture.test',
     role: UserRole.ATHLETE,
@@ -201,6 +203,8 @@ export function createAuthFixture(options: FixtureOptions = {}) {
       }: {
         readonly data: {
           readonly id?: string;
+          readonly name?: string;
+          readonly passwordHash?: string;
           readonly phone?: string;
           readonly email?: string;
           readonly role: UserRole;
@@ -211,6 +215,8 @@ export function createAuthFixture(options: FixtureOptions = {}) {
           ...state.user,
           ...data,
           id: data.id ?? randomUUID(),
+          name: data.name ?? null,
+          passwordHash: data.passwordHash ?? null,
           phone: data.phone ?? null,
           email: data.email ?? null,
           identityRecord: null,
@@ -422,6 +428,9 @@ export function createAuthFixture(options: FixtureOptions = {}) {
         state.dossiers.set(key, dossier);
         return dossier;
       },
+    },
+    bracket: {
+      findUnique: async () => null,
     },
     $transaction: async (operation: (transaction: unknown) => Promise<unknown>): Promise<unknown> =>
       operation(prisma),

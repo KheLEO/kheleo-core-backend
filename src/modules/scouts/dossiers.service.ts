@@ -214,8 +214,14 @@ export class ScoutsDossiersService {
     assertDossierVisibility(userId, profile.isScoutSearchable, viewer);
     if (
       viewer.role === 'SCOUT' &&
-      (!profile.user.isActive || profile.user.identityRecord?.status !== 'VERIFIED')
-    )
+      viewer.sub !== userId &&
+      profile.user.identityRecord?.status !== VerificationStatus.VERIFIED
+    ) {
+      throw new ForbiddenException(
+        'This athlete is currently Not Legit (unverified) and is not visible to scouts.',
+      );
+    }
+    if (viewer.role === 'SCOUT' && !profile.user.isActive)
       throw new ForbiddenException('Athlete is not available for scout discovery');
     const [sessions, sums, pauses, saved] = await Promise.all([
       this.prisma.wearableSession.count({ where: { athleteId: userId } }),

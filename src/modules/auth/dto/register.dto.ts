@@ -114,6 +114,20 @@ export class InitialAthleteProfileDto {
 }
 
 export class RegisterDto {
+  @ApiPropertyOptional({ example: 'Ravi Kumar' })
+  @IsOptional()
+  @IsString()
+  @MinLength(2)
+  @MaxLength(150)
+  readonly name?: string;
+
+  @ApiPropertyOptional({ example: 'SecurePassword123' })
+  @IsOptional()
+  @IsString()
+  @MinLength(6)
+  @MaxLength(128)
+  readonly password?: string;
+
   @ApiPropertyOptional({
     description:
       'Supabase access token proving confirmed contact ownership; required in production',

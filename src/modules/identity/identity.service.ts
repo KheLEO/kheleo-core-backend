@@ -115,6 +115,8 @@ export class IdentityService {
         user: {
           select: {
             id: true,
+            name: true,
+            passwordHash: true,
             phone: true,
             email: true,
             role: true,
@@ -262,6 +264,8 @@ export type IdentityRecordWithUser = Prisma.IdentityVerificationGetPayload<{
     user: {
       select: {
         id: true;
+        name: true;
+        passwordHash: true;
         phone: true;
         email: true;
         role: true;

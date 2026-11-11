@@ -10,6 +10,7 @@ import {
   BadRequestException,
   ForbiddenException,
   ConflictException,
+  UnauthorizedException,
   ValidationPipe,
 } from '@nestjs/common';
 import { LoginDto } from '../src/modules/auth/dto/login.dto';
@@ -266,8 +267,6 @@ describe('Phase 2 auth, identity rotation, and passport regressions', () => {
   };
 
   for (const governmentId of [
-    undefined,
-    null,
     {},
     [],
     'invalid',
@@ -315,7 +314,7 @@ describe('Phase 2 auth, identity rotation, and passport regressions', () => {
         { type: 'body', metatype: LoginDto },
       )) as LoginDto;
 
-      assert.strictEqual(transformedDto.governmentId.idType, GovIdType.AADHAAR);
+      assert.strictEqual(transformedDto.governmentId?.idType, GovIdType.AADHAAR);
       const result = await fixture.auth.login(transformedDto);
       assert.strictEqual(result.user.id, fixture.state.user.id);
       assert.strictEqual(result.user.isVerified, true);
@@ -336,7 +335,7 @@ describe('Phase 2 auth, identity rotation, and passport regressions', () => {
         { type: 'body', metatype: LoginDto },
       )) as LoginDto;
 
-      assert.strictEqual(transformedDto.governmentId.idType, GovIdType.AADHAAR);
+      assert.strictEqual(transformedDto.governmentId?.idType, GovIdType.AADHAAR);
       const result = await fixture.auth.login(transformedDto);
       assert.strictEqual(result.user.id, fixture.state.user.id);
       assert.strictEqual(result.user.isVerified, true);
@@ -403,10 +402,10 @@ describe('Phase 2 auth, identity rotation, and passport regressions', () => {
   it('guards AuthService.login independently of the validation pipe', async () => {
     const fixture = createAuthFixture();
     await assert.rejects(
-      fixture.auth.login({ phone: login.phone } as LoginDto),
+      fixture.auth.login({} as LoginDto),
       (error: unknown) => {
-        assert.ok(error instanceof BadRequestException);
-        assert.strictEqual(error.message, 'governmentId with idType and idNumber is required');
+        assert.ok(error instanceof UnauthorizedException);
+        assert.strictEqual(error.message, 'Either phone or email must be provided to log in.');
         return true;
       },
     );
@@ -666,3 +665,143 @@ for (const role of [UserRole.ORGANIZER, UserRole.SCOUT]) {
     assert.strictEqual((await strategy.validate(payload)).role, role);
   });
 }
+
+describe('Password authentication, signup without Gov ID, and Legit/Not Legit scout visibility', () => {
+  it('registers athlete with name, email, phone, password, role without Government ID and marks UNVERIFIED / isLegit: false', async () => {
+    const fixture = createAuthFixture();
+    const result = await fixture.auth.register({
+      name: 'Pooja Sharma',
+      email: 'pooja.sharma@example.com',
+      phone: '+919876543219',
+      password: 'SecurePassword123!',
+      role: UserRole.ATHLETE,
+    });
+
+    assert.strictEqual(result.user.name, 'Pooja Sharma');
+    assert.strictEqual(result.user.email, 'pooja.sharma@example.com');
+    assert.strictEqual(result.user.isVerified, false);
+    assert.strictEqual(result.user.isLegit, false);
+    assert.strictEqual(result.user.identityStatus, VerificationStatus.UNVERIFIED);
+    assert.strictEqual(fixture.state.createdIdentities.length, 0);
+  });
+
+  it('allows login with email + password or phone + password', async () => {
+    const fixture = createAuthFixture();
+    // Register user with password
+    await fixture.auth.register({
+      name: 'Rahul Dravid',
+      email: 'rahul.dravid@example.com',
+      phone: '+919876543220',
+      password: 'Password123!',
+      role: UserRole.ATHLETE,
+    });
+
+    // Login with email + password
+    const emailLogin = await fixture.auth.login({
+      email: 'rahul.dravid@example.com',
+      password: 'Password123!',
+    });
+    assert.strictEqual(emailLogin.user.email, 'rahul.dravid@example.com');
+    assert.strictEqual(emailLogin.user.name, 'Rahul Dravid');
+
+    // Login with phone + password
+    const phoneLogin = await fixture.auth.login({
+      phone: '+919876543220',
+      password: 'Password123!',
+    });
+    assert.strictEqual(phoneLogin.user.phone, '+919876543220');
+
+    // Login with identifier (email)
+    const identifierLogin = await fixture.auth.login({
+      identifier: 'rahul.dravid@example.com',
+      password: 'Password123!',
+    });
+    assert.strictEqual(identifierLogin.user.email, 'rahul.dravid@example.com');
+
+    // Rejects invalid password
+    await assert.rejects(
+      fixture.auth.login({
+        email: 'rahul.dravid@example.com',
+        password: 'WrongPassword!',
+      }),
+      UnauthorizedException,
+    );
+  });
+
+  it('binds password on first login for legacy accounts without passwordHash', async () => {
+    const fixture = createAuthFixture();
+    assert.strictEqual(fixture.state.user.passwordHash, null);
+
+    // First login should bind the password
+    const firstLogin = await fixture.auth.login({
+      phone: fixture.state.user.phone!,
+      password: 'MyNewPassword123!',
+    });
+    assert.ok(fixture.state.user.passwordHash !== null);
+    assert.strictEqual(firstLogin.user.id, fixture.state.user.id);
+
+    // Subsequent login with wrong password fails
+    await assert.rejects(
+      fixture.auth.login({
+        phone: fixture.state.user.phone!,
+        password: 'WrongPassword123!',
+      }),
+      UnauthorizedException,
+    );
+
+    // Subsequent login with bound password succeeds
+    const secondLogin = await fixture.auth.login({
+      phone: fixture.state.user.phone!,
+      password: 'MyNewPassword123!',
+    });
+    assert.strictEqual(secondLogin.user.id, fixture.state.user.id);
+  });
+
+  it('blocks Scouts from viewing Not Legit (unverified) athlete dossier and passport with exact message', async () => {
+    const fixture = createAuthFixture();
+    const athleteId = fixture.state.user.id;
+    fixture.state.user.identityRecord = null; // Unverified / Not Legit
+    await fixture.passports.upsertPassport(athleteId, {
+      primarySport: SportType.CRICKET,
+      isScoutSearchable: true,
+    });
+
+    const scoutViewer = {
+      sub: 'scout-user-1234',
+      role: UserRole.SCOUT,
+      identityVerified: true,
+    };
+
+    // Passport view by scout
+    await assert.rejects(
+      fixture.passports.getPassportByUserId(athleteId, scoutViewer),
+      (err: unknown) => {
+        assert.ok(err instanceof ForbiddenException);
+        assert.strictEqual(
+          err.message,
+          'This athlete is currently Not Legit (unverified) and is not visible to scouts.',
+        );
+        return true;
+      },
+    );
+
+    // Dossier view by scout
+    await assert.rejects(
+      fixture.dossiers.getDossier(athleteId, scoutViewer),
+      (err: unknown) => {
+        assert.ok(err instanceof ForbiddenException);
+        assert.strictEqual(
+          err.message,
+          'This athlete is currently Not Legit (unverified) and is not visible to scouts.',
+        );
+        return true;
+      },
+    );
+
+    // But athlete themselves CAN view their own passport and dossier
+    const selfViewer = { sub: athleteId, role: UserRole.ATHLETE, identityVerified: false };
+    const ownPassport = await fixture.passports.getPassportByUserId(athleteId, selfViewer);
+    assert.strictEqual(ownPassport.userId, athleteId);
+    assert.strictEqual(ownPassport.identityStatus, 'UNVERIFIED');
+  });
+});

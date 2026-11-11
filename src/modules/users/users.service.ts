@@ -1,7 +1,7 @@
 import { Injectable, NotFoundException, ConflictException, Optional } from '@nestjs/common';
 import { PrismaService } from '../../infrastructure/database/prisma.service';
 import { UpdateUserDto } from './dto/update-user.dto';
-import { UserRole } from '@prisma/client';
+import { UserRole, VerificationStatus } from '@prisma/client';
 import { runSerializableTransaction } from '../../common/database/serializable-transaction';
 
 import { LeaderboardsService } from '../leaderboards/leaderboards.service';
@@ -9,23 +9,57 @@ import { WsAuthGuard } from '../../infrastructure/realtime/ws-auth.guard';
 
 export interface UserResponse {
   readonly id: string;
+  readonly name?: string | null;
   readonly phone: string | null;
   readonly email: string | null;
   readonly role: UserRole;
   readonly isActive: boolean;
+  readonly isVerified: boolean;
+  readonly isLegit: boolean;
+  readonly identityStatus: VerificationStatus | 'VERIFIED' | 'UNVERIFIED' | 'FLAGGED_DUPLICATE' | 'REVOKED';
   readonly createdAt: Date;
   readonly updatedAt: Date;
 }
 
 const userResponseSelect = {
   id: true,
+  name: true,
   phone: true,
   email: true,
   role: true,
   isActive: true,
   createdAt: true,
   updatedAt: true,
+  identityRecord: { select: { status: true } },
 } as const;
+
+function formatUserResponse(user: {
+  id: string;
+  name?: string | null;
+  phone: string | null;
+  email: string | null;
+  role: UserRole;
+  isActive: boolean;
+  createdAt: Date;
+  updatedAt: Date;
+  identityRecord?: { status: VerificationStatus } | null;
+}): UserResponse {
+  const identityStatus = user.identityRecord?.status ?? VerificationStatus.UNVERIFIED;
+  const isVerified = identityStatus === VerificationStatus.VERIFIED;
+  return {
+    id: user.id,
+    name: user.name ?? null,
+    phone: user.phone,
+    email: user.email,
+    role: user.role,
+    isActive: user.isActive,
+    isVerified,
+    isLegit: isVerified,
+    identityStatus,
+    createdAt: user.createdAt,
+    updatedAt: user.updatedAt,
+  };
+}
 
 @Injectable()
 export class UsersService {
@@ -45,7 +79,7 @@ export class UsersService {
       throw new NotFoundException(`User with ID ${id} not found.`);
     }
 
-    return user;
+    return formatUserResponse(user);
   }
 
   async update(id: string, dto: UpdateUserDto): Promise<UserResponse> {
@@ -69,7 +103,7 @@ export class UsersService {
       }
     }
 
-    return this.prisma.user.update({
+    const updated = await this.prisma.user.update({
       where: { id },
       data: {
         phone: dto.phone,
@@ -77,6 +111,7 @@ export class UsersService {
       },
       select: userResponseSelect,
     });
+    return formatUserResponse(updated);
   }
 
   async deactivate(id: string): Promise<UserResponse> {
@@ -107,7 +142,7 @@ export class UsersService {
         where: { userId: id, revoked: false },
         data: { revoked: true },
       });
-      return user;
+      return formatUserResponse(user);
     });
     this.sockets?.disconnectUser(id);
     await this.leaderboards?.syncAthlete(id);

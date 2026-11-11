@@ -57,7 +57,8 @@ function isEligibleCandidate(candidate: QueuedCandidate): candidate is EligibleC
   return (
     profile !== null &&
     profile.user.isActive &&
-    profile.user.identityRecord?.status === VerificationStatus.VERIFIED &&
+    (!profile.user.identityRecord ||
+      !['REVOKED', 'FLAGGED_DUPLICATE'].includes(profile.user.identityRecord.status)) &&
     Boolean(
       profile.dateOfBirth &&
       profile.gender &&
@@ -479,7 +480,10 @@ export class MatchmakingService {
           status: FreeAgentStatus.QUEUED,
           user: {
             isActive: true,
-            identityRecord: { status: VerificationStatus.VERIFIED },
+            OR: [
+              { identityRecord: null },
+              { identityRecord: { status: { notIn: ['REVOKED', 'FLAGGED_DUPLICATE'] } } },
+            ],
             teamMembers: { none: { team: { tournamentId } } },
           },
           ...(cursor

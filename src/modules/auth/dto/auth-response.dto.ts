@@ -1,9 +1,12 @@
-import { ApiProperty } from '@nestjs/swagger';
-import { UserRole } from '@prisma/client';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { UserRole, VerificationStatus } from '@prisma/client';
 
 export class AuthUserSummaryDto {
   @ApiProperty({ example: '123e4567-e89b-12d3-a456-426614174000' })
   readonly id!: string;
+
+  @ApiPropertyOptional({ example: 'Ravi Kumar', nullable: true })
+  readonly name?: string | null;
 
   @ApiProperty({ example: '+919876543210', nullable: true })
   readonly phone!: string | null;
@@ -16,6 +19,15 @@ export class AuthUserSummaryDto {
 
   @ApiProperty({ example: true })
   readonly isVerified!: boolean;
+
+  @ApiProperty({ example: true })
+  readonly isLegit!: boolean;
+
+  @ApiProperty({
+    enum: VerificationStatus,
+    example: VerificationStatus.UNVERIFIED,
+  })
+  readonly identityStatus!: VerificationStatus | 'VERIFIED' | 'UNVERIFIED' | 'FLAGGED_DUPLICATE' | 'REVOKED';
 
   @ApiProperty({
     example: '123e4567-e89b-12d3-a456-426614174001',

@@ -105,10 +105,6 @@ export class PassportService {
       );
     }
 
-    if (viewer?.role === 'SCOUT' && viewer.sub !== userId && !profile.isScoutSearchable) {
-      throw new ForbiddenException('Athlete profile is not opted into scout discovery');
-    }
-
     let identityStatus = profile.user?.identityRecord?.status;
     if (!identityStatus) {
       const record = await this.prisma.identityVerification.findUnique({
@@ -116,6 +112,17 @@ export class PassportService {
         select: { status: true },
       });
       identityStatus = record?.status ?? VerificationStatus.UNVERIFIED;
+    }
+
+    if (viewer?.role === 'SCOUT' && viewer.sub !== userId) {
+      if (identityStatus !== VerificationStatus.VERIFIED) {
+        throw new ForbiddenException(
+          'This athlete is currently Not Legit (unverified) and is not visible to scouts.',
+        );
+      }
+      if (!profile.isScoutSearchable) {
+        throw new ForbiddenException('Athlete profile is not opted into scout discovery');
+      }
     }
 
     return this.mapToAthletePassportDto(profile, identityStatus);

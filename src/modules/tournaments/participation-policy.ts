@@ -1,6 +1,6 @@
 import { BadRequestException, ConflictException, NotFoundException } from '@nestjs/common';
 import { Prisma, TournamentStatus } from '@prisma/client';
-import { assertVerifiedAthlete } from '../../common/auth/account-access';
+import { assertAccountAccess } from '../../common/auth/account-access';
 
 export const participationProfileSelect = {
   id: true,
@@ -55,7 +55,7 @@ export function assertCompleteVerifiedProfile(
     throw new BadRequestException(
       'Athlete profile must be initialized before tournament participation',
     );
-  assertVerifiedAthlete(profile.user);
+  assertAccountAccess(profile.user);
   if (
     !profile.dateOfBirth ||
     !profile.gender ||

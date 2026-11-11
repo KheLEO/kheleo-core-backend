@@ -16,7 +16,7 @@ import {
   matchParticipants,
   teamParticipants,
 } from '../../common/competition/match-access';
-import { assertVerifiedAthlete } from '../../common/auth/account-access';
+import { assertAccountAccess } from '../../common/auth/account-access';
 import { canonicalJson } from '../../common/crypto/canonical-json';
 import { RecordMatchResultDto } from './dto/record-match-result.dto';
 
@@ -136,7 +136,7 @@ export class MatchResultsService {
         });
         if (!profile || profile.user.role !== 'ATHLETE')
           throw new BadRequestException('Participant profile not found');
-        assertVerifiedAthlete(profile.user);
+        assertAccountAccess(profile.user);
         const record = await tx.sportPassportRecord.findUnique({
           where: { athleteId_sport: { athleteId: profile.id, sport: bracket.tournament.sport } },
         });

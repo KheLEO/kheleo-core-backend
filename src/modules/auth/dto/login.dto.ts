@@ -1,6 +1,5 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import {
-  IsDefined,
   IsEmail,
   IsEnum,
   IsNotEmptyObject,
@@ -24,6 +23,12 @@ export class LoginDto {
   @IsString()
   @MaxLength(8192)
   readonly identityAccessToken?: string;
+
+  @ApiPropertyOptional({ example: 'athlete@kheleo.com' })
+  @IsOptional()
+  @IsString()
+  readonly identifier?: string;
+
   @ApiPropertyOptional({ example: '+919876543210' })
   @IsOptional()
   @IsString()
@@ -37,10 +42,14 @@ export class LoginDto {
   @IsEmail()
   readonly email?: string;
 
+  @ApiPropertyOptional({ example: 'SecurePassword123' })
+  @IsOptional()
+  @IsString()
+  readonly password?: string;
+
   @ApiPropertyOptional({ type: GovernmentIdInputDto })
   @Expose()
-  @ValidateIf((o: LoginDto) => !o.idNumber || o.governmentId !== undefined)
-  @IsDefined({ message: 'governmentId or idNumber is required' })
+  @ValidateIf((o: LoginDto) => o.governmentId !== undefined && o.governmentId !== null)
   @IsNotEmptyObject()
   @ValidateNested()
   @Type(() => GovernmentIdInputDto)
@@ -65,7 +74,7 @@ export class LoginDto {
     },
     { toClassOnly: true },
   )
-  readonly governmentId!: GovernmentIdInputDto;
+  readonly governmentId?: GovernmentIdInputDto;
 
   @ApiPropertyOptional({ example: '5421 8901 2345' })
   @IsOptional()
