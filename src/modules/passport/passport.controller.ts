@@ -178,7 +178,6 @@ export class PassportController {
     ];
     if (user.sub !== userId && !allowedRoles.includes(user.role))
       throw new ForbiddenException('You cannot view this passport.');
-    await this.passportService.getPassportByUserId(userId, user);
-    return this.passportService.listSportRecords(userId, query);
+    return this.passportService.listSportRecords(userId, query, user);
   }
 }

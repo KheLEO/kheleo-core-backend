@@ -10,7 +10,13 @@ import { AuthModule } from '../auth/auth.module';
 @Module({
   imports: [PrismaModule, BullmqModule, AuthModule],
   controllers: [MatchmakingController],
-  providers: [MatchmakingService, MatchmakingProcessor, MatchmakingGateway],
+  providers: [MatchmakingService, MatchmakingGateway],
   exports: [MatchmakingService, MatchmakingGateway],
 })
 export class MatchmakingModule {}
+
+@Module({
+  imports: [MatchmakingModule],
+  providers: [MatchmakingProcessor],
+})
+export class MatchmakingWorkersModule {}

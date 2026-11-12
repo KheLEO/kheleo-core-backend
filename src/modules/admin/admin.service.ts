@@ -4,6 +4,7 @@ import {
   ForbiddenException,
   Injectable,
   NotFoundException,
+  Optional,
 } from '@nestjs/common';
 import { Prisma, Tournament, TournamentStatus, UserRole } from '@prisma/client';
 import { PrismaService } from '../../infrastructure/database/prisma.service';
@@ -12,6 +13,16 @@ import { AuthenticatedJwtUser } from '../../common/guards/jwt-auth.guard';
 import { runSerializableTransaction } from '../../common/database/serializable-transaction';
 import { LeaderboardsService } from '../leaderboards/leaderboards.service';
 import { WsAuthGuard } from '../../infrastructure/realtime/ws-auth.guard';
+import { RedisService } from '../../infrastructure/cache/redis.service';
+import {
+  hasTransactionalOutboxTriggers,
+  notifyOutboxSubscribers,
+} from '../../infrastructure/outbox/outbox-authority';
+import {
+  bumpVersion,
+  CACHE_KEYS,
+  invalidateAuthAndPassport,
+} from '../../infrastructure/cache/cache-helper';
 import {
   AdminAuditQuery,
   AdminTournamentStatusDto,
@@ -83,6 +94,7 @@ export class AdminService {
     private readonly health: HealthService,
     private readonly leaderboards: LeaderboardsService,
     private readonly sockets: WsAuthGuard,
+    @Optional() private readonly redis?: RedisService,
   ) {}
   async dashboard(): Promise<AdminDashboardResponse> {
     const [
@@ -251,8 +263,13 @@ export class AdminService {
       });
       return user;
     });
-    this.sockets.disconnectUser(id);
-    await this.leaderboards.syncAthlete(id);
+    await invalidateAuthAndPassport(this.redis, id);
+    if (!hasTransactionalOutboxTriggers(this.prisma)) {
+      this.sockets.disconnectUser(id);
+      await this.leaderboards.syncAthlete(id);
+    } else {
+      notifyOutboxSubscribers(this.redis, 'REVOKE_SOCKETS');
+    }
     return updated;
   }
   async tournaments(query: AdminTournamentsQuery): Promise<AdminPage<Tournament>> {
@@ -286,7 +303,7 @@ export class AdminService {
       throw new BadRequestException('Use either an action or explicit status fields');
     if (dto.suspended === true && dto.status !== undefined && dto.status !== 'SUSPENDED')
       throw new BadRequestException('Conflicting suspension and status');
-    return runSerializableTransaction(this.prisma, async (tx) => {
+    const updated = await runSerializableTransaction(this.prisma, async (tx) => {
       const tournament = await tx.tournament.findUnique({ where: { id } });
       if (!tournament) throw new NotFoundException('Tournament not found');
       let status = tournament.status;
@@ -353,6 +370,12 @@ export class AdminService {
       });
       return updated;
     });
+    await bumpVersion(this.redis, CACHE_KEYS.tournamentsVersion());
+    if (updated.organizerId) {
+      await bumpVersion(this.redis, CACHE_KEYS.organizerVersion(updated.organizerId));
+    }
+    await bumpVersion(this.redis, CACHE_KEYS.organizerVersion('GLOBAL'));
+    return updated;
   }
   async auditLogs(query: AdminAuditQuery): Promise<AdminPage<AdminAuditRow>> {
     return page(

@@ -3,6 +3,7 @@ import { PrismaService } from '../../infrastructure/database/prisma.service';
 import { ScoutFeedQueryDto } from './dto/scout-feed-query.dto';
 import { Prisma, SportType, VerificationStatus } from '@prisma/client';
 import { normalizeLocationName } from '../../common/constants/india-locations';
+import { resolveProfileComponentScores } from '../gti/gti-score-reconciliation';
 
 export interface ProspectSummary {
   readonly athlete_id: string;
@@ -113,11 +114,11 @@ export class ScoutsService {
     const hasMore = profiles.length > limit;
     const pageProfiles = hasMore ? profiles.slice(0, limit) : profiles;
     const data: ProspectSummary[] = pageProfiles.map((p) => {
-      const gtiValue = p.gti > 0 ? p.gti : Number(p.currentGti);
+      const resolved = resolveProfileComponentScores(p);
       return {
         athlete_id: p.userId,
         profile_id: p.id,
-        gti: gtiValue,
+        gti: resolved.currentGti,
         primary_sport: String(p.primarySport),
         district: p.district,
         state: p.state,
@@ -125,11 +126,9 @@ export class ScoutsService {
         is_rural_or_underrepresented:
           p.isRuralOrUnderrepresented ||
           ['RURAL', 'TIER_3', 'TIER_2'].includes(String(p.tierClassification)),
-        biomechanical_score: p.biomechanicalScore,
-        training_consistency_score:
-          p.trainingConsistencyScore > 0 ? p.trainingConsistencyScore : Number(p.wearableScore),
-        match_performance_score:
-          p.matchPerformanceScore > 0 ? p.matchPerformanceScore : Number(p.matchPerfScore),
+        biomechanical_score: resolved.biomechanicalScore,
+        training_consistency_score: resolved.wearableScore,
+        match_performance_score: resolved.matchPerfScore,
         posture_points: p.posturePoints,
         alert_count: p.user._count.scoutAlerts,
       };

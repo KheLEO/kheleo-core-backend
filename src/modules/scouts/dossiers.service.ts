@@ -9,6 +9,7 @@ import { PrismaService } from '../../infrastructure/database/prisma.service';
 import { AuthenticatedJwtUser } from '../../common/guards/jwt-auth.guard';
 import { runSerializableTransaction } from '../../common/database/serializable-transaction';
 import { OutreachDto, OutreachAction } from './dto/outreach.dto';
+import { resolveProfileComponentScores } from '../gti/gti-score-reconciliation';
 
 export interface OutreachEvent {
   actionType: OutreachAction;
@@ -157,7 +158,9 @@ export class ScoutsDossiersService {
         currentGti: true,
         biomechanicalScore: true,
         trainingConsistencyScore: true,
+        wearableScore: true,
         matchPerformanceScore: true,
+        matchPerfScore: true,
         posturePoints: true,
         gtiHistories: {
           orderBy: [{ calculatedAt: 'asc' }, { id: 'asc' }],
@@ -223,10 +226,10 @@ export class ScoutsDossiersService {
     }
     if (viewer.role === 'SCOUT' && !profile.user.isActive)
       throw new ForbiddenException('Athlete is not available for scout discovery');
-    const [sessions, sums, pauses, saved] = await Promise.all([
-      this.prisma.wearableSession.count({ where: { athleteId: userId } }),
+    const [sums, pauses, saved] = await Promise.all([
       this.prisma.wearableSession.aggregate({
         where: { athleteId: userId },
+        _count: { _all: true },
         _sum: {
           readingsCount: true,
           heartRateSum: true,
@@ -242,6 +245,11 @@ export class ScoutsDossiersService {
             where: { athleteId_scoutId: { athleteId: profile.id, scoutId: viewer.sub } },
           }),
     ]);
+    const aggCount = (sums as { _count?: { _all?: number } })._count?._all;
+    const sessions =
+      typeof aggCount === 'number'
+        ? aggCount
+        : await this.prisma.wearableSession.count({ where: { athleteId: userId } });
     const count = sums._sum.readingsCount ?? 0;
     const latestAlert = profile.user.healthAlerts[0];
     return {
@@ -261,13 +269,16 @@ export class ScoutsDossiersService {
         weight_kg: profile.weightKg === null ? null : Number(profile.weightKg),
         dominant_side: profile.dominantSide,
       },
-      gti_breakdown: {
-        gti: profile.gti || Number(profile.currentGti),
-        biomechanical_score: profile.biomechanicalScore,
-        wearable_consistency_score: profile.trainingConsistencyScore,
-        match_performance_score: profile.matchPerformanceScore,
-        posture_points: profile.posturePoints,
-      },
+      gti_breakdown: (() => {
+        const resolved = resolveProfileComponentScores(profile);
+        return {
+          gti: resolved.currentGti,
+          biomechanical_score: resolved.biomechanicalScore,
+          wearable_consistency_score: resolved.wearableScore,
+          match_performance_score: resolved.matchPerfScore,
+          posture_points: profile.posturePoints,
+        };
+      })(),
       gti_history: profile.gtiHistories.map((entry) => ({
         gti: Number(entry.compositeGti),
         biomechanical_score: Number(entry.biomechanicalScore),

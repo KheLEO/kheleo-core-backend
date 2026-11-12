@@ -16,13 +16,7 @@ RUN DATABASE_URL=postgresql://generate:generate@127.0.0.1:5432/generate pnpm ins
 COPY tsconfig.json tsconfig.build.json nest-cli.json ./
 COPY scripts/create-entrypoint-shim.cjs ./scripts/create-entrypoint-shim.cjs
 COPY src ./src
-COPY keys* ./keys/
-RUN mkdir -p keys \
-    && if [ ! -f keys/private.pem ]; then \
-         openssl genrsa -out keys/private.pem 2048 \
-         && openssl rsa -in keys/private.pem -outform PEM -pubout -out keys/public.pem; \
-       fi \
-    && pnpm prisma:generate && pnpm build \
+RUN pnpm prisma:generate && pnpm build \
     && pnpm prune --prod
 
 FROM base AS production
@@ -30,11 +24,10 @@ ENV NODE_ENV=production PORT=3000
 COPY --from=build --chown=node:node /app/node_modules ./node_modules
 COPY --from=build --chown=node:node /app/dist ./dist
 COPY --from=build --chown=node:node /app/prisma ./prisma
-COPY --from=build --chown=node:node /app/keys ./keys
 COPY --from=build --chown=node:node /app/package.json /app/pnpm-lock.yaml ./
 USER node
 EXPOSE 3000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
   CMD node -e "fetch('http://127.0.0.1:'+process.env.PORT+'/api/v1/health',{signal:AbortSignal.timeout(3000)}).then(async r=>{const b=await r.json();process.exit(r.ok&&b.status==='ok'&&b.db==='ok'&&b.redis==='ok'?0:1)}).catch(()=>process.exit(1))"
 ENTRYPOINT ["/sbin/tini", "--"]
-CMD ["sh", "-c", "npx prisma migrate deploy && pnpm start:prod"]
+CMD ["sh", "-c", "export DIRECT_URL=\"${DIRECT_URL:-$DATABASE_URL}\" && npx prisma migrate deploy && pnpm start:prod"]

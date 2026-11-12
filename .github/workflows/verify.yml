@@ -34,9 +34,11 @@ jobs:
           --health-interval 5s --health-timeout 5s --health-retries 10
     env:
       DATABASE_URL: postgresql://kheleo:ci-only-password@127.0.0.1:5432/kheleo_audit?schema=public
+      DIRECT_URL: postgresql://kheleo:ci-only-password@127.0.0.1:5432/kheleo_audit?schema=public
       REDIS_HOST: 127.0.0.1
       REDIS_PORT: '6379'
       NODE_ENV: test
+      ENABLE_SWAGGER: 'true'
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -68,6 +70,8 @@ jobs:
           chmod 600 "$RUNNER_TEMP/kheleo-keys/private.pem"
           {
             echo "NODE_ENV=production"
+            echo "DIRECT_URL=$DATABASE_URL"
+            echo "ENABLE_SWAGGER=true"
             echo "JWT_PRIVATE_KEY_PATH=$RUNNER_TEMP/kheleo-keys/private.pem"
             echo "JWT_PUBLIC_KEY_PATH=$RUNNER_TEMP/kheleo-keys/public.pem"
             echo "IDENTITY_PEPPER=$(openssl rand -hex 32)"
@@ -88,8 +92,8 @@ jobs:
           sudo chown -R 1000:1000 "$RUNNER_TEMP/kheleo-keys"
           trap 'docker logs kheleo-runtime; docker rm -f kheleo-runtime' EXIT
           docker run -d --name kheleo-runtime --network host \
-            --env NODE_ENV=production --env PORT=3000 --env DATABASE_URL \
-            --env REDIS_HOST --env REDIS_PORT --env CORS_ORIGINS \
+            --env NODE_ENV=production --env PORT=3000 --env DATABASE_URL --env DIRECT_URL \
+            --env REDIS_HOST --env REDIS_PORT --env CORS_ORIGINS --env ENABLE_SWAGGER=true \
             --env SUPABASE_URL --env SUPABASE_PUBLISHABLE_KEY \
             --env IDENTITY_PEPPER --env DRILL_HMAC_SECRET --env TELEMETRY_SERVICE_HMAC_SECRET \
             --env JWT_PRIVATE_KEY_PATH=/run/secrets/kheleo/private.pem \

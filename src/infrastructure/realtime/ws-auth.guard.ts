@@ -1,7 +1,8 @@
-import { CanActivate, ExecutionContext, Injectable } from '@nestjs/common';
+import { CanActivate, ExecutionContext, Injectable, Optional } from '@nestjs/common';
 import { WsException } from '@nestjs/websockets';
 import { Namespace, Socket } from 'socket.io';
 import { JwtStrategy, JwtTokenPayload } from '../../modules/auth/strategies/jwt.strategy';
+import { RedisWsBridge } from './redis-ws-bridge.service';
 
 type SocketEvents = Record<string, (...args: unknown[]) => void>;
 export interface SocketData {
@@ -18,7 +19,12 @@ export type AuthenticatedNamespace = Namespace<
 @Injectable()
 export class WsAuthGuard implements CanActivate {
   private readonly namespaces = new Set<AuthenticatedNamespace>();
-  constructor(private readonly jwtStrategy: JwtStrategy) {}
+  constructor(
+    private readonly jwtStrategy: JwtStrategy,
+    @Optional() private readonly wsBridge?: RedisWsBridge,
+  ) {
+    this.wsBridge?.registerDisconnectHandler((userId) => this.disconnectLocalUser(userId));
+  }
 
   async authenticate(client: AuthenticatedSocket): Promise<JwtTokenPayload> {
     const auth = client.handshake.auth as Readonly<Record<string, unknown>>;
@@ -55,15 +61,19 @@ export class WsAuthGuard implements CanActivate {
 
   async accept(client: AuthenticatedSocket): Promise<void> {
     try {
-      const user = await this.authenticate(client);
-      await client.join([`user:${user.sub}`, `athlete:${user.sub}`]);
-      if (user.identityVerified !== false || !['ORGANIZER', 'SCOUT'].includes(user.role))
-        await client.join(`role:${user.role}`);
-      if (
-        ['SCOUT', 'FEDERATION_ADMIN', 'SUPER_ADMIN'].includes(user.role) &&
-        (user.role !== 'SCOUT' || user.identityVerified !== false)
-      )
-        await client.join('scouts');
+      const cached = client.data.user;
+      const hasValidSession = cached && cached.exp * 1000 > Date.now();
+      const user = hasValidSession ? cached : await this.authenticate(client);
+      if (!hasValidSession) {
+        await client.join([`user:${user.sub}`, `athlete:${user.sub}`]);
+        if (user.identityVerified !== false || !['ORGANIZER', 'SCOUT'].includes(user.role))
+          await client.join(`role:${user.role}`);
+        if (
+          ['SCOUT', 'FEDERATION_ADMIN', 'SUPER_ADMIN'].includes(user.role) &&
+          (user.role !== 'SCOUT' || user.identityVerified !== false)
+        )
+          await client.join('scouts');
+      }
       const timer = setTimeout(
         () => client.disconnect(true),
         Math.max(0, user.exp * 1000 - Date.now()),
@@ -75,13 +85,24 @@ export class WsAuthGuard implements CanActivate {
     }
   }
 
-  disconnectUser(userId: string): void {
+  disconnectLocalUser(userId: string): void {
     for (const namespace of this.namespaces) namespace.in(`user:${userId}`).disconnectSockets(true);
+  }
+
+  disconnectUser(userId: string): void {
+    if (this.namespaces.size > 0) {
+      this.disconnectLocalUser(userId);
+    }
+    this.wsBridge?.publishDisconnect(userId);
   }
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
     const client = context.switchToWs().getClient<AuthenticatedSocket>();
     try {
+      const existing = client.data.user;
+      if (existing && existing.exp * 1000 > Date.now()) {
+        return true;
+      }
       await this.authenticate(client);
       return true;
     } catch {

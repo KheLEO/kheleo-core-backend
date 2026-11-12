@@ -3,11 +3,18 @@ import {
   ConflictException,
   Injectable,
   NotFoundException,
+  Optional,
 } from '@nestjs/common';
 import { MatchStatus, Prisma, VerifiedMatchResult } from '@prisma/client';
 import { createHash } from 'node:crypto';
 import { PrismaService } from '../../infrastructure/database/prisma.service';
 import { QueueProducerService } from '../../infrastructure/queues/queue-producer.service';
+import { RedisService } from '../../infrastructure/cache/redis.service';
+import {
+  hasTransactionalOutboxTriggers,
+  notifyOutboxSubscribers,
+} from '../../infrastructure/outbox/outbox-authority';
+import { CACHE_KEYS, invalidateCacheKeys } from '../../infrastructure/cache/cache-helper';
 import { AuthenticatedJwtUser } from '../../common/guards/jwt-auth.guard';
 import { runSerializableTransaction } from '../../common/database/serializable-transaction';
 import {
@@ -25,6 +32,7 @@ export class MatchResultsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly queue: QueueProducerService,
+    @Optional() private readonly redis?: RedisService,
   ) {}
   async recordResult(
     tournamentId: string,
@@ -113,42 +121,85 @@ export class MatchResultsService {
           },
         });
       } else {
-        for (const userId of participants) {
-          const registration = await tx.registration.findFirst({
-            where: {
-              bracketId,
-              status: 'CONFIRMED',
-              OR: [
-                { userId },
-                { team: { members: { some: { OR: [{ userId }, { athlete: { userId } }] } } } },
-              ],
+        const confirmedRegs = await tx.registration.findMany({
+          where: {
+            bracketId,
+            status: 'CONFIRMED',
+            OR: [
+              { userId: { in: participants } },
+              {
+                team: {
+                  members: {
+                    some: {
+                      OR: [{ userId: { in: participants } }, { athlete: { userId: { in: participants } } }],
+                    },
+                  },
+                },
+              },
+            ],
+          },
+          select: {
+            userId: true,
+            team: {
+              select: {
+                members: {
+                  select: { userId: true, athlete: { select: { userId: true } } },
+                },
+              },
             },
-            select: { id: true },
-          });
-          if (!registration)
+          },
+        });
+        const confirmedUsers = new Set<string>();
+        for (const reg of confirmedRegs) {
+          if (reg.userId) confirmedUsers.add(reg.userId);
+          for (const member of reg.team?.members ?? []) {
+            if (member.userId) confirmedUsers.add(member.userId);
+            if (member.athlete?.userId) confirmedUsers.add(member.athlete.userId);
+          }
+        }
+        for (const userId of participants) {
+          if (!confirmedUsers.has(userId)) {
             throw new BadRequestException('Every participant must be confirmed in this bracket');
+          }
         }
       }
-      for (const userId of participants) {
-        const profile = await tx.athleteProfile.findUnique({
-          where: { userId },
-          include: { user: { include: { identityRecord: true } } },
-        });
-        if (!profile || profile.user.role !== 'ATHLETE')
+
+      const sortedParticipants = [...participants].sort();
+      const profiles = await tx.athleteProfile.findMany({
+        where: { userId: { in: sortedParticipants } },
+        include: { user: { include: { identityRecord: true } } },
+      });
+      const profileByUserId = new Map(profiles.map((p) => [p.userId, p]));
+      for (const userId of sortedParticipants) {
+        const profile = profileByUserId.get(userId);
+        if (!profile || profile.user.role !== 'ATHLETE') {
           throw new BadRequestException('Participant profile not found');
+        }
         assertAccountAccess(profile.user);
-        const record = await tx.sportPassportRecord.findUnique({
-          where: { athleteId_sport: { athleteId: profile.id, sport: bracket.tournament.sport } },
-        });
+      }
+
+      const sportRecords = await tx.sportPassportRecord.findMany({
+        where: {
+          athleteId: { in: profiles.map((p) => p.id) },
+          sport: bracket.tournament.sport,
+        },
+      });
+      const recordByAthleteId = new Map(sportRecords.map((r) => [r.athleteId, r]));
+      const updates: Array<Promise<unknown>> = [];
+      for (const userId of sortedParticipants) {
+        const profile = profileByUserId.get(userId)!;
+        const record = recordByAthleteId.get(profile.id);
         if (!record) throw new BadRequestException('Participant sport record not found');
         const won = winners.includes(userId);
         const totalMatches = record.totalMatches + 1;
         const winCount = record.winCount + Number(won);
         const winStreak = won ? record.winStreak + 1 : 0;
-        await tx.sportPassportRecord.update({
-          where: { id: record.id },
-          data: { totalMatches, winCount, winStreak },
-        });
+        updates.push(
+          tx.sportPassportRecord.update({
+            where: { id: record.id },
+            data: { totalMatches, winCount, winStreak },
+          }),
+        );
         const score = Number(
           (
             (Math.min(100, (winCount / totalMatches) * 80 + Math.min(winStreak, 4) * 5) *
@@ -156,12 +207,16 @@ export class MatchResultsService {
             100
           ).toFixed(2),
         );
-        if (profile.primarySport === bracket.tournament.sport)
-          await tx.athleteProfile.update({
-            where: { id: profile.id },
-            data: { matchPerformanceScore: score, matchPerfScore: new Prisma.Decimal(score) },
-          });
+        if (profile.primarySport === bracket.tournament.sport) {
+          updates.push(
+            tx.athleteProfile.update({
+              where: { id: profile.id },
+              data: { matchPerformanceScore: score, matchPerfScore: new Prisma.Decimal(score) },
+            }),
+          );
+        }
       }
+      await Promise.all(updates);
       return tx.verifiedMatchResult.create({
         data: {
           bracketId,
@@ -176,11 +231,19 @@ export class MatchResultsService {
         },
       });
     });
-    await Promise.all(
-      result.participantAthleteIds.map((athleteId) =>
-        this.queue.enqueueGtiRecalculation({ athleteId, trigger: 'MATCH_COMPLETED' }),
-      ),
+    await invalidateCacheKeys(
+      this.redis,
+      result.participantAthleteIds.map((athleteId) => CACHE_KEYS.passport(athleteId)),
     );
+    if (!hasTransactionalOutboxTriggers(this.prisma)) {
+      await Promise.all(
+        result.participantAthleteIds.map((athleteId) =>
+          this.queue.enqueueGtiRecalculation({ athleteId, trigger: 'MATCH_COMPLETED' }),
+        ),
+      );
+    } else {
+      notifyOutboxSubscribers(this.redis, 'GTI');
+    }
     return result;
   }
 }

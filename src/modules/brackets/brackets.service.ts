@@ -6,8 +6,11 @@ import {
   NotFoundException,
   BadRequestException,
   ForbiddenException,
+  Optional,
 } from '@nestjs/common';
 import { PrismaService } from '../../infrastructure/database/prisma.service';
+import { RedisService } from '../../infrastructure/cache/redis.service';
+import { bumpVersion, CACHE_KEYS } from '../../infrastructure/cache/cache-helper';
 import { RegisterBracketDto } from './dto/register-bracket.dto';
 import { CreateBracketDto } from './dto/create-bracket.dto';
 import { UpdateBracketDto } from './dto/update-bracket.dto';
@@ -29,7 +32,10 @@ import {
 
 @Injectable()
 export class BracketsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    @Optional() private readonly redis?: RedisService,
+  ) {}
 
   async registerForBracket(
     tournamentId: string,
@@ -37,7 +43,7 @@ export class BracketsService {
     userId: string,
     dto: RegisterBracketDto,
   ): Promise<BracketRegistrationResponseDto> {
-    return runSerializableTransaction(this.prisma, async (transaction) => {
+    const outcome = await runSerializableTransaction(this.prisma, async (transaction) => {
       const { profile, bracket, athleteGti } = await readParticipationSnapshot(
         transaction,
         tournamentId,
@@ -53,7 +59,11 @@ export class BracketsService {
             where: { bracketId_userId: { bracketId, userId } },
           });
       if (existing?.status === RegistrationStatus.CONFIRMED) {
-        return this.mapToResponse(existing, tournamentId, profile.id, bracket.tierName, athleteGti);
+        return {
+          createdOrUpdated: false,
+          organizerId: bracket.tournament?.organizerId,
+          response: this.mapToResponse(existing, tournamentId, profile.id, bracket.tierName, athleteGti),
+        };
       }
       const count = await transaction.registration.count({
         where: { bracketId, status: RegistrationStatus.CONFIRMED },
@@ -79,17 +89,28 @@ export class BracketsService {
       const registration = existing
         ? await transaction.registration.update({ where: { id: existing.id }, data })
         : await transaction.registration.create({ data });
-      return this.mapToResponse(
-        registration,
-        tournamentId,
-        profile.id,
-        bracket.tierName,
-        athleteGti,
-      );
+      return {
+        createdOrUpdated: true,
+        organizerId: bracket.tournament?.organizerId,
+        response: this.mapToResponse(
+          registration,
+          tournamentId,
+          profile.id,
+          bracket.tierName,
+          athleteGti,
+        ),
+      };
     }).catch(async (error: unknown) => {
       await recordSandbaggingRejection(this.prisma, error, tournamentId, bracketId, userId);
       throw error;
     });
+    if (outcome.createdOrUpdated) {
+      if (outcome.organizerId) {
+        await bumpVersion(this.redis, CACHE_KEYS.organizerVersion(outcome.organizerId));
+      }
+      await bumpVersion(this.redis, CACHE_KEYS.organizerVersion('GLOBAL'));
+    }
+    return outcome.response;
   }
 
   private async validateTeam(

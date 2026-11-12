@@ -6,10 +6,15 @@ build/
 node_modules/
 .pnpm-debug.log*
 
-# Environment
+# Environment & Cryptographic Keys
 .env
 .env.local
 .env.*.local
+keys/
+*.pem
+*.key
+*.hex
+.local-keys/
 
 # IDE
 .vscode/

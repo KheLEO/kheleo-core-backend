@@ -24,6 +24,7 @@ import {
 import { TelemetryAuthGuard, TelemetryRequest } from './telemetry-auth.guard';
 import { IdempotencyInterceptor } from '../../common/interceptors/idempotency.interceptor';
 import { AuthenticatedJwtUser, JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
+import { RateLimit, RateLimitGuard } from '../../common/guards/rate-limit.guard';
 import { RolesGuard } from '../../common/guards/roles.guard';
 import { Roles } from '../../common/decorators/roles.decorator';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
@@ -36,7 +37,8 @@ export class SafetyController {
   constructor(private readonly service: SafetyService) {}
   @Post('telemetry-webhook')
   @HttpCode(200)
-  @UseGuards(TelemetryAuthGuard)
+  @UseGuards(TelemetryAuthGuard, RateLimitGuard)
+  @RateLimit({ keyPrefix: 'safety:telemetry', limit: 120, windowSeconds: 60 })
   @UseInterceptors(IdempotencyInterceptor)
   async telemetry(
     @Body() dto: TelemetryWebhookDto,

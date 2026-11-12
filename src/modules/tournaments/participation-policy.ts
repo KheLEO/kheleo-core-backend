@@ -26,6 +26,7 @@ export const participationBracketSelect = {
   tournament: {
     select: {
       id: true,
+      organizerId: true,
       sport: true,
       teamSize: true,
       status: true,

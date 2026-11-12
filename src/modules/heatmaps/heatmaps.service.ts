@@ -1,5 +1,7 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, Optional } from '@nestjs/common';
 import { PrismaService } from '../../infrastructure/database/prisma.service';
+import { RedisService } from '../../infrastructure/cache/redis.service';
+import { CACHE_KEYS, readThroughCache } from '../../infrastructure/cache/cache-helper';
 import {
   normalizeLocationName,
   resolveCoordinatesForLocation,
@@ -25,9 +27,18 @@ export interface RegionalHeatmapResponse {
 export class HeatmapsService {
   private readonly logger = new Logger(HeatmapsService.name);
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    @Optional() private readonly redis?: RedisService,
+  ) {}
 
   async getRegionalHeatmap(): Promise<RegionalHeatmapResponse> {
+    return readThroughCache(this.redis, CACHE_KEYS.regionalHeatmap(), 300, async () =>
+      this.computeRegionalHeatmap(),
+    );
+  }
+
+  private async computeRegionalHeatmap(): Promise<RegionalHeatmapResponse> {
     try {
       // 1. Attempt High-Performance PostGIS Spatial Aggregation
       const rawResults = await this.prisma.$queryRaw<

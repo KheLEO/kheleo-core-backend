@@ -17,6 +17,7 @@ import { VerifyGovIdDto } from './dto/verify-gov-id.dto';
 import { RefreshTokenDto } from './dto/refresh-token.dto';
 import { AuthResponseDto } from './dto/auth-response.dto';
 import { JwtAuthGuard, AuthenticatedJwtUser } from '../../common/guards/jwt-auth.guard';
+import { RateLimit, RateLimitGuard } from '../../common/guards/rate-limit.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import {
   FRESH_IDEMPOTENCY_KEY,
@@ -31,6 +32,8 @@ export class AuthController {
   @Post('register')
   @SetMetadata(FRESH_IDEMPOTENCY_KEY, true)
   @HttpCode(HttpStatus.CREATED)
+  @UseGuards(RateLimitGuard)
+  @RateLimit({ keyPrefix: 'auth:register', limit: 30, windowSeconds: 60 })
   @UseInterceptors(IdempotencyInterceptor)
   @ApiOperation({
     summary: 'Register athlete profile with Anti-Account Reset check',
@@ -59,6 +62,8 @@ export class AuthController {
   @Post('login')
   @SetMetadata(FRESH_IDEMPOTENCY_KEY, true)
   @HttpCode(HttpStatus.OK)
+  @UseGuards(RateLimitGuard)
+  @RateLimit({ keyPrefix: 'auth:login', limit: 30, windowSeconds: 60 })
   @UseInterceptors(IdempotencyInterceptor)
   @ApiOperation({
     summary: 'Login via verified contact and Government ID proof',
@@ -126,6 +131,8 @@ export class AuthController {
   @Post('refresh')
   @SetMetadata(FRESH_IDEMPOTENCY_KEY, true)
   @HttpCode(HttpStatus.OK)
+  @UseGuards(RateLimitGuard)
+  @RateLimit({ keyPrefix: 'auth:refresh', limit: 60, windowSeconds: 60 })
   @UseInterceptors(IdempotencyInterceptor)
   @ApiOperation({
     summary: 'Rotate refresh token and get fresh lightweight access token',

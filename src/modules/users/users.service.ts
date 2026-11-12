@@ -6,6 +6,12 @@ import { runSerializableTransaction } from '../../common/database/serializable-t
 
 import { LeaderboardsService } from '../leaderboards/leaderboards.service';
 import { WsAuthGuard } from '../../infrastructure/realtime/ws-auth.guard';
+import { RedisService } from '../../infrastructure/cache/redis.service';
+import {
+  hasTransactionalOutboxTriggers,
+  notifyOutboxSubscribers,
+} from '../../infrastructure/outbox/outbox-authority';
+import { invalidateAuthAndPassport } from '../../infrastructure/cache/cache-helper';
 
 export interface UserResponse {
   readonly id: string;
@@ -67,6 +73,7 @@ export class UsersService {
     private readonly prisma: PrismaService,
     @Optional() private readonly leaderboards?: LeaderboardsService,
     @Optional() private readonly sockets?: WsAuthGuard,
+    @Optional() private readonly redis?: RedisService,
   ) {}
 
   async findById(id: string): Promise<UserResponse> {
@@ -111,6 +118,7 @@ export class UsersService {
       },
       select: userResponseSelect,
     });
+    await invalidateAuthAndPassport(this.redis, id);
     return formatUserResponse(updated);
   }
 
@@ -144,8 +152,13 @@ export class UsersService {
       });
       return formatUserResponse(user);
     });
-    this.sockets?.disconnectUser(id);
-    await this.leaderboards?.syncAthlete(id);
+    await invalidateAuthAndPassport(this.redis, id);
+    if (!hasTransactionalOutboxTriggers(this.prisma)) {
+      this.sockets?.disconnectUser(id);
+      await this.leaderboards?.syncAthlete(id);
+    } else {
+      notifyOutboxSubscribers(this.redis, 'REVOKE_SOCKETS');
+    }
     return updated;
   }
 }

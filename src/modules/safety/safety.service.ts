@@ -6,6 +6,7 @@ import {
   ConflictException,
   Injectable,
   NotFoundException,
+  Optional,
 } from '@nestjs/common';
 import {
   AlertSeverity,
@@ -19,6 +20,16 @@ import {
 import { PrismaService } from '../../infrastructure/database/prisma.service';
 import { WsEventGateway } from '../../infrastructure/realtime/ws-event.gateway';
 import { QueueProducerService } from '../../infrastructure/queues/queue-producer.service';
+import { RedisService } from '../../infrastructure/cache/redis.service';
+import {
+  hasTransactionalOutboxTriggers,
+  notifyOutboxSubscribers,
+} from '../../infrastructure/outbox/outbox-authority';
+import {
+  bumpVersion,
+  CACHE_KEYS,
+  invalidateCacheKeys,
+} from '../../infrastructure/cache/cache-helper';
 import {
   TelemetryWebhookDto,
   TelemetryResponseDto,
@@ -44,6 +55,7 @@ export class SafetyService {
     private readonly prisma: PrismaService,
     private readonly wsGateway: WsEventGateway,
     private readonly queue: QueueProducerService,
+    @Optional() private readonly redis?: RedisService,
   ) {}
 
   async processTelemetry(
@@ -79,6 +91,7 @@ export class SafetyService {
       assertAccountAccess(profile.user);
       let tournamentId = dto.tournament_id;
       let bracketId = dto.bracket_id;
+      let organizerId: string | undefined;
       let paused = false;
       if (dto.match_id) {
         const match = await tx.match.findUnique({
@@ -98,6 +111,7 @@ export class SafetyService {
         if (!active.includes(match.status)) throw new ConflictException('Match is not active');
         bracketId = match.bracketId;
         tournamentId = match.bracket.tournamentId;
+        organizerId = match.bracket.tournament?.organizerId;
         paused = critical && match.status !== MatchStatus.PAUSED_SAFETY;
         if (paused)
           await tx.match.update({
@@ -186,11 +200,15 @@ export class SafetyService {
         where: { athleteId: dto.athlete_id, sessionDate: { gte: since, lte: day } },
       });
       const score = Math.min(100, sessions * 5);
-      await tx.athleteProfile.update({
-        where: { id: profile.id },
-        data: { trainingConsistencyScore: score, wearableScore: new Prisma.Decimal(score) },
-      });
+      const trainingScoreChanged = score !== profile.trainingConsistencyScore;
+      if (trainingScoreChanged) {
+        await tx.athleteProfile.update({
+          where: { id: profile.id },
+          data: { trainingConsistencyScore: score, wearableScore: new Prisma.Decimal(score) },
+        });
+      }
       let alert: HealthAlert | null = null;
+      let createdNewAlert = false;
       if (severity !== AlertSeverity.NORMAL) {
         const existing = await tx.healthAlert.findFirst({
           where: {
@@ -203,6 +221,7 @@ export class SafetyService {
           },
           orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
         });
+        createdNewAlert = existing === null;
         const data = {
           athleteId: dto.athlete_id,
           matchId: dto.match_id ?? null,
@@ -223,8 +242,11 @@ export class SafetyService {
       }
       return {
         alertId: alert?.id,
+        createdNewAlert,
         paused,
+        shouldRecalculateGti: trainingScoreChanged || createdNewAlert,
         tournamentId,
+        organizerId,
         bracketId,
         name: profile.user.email ?? profile.user.phone ?? `Athlete ${dto.athlete_id.slice(0, 8)}`,
       };
@@ -243,7 +265,18 @@ export class SafetyService {
         match_id: dto.match_id,
         bracket_id: result.bracketId,
       });
-    if (critical)
+    if (result.shouldRecalculateGti) {
+      await invalidateCacheKeys(this.redis, [CACHE_KEYS.passport(dto.athlete_id)]);
+    }
+    if (result.createdNewAlert) {
+      if (result.organizerId) {
+        await bumpVersion(this.redis, CACHE_KEYS.organizerVersion(result.organizerId));
+      }
+      await bumpVersion(this.redis, CACHE_KEYS.organizerVersion('GLOBAL'));
+    }
+    const outboxActive = hasTransactionalOutboxTriggers(this.prisma);
+    const outboxHandledPause = outboxActive && result.paused && result.createdNewAlert && Boolean(dto.match_id);
+    if (critical && !outboxHandledPause && (!outboxActive || !dto.match_id)) {
       this.wsGateway.broadcastAutonomousMatchPause({
         event_id: randomUUID(),
         alert_id: result.alertId,
@@ -266,10 +299,17 @@ export class SafetyService {
         bracket_id: result.bracketId,
         match_id: dto.match_id,
       });
-    await this.queue.enqueueGtiRecalculation({
-      athleteId: dto.athlete_id,
-      trigger: 'WEARABLE_SYNC',
-    });
+    }
+    if (!outboxActive) {
+      if (result.shouldRecalculateGti) {
+        await this.queue.enqueueGtiRecalculation({
+          athleteId: dto.athlete_id,
+          trigger: 'WEARABLE_SYNC',
+        });
+      }
+    } else if (result.shouldRecalculateGti || outboxHandledPause) {
+      notifyOutboxSubscribers(this.redis, outboxHandledPause ? 'PAUSE' : 'GTI');
+    }
     return {
       alert_triggered: critical || warning,
       status: result.paused
@@ -314,14 +354,16 @@ export class SafetyService {
     id: string,
     dto: AcknowledgeSafetyDto,
   ): Promise<HealthAlert> {
-    return runSerializableTransaction(this.prisma, async (tx) => {
+    const outcome = await runSerializableTransaction(this.prisma, async (tx) => {
       const alert = await tx.healthAlert.findUnique({
         where: { id },
         include: { tournament: true, match: { select: matchContextSelect } },
       });
       if (!alert) throw new NotFoundException('Safety alert not found');
       assertMatchOperator(actor, alert.tournament?.organizerId ?? '', alert.match ?? undefined);
-      if (alert.acknowledgedAt) return alert;
+      if (alert.acknowledgedAt) {
+        return { updated: alert, newlyAcknowledged: false, organizerId: undefined };
+      }
       if (
         dto.medicalCheckDispatched !== true ||
         typeof dto.medicalCheckNote !== 'string' ||
@@ -354,8 +396,19 @@ export class SafetyService {
           resourceId: id,
         },
       });
-      return updated;
+      return {
+        updated,
+        newlyAcknowledged: true,
+        organizerId: alert.tournament?.organizerId ?? alert.match?.bracket?.tournament?.organizerId,
+      };
     });
+    if (outcome.newlyAcknowledged) {
+      if (outcome.organizerId) {
+        await bumpVersion(this.redis, CACHE_KEYS.organizerVersion(outcome.organizerId));
+      }
+      await bumpVersion(this.redis, CACHE_KEYS.organizerVersion('GLOBAL'));
+    }
+    return outcome.updated;
   }
 
   async resume(

@@ -8,11 +8,12 @@ import {
   MessageBody,
   ConnectedSocket,
 } from '@nestjs/websockets';
-import { ForbiddenException, Logger, UseGuards } from '@nestjs/common';
+import { ForbiddenException, Logger, Optional, UseGuards } from '@nestjs/common';
 
 import { WsAuthGuard, AuthenticatedSocket, AuthenticatedNamespace } from './ws-auth.guard';
 import { RoomAccessService } from './room-access.service';
 import { ScoutAlertPayload } from '../queues/queue-producer.service';
+import { RedisWsBridge } from './redis-ws-bridge.service';
 
 export interface AutonomousMatchPausePayload {
   readonly event_id?: string;
@@ -56,10 +57,12 @@ export class WsEventGateway implements OnGatewayInit, OnGatewayConnection, OnGat
   constructor(
     private readonly auth: WsAuthGuard,
     private readonly access: RoomAccessService,
+    @Optional() private readonly wsBridge?: RedisWsBridge,
   ) {}
 
   afterInit(server: AuthenticatedNamespace): void {
     this.auth.configure(server);
+    this.wsBridge?.registerNamespace('/ws/events', server as never);
   }
   async handleConnection(client: AuthenticatedSocket): Promise<void> {
     await this.auth.accept(client);
@@ -131,18 +134,25 @@ export class WsEventGateway implements OnGatewayInit, OnGatewayConnection, OnGat
 
   // ─── Server-side Broadcast Methods ──────────────────
 
-  broadcastAutonomousMatchPause(payload: AutonomousMatchPausePayload): void {
-    if (!this.server) {
-      this.logger.warn('Socket server not ready during broadcastAutonomousMatchPause');
+  private emitToRooms(rooms: readonly string[], event: string, payload: unknown): void {
+    if (this.server) {
+      this.server.to([...rooms]).emit(event, payload);
       return;
     }
+    if (this.wsBridge) {
+      this.wsBridge.publishEmit('/ws/events', rooms, event, payload);
+      return;
+    }
+    this.logger.warn(`Socket server not ready during ${event}`);
+  }
 
+  broadcastAutonomousMatchPause(payload: AutonomousMatchPausePayload): void {
     const rooms: string[] = [];
     if (payload.tournament_id) rooms.push(`safety:tournament:${payload.tournament_id}`);
     if (payload.bracket_id) rooms.push(`safety:bracket:${payload.bracket_id}`);
     if (payload.match_id) rooms.push(`safety:match:${payload.match_id}`);
     if (!rooms.length) rooms.push(`athlete:${payload.athlete_id}`);
-    this.server.to(rooms).emit('MATCH_PAUSE_ALERT', payload);
+    this.emitToRooms(rooms, 'MATCH_PAUSE_ALERT', payload);
   }
 
   broadcastVitalsUpdated(payload: {
@@ -161,11 +171,11 @@ export class WsEventGateway implements OnGatewayInit, OnGatewayConnection, OnGat
     const rooms = [`safety:tournament:${payload.tournament_id}`];
     if (payload.match_id) rooms.push(`safety:match:${payload.match_id}`);
     if (payload.bracket_id) rooms.push(`safety:bracket:${payload.bracket_id}`);
-    this.server?.to(rooms).emit('VITALS_UPDATED', payload);
+    this.emitToRooms(rooms, 'VITALS_UPDATED', payload);
   }
 
   broadcastScoutTalent(payload: ScoutAlertPayload): void {
-    this.server?.to('scouts').emit('SCOUT_TALENT_ALERT', {
+    this.emitToRooms(['scouts'], 'SCOUT_TALENT_ALERT', {
       alertId: payload.alertId,
       athleteId: payload.athleteId,
       gtiScore: payload.newGti,
@@ -177,7 +187,6 @@ export class WsEventGateway implements OnGatewayInit, OnGatewayConnection, OnGat
   }
 
   broadcastGtiUpdated(payload: GtiUpdatedPayload): void {
-    if (!this.server) return;
-    this.server.to(`athlete:${payload.athleteId}`).emit('GTI_UPDATED', payload);
+    this.emitToRooms([`athlete:${payload.athleteId}`], 'GTI_UPDATED', payload);
   }
 }

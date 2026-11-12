@@ -7,7 +7,7 @@ import {
   MessageBody,
   ConnectedSocket,
 } from '@nestjs/websockets';
-import { ForbiddenException, Logger, UseGuards } from '@nestjs/common';
+import { ForbiddenException, Logger, Optional, UseGuards } from '@nestjs/common';
 
 import {
   AuthenticatedSocket,
@@ -16,6 +16,7 @@ import {
 } from '../../infrastructure/realtime/ws-auth.guard';
 
 import { RoomAccessService } from '../../infrastructure/realtime/room-access.service';
+import { RedisWsBridge } from '../../infrastructure/realtime/redis-ws-bridge.service';
 
 export interface RosterMemberPayload {
   readonly user_id: string;
@@ -45,9 +46,11 @@ export class MatchmakingGateway implements OnGatewayInit, OnGatewayConnection {
   constructor(
     private readonly auth: WsAuthGuard,
     private readonly access: RoomAccessService,
+    @Optional() private readonly wsBridge?: RedisWsBridge,
   ) {}
   afterInit(server: AuthenticatedNamespace): void {
     this.auth.configure(server);
+    this.wsBridge?.registerNamespace('/ws/matchmaking', server as never);
   }
   async handleConnection(client: AuthenticatedSocket): Promise<void> {
     await this.auth.accept(client);
@@ -88,11 +91,17 @@ export class MatchmakingGateway implements OnGatewayInit, OnGatewayConnection {
       data,
     };
 
+    const rooms = [
+      `bracket:${data.bracket_id}`,
+      ...data.roster.map((member) => `user:${member.user_id}`),
+    ];
     if (this.server) {
       this.server
         .to(`bracket:${data.bracket_id}`)
         .to(data.roster.map((member) => `user:${member.user_id}`))
         .emit('ROSTER_FORMED', payload);
+    } else if (this.wsBridge) {
+      this.wsBridge.publishEmit('/ws/matchmaking', rooms, 'ROSTER_FORMED', payload);
     }
 
     this.logger.log(

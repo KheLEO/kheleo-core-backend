@@ -4,10 +4,17 @@ import {
   ConflictException,
   NotFoundException,
   BadRequestException,
+  Optional,
 } from '@nestjs/common';
 import { PrismaService } from '../../infrastructure/database/prisma.service';
 import { QueueProducerService } from '../../infrastructure/queues/queue-producer.service';
 import { MatchmakingGateway, RosterMemberPayload } from './matchmaking.gateway';
+import { RedisService } from '../../infrastructure/cache/redis.service';
+import {
+  hasTransactionalOutboxTriggers,
+  notifyOutboxSubscribers,
+} from '../../infrastructure/outbox/outbox-authority';
+import { bumpVersion, CACHE_KEYS } from '../../infrastructure/cache/cache-helper';
 import { JoinFreeAgentDto } from './dto/join-free-agent.dto';
 import {
   FreeAgentStatusResponseDto,
@@ -50,6 +57,7 @@ type EligibleCandidate = QueuedCandidate & {
 interface CreatedRoster {
   readonly teamId: string;
   readonly teamName: string;
+  readonly organizerId?: string;
   readonly roster: readonly RosterMemberPayload[];
 }
 function isEligibleCandidate(candidate: QueuedCandidate): candidate is EligibleCandidate {
@@ -77,6 +85,7 @@ export class MatchmakingService {
     private readonly prisma: PrismaService,
     private readonly queueProducer: QueueProducerService,
     private readonly gateway: MatchmakingGateway,
+    @Optional() private readonly redis?: RedisService,
   ) {}
 
   /**
@@ -165,11 +174,16 @@ export class MatchmakingService {
       throw error;
     });
 
-    // 7. Dispatch async matchmaking trigger to BullMQ queue
-    await this.queueProducer.enqueueBracketMatchmaking({
-      tournamentId,
-      bracketId,
-    });
+    // 7. Dispatch async matchmaking via authoritative outbox triggers in DB mode,
+    // or directly in triggerless unit-test mocks.
+    if (!hasTransactionalOutboxTriggers(this.prisma)) {
+      await this.queueProducer.enqueueBracketMatchmaking({
+        tournamentId,
+        bracketId,
+      });
+    } else {
+      notifyOutboxSubscribers(this.redis, 'MATCHMAKING');
+    }
 
     return {
       registrationId: registration.id,
@@ -341,12 +355,20 @@ export class MatchmakingService {
         throw error;
       }
       if (!created) return formed;
-      this.gateway.emitRosterFormed({
-        team_id: created.teamId,
-        team_name: created.teamName,
-        bracket_id: bracketId,
-        roster: created.roster,
-      });
+      if (created.organizerId) {
+        await bumpVersion(this.redis, CACHE_KEYS.organizerVersion(created.organizerId));
+      }
+      await bumpVersion(this.redis, CACHE_KEYS.organizerVersion('GLOBAL'));
+      if (!hasTransactionalOutboxTriggers(this.prisma)) {
+        this.gateway.emitRosterFormed({
+          team_id: created.teamId,
+          team_name: created.teamName,
+          bracket_id: bracketId,
+          roster: created.roster,
+        });
+      } else {
+        notifyOutboxSubscribers(this.redis, 'ROSTER');
+      }
       formed = true;
     }
   }
@@ -462,7 +484,12 @@ export class MatchmakingService {
         },
       },
     });
-    return { teamId: team.id, teamName: team.name, roster };
+    return {
+      teamId: team.id,
+      teamName: team.name,
+      organizerId: bracket.tournament.organizerId,
+      roster,
+    };
   }
 
   private async loadCandidates(

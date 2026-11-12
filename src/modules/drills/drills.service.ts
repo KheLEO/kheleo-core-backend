@@ -1,6 +1,12 @@
-import { ConflictException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { ConflictException, Injectable, Logger, NotFoundException, Optional } from '@nestjs/common';
 import { PrismaService } from '../../infrastructure/database/prisma.service';
 import { QueueProducerService } from '../../infrastructure/queues/queue-producer.service';
+import { RedisService } from '../../infrastructure/cache/redis.service';
+import {
+  hasTransactionalOutboxTriggers,
+  notifyOutboxSubscribers,
+} from '../../infrastructure/outbox/outbox-authority';
+import { CACHE_KEYS, invalidateCacheKeys } from '../../infrastructure/cache/cache-helper';
 import { SubmitDrillDto } from './dto/submit-drill.dto';
 import { DrillSignatureVersion, Prisma } from '@prisma/client';
 import { runSerializableTransaction } from '../../common/database/serializable-transaction';
@@ -18,6 +24,7 @@ export class DrillsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly queueProducer: QueueProducerService,
+    @Optional() private readonly redis?: RedisService,
   ) {}
 
   async submitDrill(
@@ -42,16 +49,12 @@ export class DrillsService {
           throw new NotFoundException(`Athlete profile not found for user ${athleteId}.`);
         }
 
+        const normalizedSignature = signatureHash.trim().toLowerCase();
         if (
           await transaction.drillSubmission.findFirst({
             where: {
               OR: [
-                {
-                  signatureHash: {
-                    equals: signatureHash.trim().toLowerCase(),
-                    mode: 'insensitive',
-                  },
-                },
+                { signatureHash: normalizedSignature },
                 ...(clientPoseDigest ? [{ athleteId, clientPoseDigest }] : []),
               ],
             },
@@ -96,11 +99,17 @@ export class DrillsService {
       },
     );
 
-    // 5. Enqueue GTI recalculation BullMQ job
-    await this.queueProducer.enqueueGtiRecalculation({
-      athleteId,
-      trigger: 'DRILL_SUBMISSION',
-    });
+    await invalidateCacheKeys(this.redis, [CACHE_KEYS.passport(athleteId)]);
+    // 5. Trigger GTI recalculation via authoritative outbox triggers in DB mode,
+    // or directly in triggerless unit-test mocks.
+    if (!hasTransactionalOutboxTriggers(this.prisma)) {
+      await this.queueProducer.enqueueGtiRecalculation({
+        athleteId,
+        trigger: 'DRILL_SUBMISSION',
+      });
+    } else {
+      notifyOutboxSubscribers(this.redis, 'GTI');
+    }
 
     this.logger.log(
       `Drill submitted for athlete ${athleteId}: formScore=${dto.form_score}, newBiomechanicalScore=${currentBiomechanicalScore}`,

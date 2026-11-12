@@ -1,12 +1,15 @@
-import { Processor, WorkerHost } from '@nestjs/bullmq';
+import { OnWorkerEvent, Processor, WorkerHost } from '@nestjs/bullmq';
+import { Logger } from '@nestjs/common';
 import { Job } from 'bullmq';
 import { QUEUE_SCOUT_ALERTS } from '../../../common/constants/queue.constants';
 import { ScoutAlertPayload } from '../../../infrastructure/queues/queue-producer.service';
 import { WsEventGateway } from '../../../infrastructure/realtime/ws-event.gateway';
 import { PrismaService } from '../../../infrastructure/database/prisma.service';
 
-@Processor(QUEUE_SCOUT_ALERTS)
+@Processor(QUEUE_SCOUT_ALERTS, { concurrency: 4 })
 export class ScoutAlertsProcessor extends WorkerHost {
+  private readonly logger = new Logger(ScoutAlertsProcessor.name);
+
   constructor(
     private readonly ws: WsEventGateway,
     private readonly prisma: PrismaService,
@@ -41,5 +44,16 @@ export class ScoutAlertsProcessor extends WorkerHost {
       tierClassification: profile.tierClassification,
     });
     return true;
+  }
+
+  @OnWorkerEvent('failed')
+  onFailed(job: Job<ScoutAlertPayload> | undefined, error: Error): void {
+    if (!job) return;
+    const maxAttempts = job.opts?.attempts ?? 1;
+    if (job.attemptsMade >= maxAttempts) {
+      this.logger.error(
+        `DLQ_ALERT queue=${QUEUE_SCOUT_ALERTS} jobId=${job.id} alertId=${job.data?.alertId} attempts=${job.attemptsMade}: ${error.message}`,
+      );
+    }
   }
 }

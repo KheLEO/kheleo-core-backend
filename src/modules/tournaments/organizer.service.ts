@@ -1,6 +1,12 @@
-import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { ForbiddenException, Injectable, NotFoundException, Optional } from '@nestjs/common';
 import { Prisma, SecurityAuditLog, Tournament } from '@prisma/client';
 import { PrismaService } from '../../infrastructure/database/prisma.service';
+import { RedisService } from '../../infrastructure/cache/redis.service';
+import {
+  CACHE_KEYS,
+  readThroughCache,
+  readVersion,
+} from '../../infrastructure/cache/cache-helper';
 import { AuthenticatedJwtUser } from '../../common/guards/jwt-auth.guard';
 import { CursorPaginationQueryDto } from '../../common/dto/cursor-pagination-query.dto';
 import { PaginatedResponseDto } from '../../common/dto/paginated-response.dto';
@@ -61,6 +67,7 @@ export class OrganizerService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly matchmaking: MatchmakingService,
+    @Optional() private readonly redis?: RedisService,
   ) {}
   private ownership(actor: AuthenticatedJwtUser): Prisma.TournamentWhereInput {
     if (!['ORGANIZER', 'FEDERATION_ADMIN', 'SUPER_ADMIN'].includes(actor.role))
@@ -90,6 +97,14 @@ export class OrganizerService {
   }
   async summary(actor: AuthenticatedJwtUser): Promise<OrganizerSummary> {
     const scope = this.ownership(actor);
+    const scopeId = actor.role === 'ORGANIZER' ? actor.sub : 'GLOBAL';
+    const ver = await readVersion(this.redis, CACHE_KEYS.organizerVersion(scopeId));
+    return readThroughCache(this.redis, CACHE_KEYS.organizerSummary(ver, scopeId), 30, async () =>
+      this.computeSummary(scope),
+    );
+  }
+
+  private async computeSummary(scope: Prisma.TournamentWhereInput): Promise<OrganizerSummary> {
     const registration = { status: 'CONFIRMED' as const, bracket: { tournament: scope } };
     const [
       activeTournamentsCount,

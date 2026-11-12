@@ -8,6 +8,7 @@ import { redisOptions } from './redis-options';
 export class RedisService implements OnApplicationShutdown {
   private readonly logger = new Logger(RedisService.name);
   public readonly client: Redis;
+  public readonly isCacheEnabled = true;
 
   constructor(private readonly configService: ConfigService) {
     this.client = new Redis(redisOptions(this.configService));

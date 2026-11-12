@@ -1,4 +1,4 @@
-import { Module } from '@nestjs/common';
+import { Module, ModuleMetadata } from '@nestjs/common';
 import { ConfigurationModule } from './config/configuration.module';
 import { PrismaModule } from './infrastructure/database/prisma.module';
 import { RedisModule } from './infrastructure/cache/redis.module';
@@ -10,10 +10,13 @@ import { IdentityModule } from './modules/identity/identity.module';
 import { PassportModule } from './modules/passport/passport.module';
 import { TournamentsModule } from './modules/tournaments/tournaments.module';
 import { BracketsModule } from './modules/brackets/brackets.module';
-import { MatchmakingModule } from './modules/matchmaking/matchmaking.module';
+import {
+  MatchmakingModule,
+  MatchmakingWorkersModule,
+} from './modules/matchmaking/matchmaking.module';
 import { DrillsModule } from './modules/drills/drills.module';
 import { SafetyModule } from './modules/safety/safety.module';
-import { GtiModule } from './modules/gti/gti.module';
+import { GtiModule, GtiWorkersModule } from './modules/gti/gti.module';
 import { ScoutsModule } from './modules/scouts/scouts.module';
 import { HeatmapsModule } from './modules/heatmaps/heatmaps.module';
 import { CommonModule } from './common/common.module';
@@ -24,33 +27,44 @@ import { LeaderboardsModule } from './modules/leaderboards/leaderboards.module';
 
 import { OutboxDispatcher } from './infrastructure/outbox/outbox-dispatcher.service';
 
-@Module({
-  providers: [OutboxDispatcher],
-  imports: [
-    // Infrastructure
-    ConfigurationModule,
-    PrismaModule,
-    RedisModule,
-    BullmqModule,
-    RealtimeModule,
-    CommonModule,
-    HealthModule,
-    AdminModule,
-    LeaderboardsModule,
+export function resolveEmbeddedWorkersEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+  return env.ENABLE_EMBEDDED_WORKERS !== 'false';
+}
 
-    // Domain Modules
-    AuthModule,
-    UsersModule,
-    IdentityModule,
-    PassportModule,
-    TournamentsModule,
-    BracketsModule,
-    MatchmakingModule,
-    DrillsModule,
-    SafetyModule,
-    GtiModule,
-    ScoutsModule,
-    HeatmapsModule,
-  ],
-})
+export function createAppModuleMetadata(
+  enableEmbeddedWorkers = resolveEmbeddedWorkersEnabled(),
+): ModuleMetadata {
+  return {
+    providers: enableEmbeddedWorkers ? [OutboxDispatcher] : [],
+    imports: [
+      // Infrastructure
+      ConfigurationModule,
+      PrismaModule,
+      RedisModule,
+      BullmqModule,
+      RealtimeModule,
+      CommonModule,
+      HealthModule,
+      AdminModule,
+      LeaderboardsModule,
+
+      // Domain Modules
+      AuthModule,
+      UsersModule,
+      IdentityModule,
+      PassportModule,
+      TournamentsModule,
+      BracketsModule,
+      MatchmakingModule,
+      DrillsModule,
+      SafetyModule,
+      GtiModule,
+      ScoutsModule,
+      HeatmapsModule,
+      ...(enableEmbeddedWorkers ? [GtiWorkersModule, MatchmakingWorkersModule] : []),
+    ],
+  };
+}
+
+@Module(createAppModuleMetadata())
 export class AppModule {}

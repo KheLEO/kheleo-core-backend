@@ -18,6 +18,17 @@ import { Prisma, SportPassportRecord, VerificationStatus } from '@prisma/client'
 import { runSerializableTransaction } from '../../common/database/serializable-transaction';
 import { assertAccountAccess } from '../../common/auth/account-access';
 import { AuthenticatedJwtUser } from '../../common/guards/jwt-auth.guard';
+import { resolveProfileComponentScores } from '../gti/gti-score-reconciliation';
+import { RedisService } from '../../infrastructure/cache/redis.service';
+import {
+  hasTransactionalOutboxTriggers,
+  notifyOutboxSubscribers,
+} from '../../infrastructure/outbox/outbox-authority';
+import {
+  CACHE_KEYS,
+  invalidateCacheKeys,
+  readThroughCache,
+} from '../../infrastructure/cache/cache-helper';
 import {
   isValidStateAndDistrict,
   normalizeDominantSide,
@@ -42,8 +53,11 @@ const athletePassportSelect = {
   locationLat: true,
   locationLng: true,
   isScoutSearchable: true,
+  gti: true,
   currentGti: true,
+  trainingConsistencyScore: true,
   wearableScore: true,
+  matchPerformanceScore: true,
   matchPerfScore: true,
   posturePoints: true,
   biomechanicalScore: true,
@@ -80,6 +94,7 @@ export class PassportService {
     private readonly prisma: PrismaService,
     @Optional() private readonly leaderboards?: LeaderboardsService,
     @Optional() private readonly configService?: ConfigService,
+    @Optional() private readonly redis?: RedisService,
   ) {}
 
   /**
@@ -94,38 +109,48 @@ export class PassportService {
     userId: string,
     viewer?: AuthenticatedJwtUser,
   ): Promise<AthletePassportDto> {
-    const profile = await this.prisma.athleteProfile.findUnique({
-      where: { userId },
-      select: athletePassportSelect,
-    });
+    const dto = await readThroughCache<AthletePassportDto>(
+      this.redis,
+      CACHE_KEYS.passport(userId),
+      120,
+      async () => {
+        const profile = await this.prisma.athleteProfile.findUnique({
+          where: { userId },
+          select: athletePassportSelect,
+        });
 
-    if (!profile) {
-      throw new NotFoundException(
-        `Digital Sports Passport for user ${userId} not found. Please create a profile first.`,
-      );
-    }
+        if (!profile) {
+          throw new NotFoundException(
+            `Digital Sports Passport for user ${userId} not found. Please create a profile first.`,
+          );
+        }
 
-    let identityStatus = profile.user?.identityRecord?.status;
-    if (!identityStatus) {
-      const record = await this.prisma.identityVerification.findUnique({
-        where: { userId },
-        select: { status: true },
-      });
-      identityStatus = record?.status ?? VerificationStatus.UNVERIFIED;
-    }
+        let identityStatus = profile.user?.identityRecord?.status;
+        if (!identityStatus && profile.user === undefined) {
+          const record = await this.prisma.identityVerification.findUnique({
+            where: { userId },
+            select: { status: true },
+          });
+          identityStatus = record?.status ?? VerificationStatus.UNVERIFIED;
+        }
+        identityStatus ??= VerificationStatus.UNVERIFIED;
+
+        return this.mapToAthletePassportDto(profile, identityStatus);
+      },
+    );
 
     if (viewer?.role === 'SCOUT' && viewer.sub !== userId) {
-      if (identityStatus !== VerificationStatus.VERIFIED) {
+      if (dto.identityStatus !== VerificationStatus.VERIFIED) {
         throw new ForbiddenException(
           'This athlete is currently Not Legit (unverified) and is not visible to scouts.',
         );
       }
-      if (!profile.isScoutSearchable) {
+      if (!dto.isScoutSearchable) {
         throw new ForbiddenException('Athlete profile is not opted into scout discovery');
       }
     }
 
-    return this.mapToAthletePassportDto(profile, identityStatus);
+    return dto;
   }
 
   /**
@@ -204,85 +229,95 @@ export class PassportService {
       locationLng: dto.locationLng ?? resolvedCoords?.lng,
       isScoutSearchable: dto.isScoutSearchable ?? undefined,
     };
-    const result = await runSerializableTransaction(this.prisma, async (transaction) => {
-      const previous = await transaction.athleteProfile.findUnique({
-        where: { userId },
-        select: { primarySport: true, state: true, district: true },
-      });
-      const saved = await transaction.athleteProfile.upsert({
-        where: { userId },
-        update: metadata,
-        create: {
-          ...metadata,
-          userId,
-          dateOfBirth: metadata.dateOfBirth ?? null,
-          gender: metadata.gender ?? null,
-          primarySport: metadata.primarySport ?? null,
-          district: metadata.district ?? '',
-          state: metadata.state ?? '',
-          locationLat:
-            metadata.locationLat ??
-            (resolvedCoords
-              ? resolvedCoords.lat
-              : resolveCoordinatesForLocation(metadata.state ?? '', metadata.district ?? '').lat),
-          locationLng:
-            metadata.locationLng ??
-            (resolvedCoords
-              ? resolvedCoords.lng
-              : resolveCoordinatesForLocation(metadata.state ?? '', metadata.district ?? '').lng),
-          isScoutSearchable: metadata.isScoutSearchable ?? false,
-        },
-        select: { id: true, primarySport: true, secondarySports: true },
-      });
-      if (saved.primarySport) {
-        await transaction.sportPassportRecord.upsert({
-          where: { athleteId_sport: { athleteId: saved.id, sport: saved.primarySport } },
+    const result = await this.prisma.$transaction(
+      async (transaction) => {
+        const previous = await transaction.athleteProfile.findUnique({
+          where: { userId },
+          select: { primarySport: true, state: true, district: true },
+        });
+        const saved = await transaction.athleteProfile.upsert({
+          where: { userId },
+          update: metadata,
           create: {
-            athleteId: saved.id,
-            sport: saved.primarySport,
-            primaryRole: 'GENERAL_ATHLETE',
+            ...metadata,
+            userId,
+            dateOfBirth: metadata.dateOfBirth ?? null,
+            gender: metadata.gender ?? null,
+            primarySport: metadata.primarySport ?? null,
+            district: metadata.district ?? '',
+            state: metadata.state ?? '',
+            locationLat:
+              metadata.locationLat ??
+              (resolvedCoords
+                ? resolvedCoords.lat
+                : resolveCoordinatesForLocation(metadata.state ?? '', metadata.district ?? '').lat),
+            locationLng:
+              metadata.locationLng ??
+              (resolvedCoords
+                ? resolvedCoords.lng
+                : resolveCoordinatesForLocation(metadata.state ?? '', metadata.district ?? '').lng),
+            isScoutSearchable: metadata.isScoutSearchable ?? false,
+            currentGti: 0.0,
+            gti: 0.0,
+            biomechanicalScore: 0.0,
+            trainingConsistencyScore: 0.0,
+            wearableScore: 0.0,
+            matchPerformanceScore: 0.0,
+            matchPerfScore: 0.0,
           },
-          update: {},
+          select: { id: true, primarySport: true, secondarySports: true },
         });
-      }
-      for (const record of dto.sportRecords ?? []) {
-        await transaction.sportPassportRecord.upsert({
-          where: { athleteId_sport: { athleteId: saved.id, sport: record.sport } },
-          create: {
-            athleteId: saved.id,
-            sport: record.sport,
-            primaryRole: record.primaryRole,
-            secondaryRoles: record.secondaryRoles ?? [],
-          },
-          update: { primaryRole: record.primaryRole, secondaryRoles: record.secondaryRoles ?? [] },
+        if (saved.primarySport) {
+          await transaction.sportPassportRecord.upsert({
+            where: { athleteId_sport: { athleteId: saved.id, sport: saved.primarySport } },
+            create: {
+              athleteId: saved.id,
+              sport: saved.primarySport,
+              primaryRole: 'GENERAL_ATHLETE',
+            },
+            update: {},
+          });
+        }
+        for (const record of dto.sportRecords ?? []) {
+          await transaction.sportPassportRecord.upsert({
+            where: { athleteId_sport: { athleteId: saved.id, sport: record.sport } },
+            create: {
+              athleteId: saved.id,
+              sport: record.sport,
+              primaryRole: record.primaryRole,
+              secondaryRoles: record.secondaryRoles ?? [],
+            },
+            update: { primaryRole: record.primaryRole, secondaryRoles: record.secondaryRoles ?? [] },
+          });
+        }
+        if (dto.sportRecords?.length) {
+          const secondarySports = [
+            ...new Set([...saved.secondarySports, ...dto.sportRecords.map((record) => record.sport)]),
+          ].filter((sport) => sport !== saved.primarySport);
+          await transaction.athleteProfile.update({
+            where: { id: saved.id },
+            data: { secondarySports },
+          });
+        }
+        const profile = await transaction.athleteProfile.findUniqueOrThrow({
+          where: { userId },
+          select: athletePassportSelect,
         });
-      }
-      if (dto.sportRecords?.length) {
-        const secondarySports = [
-          ...new Set([...saved.secondarySports, ...dto.sportRecords.map((record) => record.sport)]),
-        ].filter((sport) => sport !== saved.primarySport);
-        await transaction.athleteProfile.update({
-          where: { id: saved.id },
-          data: { secondarySports },
-        });
-      }
-      const profile = await transaction.athleteProfile.findUniqueOrThrow({
-        where: { userId },
-        select: athletePassportSelect,
-      });
-      return { profile, previous };
-    });
-    await this.leaderboards?.syncAthlete(userId, result.previous);
-
-    let identityStatus = result.profile.user?.identityRecord?.status;
-    if (!identityStatus) {
-      const record = await this.prisma.identityVerification.findUnique({
-        where: { userId },
-        select: { status: true },
-      });
-      identityStatus =
-        record?.status ?? user.identityRecord?.status ?? VerificationStatus.UNVERIFIED;
+        return { profile, previous };
+      },
+      { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted },
+    );
+    await invalidateCacheKeys(this.redis, [CACHE_KEYS.passport(userId)]);
+    if (!hasTransactionalOutboxTriggers(this.prisma)) {
+      await this.leaderboards?.syncAthlete(userId, result.previous);
+    } else {
+      notifyOutboxSubscribers(this.redis, 'LEADERBOARD');
     }
+
+    const identityStatus =
+      result.profile.user?.identityRecord?.status ??
+      user.identityRecord?.status ??
+      VerificationStatus.UNVERIFIED;
 
     return this.mapToAthletePassportDto(result.profile, identityStatus);
   }
@@ -327,7 +362,7 @@ export class PassportService {
     const verifiedMetricsJson = (dto.verifiedMetrics ?? {}) as Prisma.InputJsonValue;
     const earnedBadgesJson = (dto.earnedBadges ?? []) as Prisma.InputJsonValue;
 
-    return runSerializableTransaction(this.prisma, async (transaction) => {
+    const updatedRecord = await runSerializableTransaction(this.prisma, async (transaction) => {
       const record = await transaction.sportPassportRecord.upsert({
         where: {
           athleteId_sport: {
@@ -364,6 +399,8 @@ export class PassportService {
 
       return record;
     });
+    await invalidateCacheKeys(this.redis, [CACHE_KEYS.passport(userId)]);
+    return updatedRecord;
   }
 
   /**
@@ -372,14 +409,31 @@ export class PassportService {
   async listSportRecords(
     userId: string,
     query: CursorPaginationQueryDto,
+    viewer?: AuthenticatedJwtUser,
   ): Promise<PaginatedResponseDto<SportPassportRecord>> {
     const profile = await this.prisma.athleteProfile.findUnique({
       where: { userId },
-      select: { id: true },
+      select: {
+        id: true,
+        isScoutSearchable: true,
+        user: { select: { identityRecord: { select: { status: true } } } },
+      },
     });
 
     if (!profile) {
-      throw new NotFoundException(`Athlete profile for user ${userId} not found.`);
+      throw new NotFoundException(`Digital Sports Passport for user ${userId} not found. Please create a profile first.`);
+    }
+
+    if (viewer?.role === 'SCOUT' && viewer.sub !== userId) {
+      const identityStatus = profile.user?.identityRecord?.status ?? VerificationStatus.UNVERIFIED;
+      if (identityStatus !== VerificationStatus.VERIFIED) {
+        throw new ForbiddenException(
+          'This athlete is currently Not Legit (unverified) and is not visible to scouts.',
+        );
+      }
+      if (!profile.isScoutSearchable) {
+        throw new ForbiddenException('Athlete profile is not opted into scout discovery');
+      }
     }
 
     const limit = query.limit ?? 20;
@@ -424,6 +478,10 @@ export class PassportService {
       }
     }
 
+    const resolvedScores = resolveProfileComponentScores(profile, {
+      preserveUnmeasuredOnboardingDefaults: true,
+    });
+
     return {
       userId: profile.userId,
       athleteProfileId: profile.id,
@@ -456,11 +514,11 @@ export class PassportService {
         weightKg: profile.weightKg ? Number(profile.weightKg) : null,
         dominantSide: normalizeDominantSide(profile.dominantSide) ?? profile.dominantSide,
       },
-      currentGti: Number(profile.currentGti),
-      wearableScore: Number(profile.wearableScore),
-      matchPerfScore: Number(profile.matchPerfScore),
+      currentGti: resolvedScores.currentGti,
+      wearableScore: resolvedScores.wearableScore,
+      matchPerfScore: resolvedScores.matchPerfScore,
       posturePoints: profile.posturePoints,
-      biomechanicalScore: Number(profile.biomechanicalScore ?? 0),
+      biomechanicalScore: resolvedScores.biomechanicalScore,
       identityStatus:
         identityStatusOverride ??
         profile.user?.identityRecord?.status ??

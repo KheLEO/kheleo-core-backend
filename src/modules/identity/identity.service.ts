@@ -4,9 +4,12 @@ import {
   NotFoundException,
   BadRequestException,
   Logger,
+  Optional,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../../infrastructure/database/prisma.service';
+import { RedisService } from '../../infrastructure/cache/redis.service';
+import { invalidateAuthAndPassport } from '../../infrastructure/cache/cache-helper';
 import { GovIdType, IdentityVerification, Prisma, VerificationStatus } from '@prisma/client';
 import * as crypto from 'node:crypto';
 import { assertAccountAccess, assertIdentityAccess } from '../../common/auth/account-access';
@@ -20,6 +23,7 @@ export class IdentityService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly configService: ConfigService,
+    @Optional() private readonly redis?: RedisService,
   ) {
     const configuredPepper =
       this.configService.get<string>('auth.identityPepper') || process.env.IDENTITY_PEPPER;
@@ -237,7 +241,7 @@ export class IdentityService {
     }
 
     // Persist new unique identity verification
-    return this.prisma.identityVerification.create({
+    const created = await this.prisma.identityVerification.create({
       data: {
         userId,
         idHash,
@@ -256,6 +260,8 @@ export class IdentityService {
         },
       },
     });
+    await invalidateAuthAndPassport(this.redis, created.userId);
+    return created;
   }
 }
 

@@ -1,13 +1,25 @@
-import { ForbiddenException, Injectable, UnauthorizedException } from '@nestjs/common';
+import { ForbiddenException, Injectable, Optional, UnauthorizedException } from '@nestjs/common';
 import { PassportStrategy } from '@nestjs/passport';
 import { ExtractJwt, Strategy } from 'passport-jwt';
 import { ConfigService } from '@nestjs/config';
 import { isUUID } from 'class-validator';
 import * as jwt from 'jsonwebtoken';
+import { UserRole, VerificationStatus } from '@prisma/client';
 import { PrismaService } from '../../../infrastructure/database/prisma.service';
+import { RedisService } from '../../../infrastructure/cache/redis.service';
+import { CACHE_KEYS, readThroughCache } from '../../../infrastructure/cache/cache-helper';
 import { assertAccountAccess } from '../../../common/auth/account-access';
 import { AuthenticatedJwtUser } from '../../../common/guards/jwt-auth.guard';
 import { loadLocalJwtKeys } from '../jwt-keys';
+
+interface CachedAuthUserRecord {
+  readonly id: string;
+  readonly role: UserRole;
+  readonly isActive: boolean;
+  readonly email: string | null;
+  readonly phone: string | null;
+  readonly identityStatus: VerificationStatus | null;
+}
 
 export interface JwtTokenPayload extends AuthenticatedJwtUser {
   readonly exp: number;
@@ -24,6 +36,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
   constructor(
     configService: ConfigService,
     private readonly prisma: PrismaService,
+    @Optional() private readonly redis?: RedisService,
   ) {
     const local = loadLocalJwtKeys(configService);
     const supabaseSecret = configService.get<string>('auth.supabaseJwtSecret');
@@ -101,37 +114,59 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     ) {
       throw new UnauthorizedException('Invalid or expired token payload');
     }
-    const user = await this.prisma.user.findUnique({
-      where: { id: payload.sub },
-      select: {
-        id: true,
-        role: true,
-        isActive: true,
-        email: true,
-        phone: true,
-        identityRecord: { select: { status: true } },
+    const cachedUser = await readThroughCache<CachedAuthUserRecord | null>(
+      this.redis,
+      CACHE_KEYS.authUser(payload.sub),
+      120,
+      async () => {
+        const record = await this.prisma.user.findUnique({
+          where: { id: payload.sub as string },
+          select: {
+            id: true,
+            role: true,
+            isActive: true,
+            email: true,
+            phone: true,
+            identityRecord: { select: { status: true } },
+          },
+        });
+        if (!record) return null;
+        return {
+          id: record.id,
+          role: record.role,
+          isActive: record.isActive,
+          email: record.email,
+          phone: record.phone,
+          identityStatus: record.identityRecord?.status ?? null,
+        };
       },
+    );
+    if (!cachedUser) throw new UnauthorizedException('Account does not exist');
+    assertAccountAccess({
+      isActive: cachedUser.isActive,
+      identityRecord: cachedUser.identityStatus ? { status: cachedUser.identityStatus } : null,
     });
-    if (!user) throw new UnauthorizedException('Account does not exist');
-    assertAccountAccess(user);
-    if (['ORGANIZER', 'SCOUT'].includes(user.role) && user.identityRecord?.status !== 'VERIFIED')
+    if (['ORGANIZER', 'SCOUT'].includes(cachedUser.role) && cachedUser.identityStatus !== 'VERIFIED')
       throw new ForbiddenException('Administrator identity verification is pending');
     const metadataRole = isRecord(payload.user_metadata) ? payload.user_metadata.role : undefined;
     const claimedRole = payload.role === 'authenticated' ? metadataRole : payload.role;
     return {
-      sub: user.id,
-      identityVerified: user.identityRecord?.status === 'VERIFIED',
+      sub: cachedUser.id,
+      identityVerified: cachedUser.identityStatus === 'VERIFIED',
       // Supabase user_metadata is user editable; stored roles remain authoritative.
-      role: typeof claimedRole === 'string' && claimedRole === user.role ? claimedRole : user.role,
+      role:
+        typeof claimedRole === 'string' && claimedRole === cachedUser.role
+          ? claimedRole
+          : cachedUser.role,
       ...(typeof payload.email === 'string'
         ? { email: payload.email }
-        : user.email
-          ? { email: user.email }
+        : cachedUser.email
+          ? { email: cachedUser.email }
           : {}),
       ...(typeof payload.phone === 'string'
         ? { phone: payload.phone }
-        : user.phone
-          ? { phone: user.phone }
+        : cachedUser.phone
+          ? { phone: cachedUser.phone }
           : {}),
       exp: payload.exp,
       ...(typeof payload.iat === 'number' ? { iat: payload.iat } : {}),

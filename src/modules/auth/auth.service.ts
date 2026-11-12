@@ -16,6 +16,9 @@ import { AuthResponseDto, AuthUserSummaryDto } from './dto/auth-response.dto';
 import { GovIdType, Prisma, UserRole, VerificationStatus } from '@prisma/client';
 import * as jwt from 'jsonwebtoken';
 import * as crypto from 'node:crypto';
+import { promisify } from 'node:util';
+
+const scryptAsync = promisify(crypto.scrypt);
 import { runSerializableTransaction } from '../../common/database/serializable-transaction';
 import { assertAccountAccess, assertIdentityAccess } from '../../common/auth/account-access';
 import { loadLocalJwtKeys, tokenDurationSeconds } from './jwt-keys';
@@ -76,17 +79,17 @@ export class AuthService {
     );
   }
 
-  private hashPassword(password: string): string {
+  private async hashPassword(password: string): Promise<string> {
     const salt = crypto.randomBytes(16).toString('hex');
     const pepper =
       this.configService.get<string>('auth.identityPepper') ||
       process.env.IDENTITY_PEPPER ||
       'local-development-identity-pepper';
-    const key = crypto.scryptSync(password + ':' + pepper, salt, 64);
+    const key = (await scryptAsync(password + ':' + pepper, salt, 64)) as Buffer;
     return `${salt}:${key.toString('hex')}`;
   }
 
-  private verifyPassword(password: string, storedHash: string): boolean {
+  private async verifyPassword(password: string, storedHash: string): Promise<boolean> {
     const parts = storedHash.split(':');
     if (parts.length !== 2) {
       return false;
@@ -96,7 +99,7 @@ export class AuthService {
       this.configService.get<string>('auth.identityPepper') ||
       process.env.IDENTITY_PEPPER ||
       'local-development-identity-pepper';
-    const key = crypto.scryptSync(password + ':' + pepper, salt, 64);
+    const key = (await scryptAsync(password + ':' + pepper, salt, 64)) as Buffer;
     const expected = Buffer.from(hashHex, 'hex');
     if (key.length !== expected.length) {
       return false;
@@ -142,7 +145,7 @@ export class AuthService {
     if (!rawPassword) {
       throw new BadRequestException('Password is required');
     }
-    const passwordHash = this.hashPassword(rawPassword);
+    const passwordHash = await this.hashPassword(rawPassword);
 
     const resolvedName =
       dto.name?.trim() ||
@@ -374,9 +377,13 @@ export class AuthService {
             dominantSide: normalizedDominant ?? dto.profile.dominantSide,
             locationLat: coords.lat,
             locationLng: coords.lng,
-            currentGti: 30.0,
-            wearableScore: 50.0,
-            matchPerfScore: 50.0,
+            currentGti: 0.0,
+            gti: 0.0,
+            biomechanicalScore: 0.0,
+            trainingConsistencyScore: 0.0,
+            wearableScore: 0.0,
+            matchPerformanceScore: 0.0,
+            matchPerfScore: 0.0,
           },
         });
         profileId = profile.id;
@@ -463,13 +470,13 @@ export class AuthService {
 
     if (user.passwordHash === null) {
       // Legacy account: bind password on first login
-      const newHash = this.hashPassword(password);
+      const newHash = await this.hashPassword(password);
       await this.prisma.user.update({
         where: { id: user.id },
         data: { passwordHash: newHash },
       });
     } else {
-      if (!this.verifyPassword(password, user.passwordHash)) {
+      if (!(await this.verifyPassword(password, user.passwordHash))) {
         throw new UnauthorizedException('Invalid login credentials.');
       }
     }

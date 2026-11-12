@@ -1,4 +1,6 @@
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
+import { normalizePemSecret, validateRsaKeyPairPem } from '../modules/auth/jwt-keys';
+
 export function validateEnvironment(env: Record<string, unknown>): Record<string, unknown> {
   if (env.NODE_ENV !== 'production') return env;
   const required = (name: string): string => {
@@ -17,19 +19,49 @@ export function validateEnvironment(env: Record<string, unknown>): Record<string
   for (const name of ['IDENTITY_PEPPER', 'DRILL_HMAC_SECRET', 'TELEMETRY_SERVICE_HMAC_SECRET'])
     if (!/^[a-f0-9]{64,}$/i.test(required(name)))
       throw new Error(`${name} must contain at least 32 random bytes encoded as hex`);
-  for (const name of ['JWT_PRIVATE_KEY_PATH', 'JWT_PUBLIC_KEY_PATH'])
-    if (!existsSync(required(name)))
-      throw new Error(`${name} must identify a readable mounted key`);
+
+  const rawPrivateKey = typeof env.JWT_PRIVATE_KEY === 'string' ? env.JWT_PRIVATE_KEY.trim() : '';
+  const rawPublicKey = typeof env.JWT_PUBLIC_KEY === 'string' ? env.JWT_PUBLIC_KEY.trim() : '';
+  if (Boolean(rawPrivateKey) !== Boolean(rawPublicKey)) {
+    throw new Error('Both JWT_PRIVATE_KEY and JWT_PUBLIC_KEY must be provided in production');
+  }
+  if (rawPrivateKey && rawPublicKey) {
+    validateRsaKeyPairPem(normalizePemSecret(rawPrivateKey), normalizePemSecret(rawPublicKey));
+  } else {
+    const privatePath = required('JWT_PRIVATE_KEY_PATH');
+    const publicPath = required('JWT_PUBLIC_KEY_PATH');
+    if (!existsSync(privatePath)) {
+      throw new Error('JWT_PRIVATE_KEY_PATH must identify a readable mounted key');
+    }
+    if (!existsSync(publicPath)) {
+      throw new Error('JWT_PUBLIC_KEY_PATH must identify a readable mounted key');
+    }
+    validateRsaKeyPairPem(
+      normalizePemSecret(readFileSync(privatePath, 'utf8')),
+      normalizePemSecret(readFileSync(publicPath, 'utf8')),
+    );
+  }
   for (const name of ['SUPABASE_URL'])
     if (parseUrl(name, required(name)).protocol !== 'https:')
       throw new Error(`${name} must use HTTPS`);
   required('SUPABASE_PUBLISHABLE_KEY');
-  if (
-    !['postgres:', 'postgresql:'].includes(
-      parseUrl('DATABASE_URL', required('DATABASE_URL')).protocol,
-    )
-  )
+  const dbUrl = parseUrl('DATABASE_URL', required('DATABASE_URL'));
+  if (!['postgres:', 'postgresql:'].includes(dbUrl.protocol))
     throw new Error('DATABASE_URL must use PostgreSQL');
+  if (dbUrl.port === '6543') {
+    if (dbUrl.searchParams.get('pgbouncer') !== 'true') {
+      throw new Error('DATABASE_URL on Supavisor port 6543 must include pgbouncer=true');
+    }
+    const directUrl = parseUrl('DIRECT_URL', required('DIRECT_URL'));
+    if (!['postgres:', 'postgresql:'].includes(directUrl.protocol)) {
+      throw new Error('DIRECT_URL must use PostgreSQL');
+    }
+  } else if (typeof env.DIRECT_URL === 'string' && env.DIRECT_URL.trim()) {
+    const directUrl = parseUrl('DIRECT_URL', env.DIRECT_URL);
+    if (!['postgres:', 'postgresql:'].includes(directUrl.protocol)) {
+      throw new Error('DIRECT_URL must use PostgreSQL');
+    }
+  }
   for (const origin of required('CORS_ORIGINS')
     .split(',')
     .map((item) => item.trim())) {

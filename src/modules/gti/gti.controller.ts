@@ -14,6 +14,7 @@ import {
 } from '@nestjs/common';
 import { GtiService, GtiComputationResult } from './gti.service';
 import { AuthenticatedJwtUser, JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
+import { RateLimit, RateLimitGuard } from '../../common/guards/rate-limit.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { SportType, UserRole } from '@prisma/client';
 import { IdempotencyInterceptor } from '../../common/interceptors/idempotency.interceptor';
@@ -26,7 +27,8 @@ export class GtiController {
 
   @Post('recalculate/:athleteId')
   @HttpCode(HttpStatus.OK)
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, RateLimitGuard)
+  @RateLimit({ keyPrefix: 'gti:recalc', limit: 20, windowSeconds: 60 })
   @UseInterceptors(IdempotencyInterceptor)
   async recalculate(
     @Param('athleteId', ParseUUIDPipe) athleteId: string,

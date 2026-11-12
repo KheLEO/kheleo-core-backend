@@ -1,4 +1,5 @@
 import { ConfigService } from '@nestjs/config';
+import { createPrivateKey, createPublicKey } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 
 interface LocalJwtKeys {
@@ -7,18 +8,62 @@ interface LocalJwtKeys {
   readonly algorithm: 'RS256' | 'HS256';
 }
 
+export function normalizePemSecret(rawValue: string): string {
+  const trimmed = rawValue.trim();
+  if (!trimmed) return '';
+  if (trimmed.includes('-----BEGIN ')) {
+    return trimmed.includes('\\n') ? trimmed.replace(/\\n/g, '\n') : trimmed;
+  }
+  const decoded = Buffer.from(trimmed, 'base64').toString('utf8').trim();
+  return decoded.includes('-----BEGIN ') ? decoded : trimmed;
+}
+
+export function validateRsaKeyPairPem(privatePem: string, publicPem: string): void {
+  const privateKey = createPrivateKey(privatePem);
+  const publicKey = createPublicKey(publicPem);
+  if (privateKey.asymmetricKeyType !== 'rsa' || publicKey.asymmetricKeyType !== 'rsa') {
+    throw new Error('JWT key pair must use RSA keys.');
+  }
+  const modulusBits = privateKey.asymmetricKeyDetails?.modulusLength ?? 0;
+  if (modulusBits < 2048) {
+    throw new Error('JWT RSA private key modulus must be at least 2048 bits (3072 bits recommended).');
+  }
+  const derivedPublic = createPublicKey(privateKey).export({ type: 'spki', format: 'pem' });
+  const providedPublic = publicKey.export({ type: 'spki', format: 'pem' });
+  if (derivedPublic !== providedPublic) {
+    throw new Error('JWT private key does not match the configured JWT public key.');
+  }
+}
+
 export function loadLocalJwtKeys(config: ConfigService): LocalJwtKeys {
+  const rawPrivateKey = normalizePemSecret(config.get<string>('auth.jwtPrivateKey', ''));
+  const rawPublicKey = normalizePemSecret(config.get<string>('auth.jwtPublicKey', ''));
+  if (Boolean(rawPrivateKey) !== Boolean(rawPublicKey)) {
+    throw new Error('Both JWT_PRIVATE_KEY and JWT_PUBLIC_KEY must be provided.');
+  }
+  if (rawPrivateKey && rawPublicKey) {
+    validateRsaKeyPairPem(rawPrivateKey, rawPublicKey);
+    return {
+      signingKey: rawPrivateKey,
+      verificationKey: rawPublicKey,
+      algorithm: 'RS256',
+    };
+  }
+
   const privatePath = config.get<string>('auth.jwtPrivateKeyPath', './keys/private.pem');
   const publicPath = config.get<string>('auth.jwtPublicKeyPath', './keys/public.pem');
-  const hasPrivate = existsSync(privatePath);
-  const hasPublic = existsSync(publicPath);
+  const hasPrivate = Boolean(privatePath) && existsSync(privatePath);
+  const hasPublic = Boolean(publicPath) && existsSync(publicPath);
   if (hasPrivate !== hasPublic) {
     throw new Error('Both JWT_PRIVATE_KEY_PATH and JWT_PUBLIC_KEY_PATH must exist.');
   }
   if (hasPrivate) {
+    const signingKey = normalizePemSecret(readFileSync(privatePath, 'utf8'));
+    const verificationKey = normalizePemSecret(readFileSync(publicPath, 'utf8'));
+    validateRsaKeyPairPem(signingKey, verificationKey);
     return {
-      signingKey: readFileSync(privatePath, 'utf8'),
-      verificationKey: readFileSync(publicPath, 'utf8'),
+      signingKey,
+      verificationKey,
       algorithm: 'RS256',
     };
   }

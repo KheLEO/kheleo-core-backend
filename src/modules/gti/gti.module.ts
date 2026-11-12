@@ -11,7 +11,13 @@ import { LeaderboardsModule } from '../leaderboards/leaderboards.module';
 @Module({
   imports: [AuthModule, LeaderboardsModule],
   controllers: [GtiController],
-  providers: [GtiService, GtiCalculationProcessor, ScoutAlertsProcessor],
+  providers: [GtiService],
   exports: [GtiService],
 })
 export class GtiModule {}
+
+@Module({
+  imports: [GtiModule, LeaderboardsModule],
+  providers: [GtiCalculationProcessor, ScoutAlertsProcessor],
+})
+export class GtiWorkersModule {}

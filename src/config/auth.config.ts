@@ -1,6 +1,8 @@
 import { registerAs } from '@nestjs/config';
 
 export const authConfig = registerAs('auth', () => ({
+  jwtPrivateKey: process.env.JWT_PRIVATE_KEY ?? '',
+  jwtPublicKey: process.env.JWT_PUBLIC_KEY ?? '',
   jwtPrivateKeyPath: process.env.JWT_PRIVATE_KEY_PATH ?? './keys/private.pem',
   jwtPublicKeyPath: process.env.JWT_PUBLIC_KEY_PATH ?? './keys/public.pem',
   jwtAccessExpiry: process.env.JWT_ACCESS_EXPIRY ?? '15m',

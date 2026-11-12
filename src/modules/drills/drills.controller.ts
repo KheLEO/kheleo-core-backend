@@ -18,6 +18,7 @@ import { Roles } from '../../common/decorators/roles.decorator';
 import { RolesGuard } from '../../common/guards/roles.guard';
 import { UserRole } from '@prisma/client';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
+import { RateLimit, RateLimitGuard } from '../../common/guards/rate-limit.guard';
 import { IdempotencyInterceptor } from '../../common/interceptors/idempotency.interceptor';
 
 @Controller('drills')
@@ -26,7 +27,8 @@ export class DrillsController {
 
   @Post('submit')
   @HttpCode(HttpStatus.OK)
-  @UseGuards(JwtAuthGuard, RolesGuard, DrillSignatureGuard)
+  @UseGuards(JwtAuthGuard, RolesGuard, RateLimitGuard, DrillSignatureGuard)
+  @RateLimit({ keyPrefix: 'drills:submit', limit: 30, windowSeconds: 60 })
   @Roles(UserRole.ATHLETE)
   @UseInterceptors(IdempotencyInterceptor)
   async submit(

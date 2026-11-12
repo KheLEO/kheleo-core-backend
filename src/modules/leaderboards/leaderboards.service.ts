@@ -3,6 +3,13 @@ import { isUUID } from 'class-validator';
 import { Prisma, SportType, VerificationStatus } from '@prisma/client';
 import { PrismaService } from '../../infrastructure/database/prisma.service';
 import { RedisService } from '../../infrastructure/cache/redis.service';
+import {
+  bumpVersion,
+  CACHE_KEYS,
+  invalidateCacheKeys,
+  readThroughCache,
+  readVersion,
+} from '../../infrastructure/cache/cache-helper';
 import { normalizeLocationName } from '../../common/constants/india-locations';
 import {
   LeaderboardCursor,
@@ -76,6 +83,11 @@ export class LeaderboardsService {
         JSON.stringify([...keysFor(profile), ...keysFor(previous)]),
         JSON.stringify(keys),
       );
+      await bumpVersion(this.redis, CACHE_KEYS.leaderboardVersion());
+      await invalidateCacheKeys(this.redis, [
+        CACHE_KEYS.passport(userId),
+        CACHE_KEYS.regionalHeatmap(),
+      ]);
     } catch (error: unknown) {
       if (requireDelivery) throw error;
       this.logger.warn(`Leaderboard cache sync failed for ${userId}: ${String(error)}`);
@@ -160,6 +172,15 @@ export class LeaderboardsService {
     };
   }
 
+  private locationVariants(raw?: string, normalized?: string): string[] {
+    const base = [raw, normalized].filter((value): value is string => Boolean(value?.trim()));
+    const expanded = base.flatMap((value) => {
+      const trimmed = value.trim().toLowerCase();
+      return [trimmed, trimmed.replaceAll('-', ' '), trimmed.replaceAll(' ', '-')];
+    });
+    return [...new Set(expanded)];
+  }
+
   async list(query: LeaderboardsQueryDto): Promise<LeaderboardPage> {
     const key = this.key(query);
     const filtered = query.tier === 'RURAL_AND_TIER_2_3' || Boolean(query.gender);
@@ -200,6 +221,7 @@ export class LeaderboardsService {
     if (query.cursor_id) {
       const profile = await this.prisma.athleteProfile.findFirst({
         where: { AND: [where, { id: query.cursor_id }] },
+        select: { userId: true, gti: true, currentGti: true },
       });
       if (!profile) throw new BadRequestException('Cursor athlete is outside this leaderboard');
       cursor = {
@@ -208,73 +230,110 @@ export class LeaderboardsService {
         scope: scopeKey,
       };
     }
-    const eligibleCount = await this.prisma.athleteProfile.count({ where });
     try {
       if (filtered) throw new Error('Demographic ranks use the database');
-      if ((await this.redis.client.zcard(key)) !== eligibleCount)
-        throw new Error('Leaderboard cache is incomplete');
-      let offset = 0;
-      if (cursor) {
-        const [rank, score] = await Promise.all([
-          this.redis.client.zrevrank(key, cursor.id),
-          this.redis.client.zscore(key, cursor.id),
-        ]);
-        if (rank === null || Number(score) !== cursor.score)
-          throw new Error('Cursor moved in cache');
-        offset = rank + 1;
-      }
-      const raw = await this.redis.client.zrevrange(
-        key,
-        offset,
-        offset + query.limit,
-        'WITHSCORES',
+      const ver = await readVersion(this.redis, CACHE_KEYS.leaderboardVersion());
+      const pageCacheKey = CACHE_KEYS.leaderboardPage(
+        ver,
+        scopeKey,
+        query.cursor ?? query.cursor_id,
+        query.limit,
       );
-      const ids = raw.filter((_value, index) => index % 2 === 0);
-      const profiles = await this.prisma.athleteProfile.findMany({
-        where: { AND: [where, { userId: { in: ids } }] },
-        include: { sportRecords: true },
+      return await readThroughCache(this.redis, pageCacheKey, 20, async () => {
+        const cachedTotal = await this.redis.client.zcard(key);
+        if (cachedTotal === 0) throw new Error('Leaderboard cache is empty');
+        let offset = 0;
+        if (cursor) {
+          const [rank, score] = await Promise.all([
+            this.redis.client.zrevrank(key, cursor.id),
+            this.redis.client.zscore(key, cursor.id),
+          ]);
+          if (rank === null || Number(score) !== cursor.score)
+            throw new Error('Cursor moved in cache');
+          offset = rank + 1;
+        }
+        const raw = await this.redis.client.zrevrange(
+          key,
+          offset,
+          offset + query.limit,
+          'WITHSCORES',
+        );
+        const ids = raw.filter((_value, index) => index % 2 === 0);
+        if (ids.length === 0) {
+          return this.page([], query, scopeKey, cachedTotal, 'redis');
+        }
+        const profiles = await this.prisma.athleteProfile.findMany({
+          where: { AND: [where, { userId: { in: ids } }] },
+          select: {
+            id: true,
+            userId: true,
+            district: true,
+            state: true,
+            primarySport: true,
+            gti: true,
+            currentGti: true,
+            biomechanicalScore: true,
+            trainingConsistencyScore: true,
+            matchPerformanceScore: true,
+            gender: true,
+            tierClassification: true,
+            sportRecords: {
+              ...(query.sport && query.sport !== 'ALL' ? { where: { sport: query.sport } } : {}),
+              select: {
+                sport: true,
+                primaryRole: true,
+                totalMatches: true,
+                winCount: true,
+              },
+            },
+          },
+        });
+        const byId = new Map(profiles.map((profile) => [profile.userId, profile]));
+        const entries: LeaderboardRow[] = ids.map((id, index) => {
+          const profile = byId.get(id);
+          const score = Number(raw[index * 2 + 1]);
+          if (!profile || (profile.gti || Number(profile.currentGti)) !== score)
+            throw new Error('Leaderboard cache is stale');
+          const record = profile.sportRecords?.find((entry) => entry.sport === profile.primarySport);
+          return {
+            rank: offset + index + 1,
+            athleteId: id,
+            profileId: profile.id,
+            district: profile.district,
+            state: profile.state,
+            sport: profile.primarySport!,
+            gti: score,
+            biomechanicalScore: profile.biomechanicalScore,
+            wearableScore: profile.trainingConsistencyScore,
+            matchPerformanceScore: profile.matchPerformanceScore,
+            gender: profile.gender,
+            tierClassification: profile.tierClassification,
+            primaryRole: record?.primaryRole ?? null,
+            totalMatches: record?.totalMatches ?? 0,
+            winCount: record?.winCount ?? 0,
+          };
+        });
+        return this.page(entries, query, scopeKey, cachedTotal, 'redis');
       });
-      const byId = new Map(profiles.map((profile) => [profile.userId, profile]));
-      const entries: LeaderboardRow[] = ids.map((id, index) => {
-        const profile = byId.get(id);
-        const score = Number(raw[index * 2 + 1]);
-        if (!profile || (profile.gti || Number(profile.currentGti)) !== score)
-          throw new Error('Leaderboard cache is stale');
-        const record = profile.sportRecords?.find((entry) => entry.sport === profile.primarySport);
-        return {
-          rank: offset + index + 1,
-          athleteId: id,
-          profileId: profile.id,
-          district: profile.district,
-          state: profile.state,
-          sport: profile.primarySport!,
-          gti: score,
-          biomechanicalScore: profile.biomechanicalScore,
-          wearableScore: profile.trainingConsistencyScore,
-          matchPerformanceScore: profile.matchPerformanceScore,
-          gender: profile.gender,
-          tierClassification: profile.tierClassification,
-          primaryRole: record?.primaryRole ?? null,
-          totalMatches: record?.totalMatches ?? 0,
-          winCount: record?.winCount ?? 0,
-        };
-      });
-      return this.page(entries, query, scopeKey, eligibleCount, 'redis');
     } catch (error: unknown) {
       this.logger.debug(`Reading leaderboard from database: ${String(error)}`);
     }
-    const state =
+    const stateVariants =
       query.scope === LeaderboardScope.NATIONAL
+        ? []
+        : this.locationVariants(query.state, normalizedState);
+    const state =
+      query.scope === LeaderboardScope.NATIONAL || stateVariants.length === 0
         ? Prisma.empty
-        : normalizedState
-          ? Prisma.sql`AND (p.state ILIKE ${query.state} OR p.state ILIKE ${normalizedState} OR REPLACE(p.state, '-', ' ') ILIKE REPLACE(${query.state}, '-', ' '))`
-          : Prisma.sql`AND p.state = ${query.state}`;
-    const district =
+        : Prisma.sql`AND lower(p.state) IN (${Prisma.join(stateVariants)})`;
+    const districtVariants =
       query.scope !== LeaderboardScope.DISTRICT
+        ? []
+        : this.locationVariants(query.district, normalizedDistrict);
+    const district =
+      query.scope !== LeaderboardScope.DISTRICT || districtVariants.length === 0
         ? Prisma.empty
-        : normalizedDistrict
-          ? Prisma.sql`AND (p.district ILIKE ${query.district} OR p.district ILIKE ${normalizedDistrict} OR REPLACE(p.district, '-', ' ') ILIKE REPLACE(${query.district}, '-', ' '))`
-          : Prisma.sql`AND p.district = ${query.district}`;
+        : Prisma.sql`AND lower(p.district) IN (${Prisma.join(districtVariants)})`;
     const sport =
       query.sport && query.sport !== 'ALL'
         ? Prisma.sql`AND p.primary_sport = ${query.sport}::"SportType"`
@@ -289,9 +348,10 @@ export class LeaderboardsService {
     const after = cursor
       ? Prisma.sql`WHERE (gti, "athleteId") < (${cursor.score}::float8, ${cursor.id}::uuid)`
       : Prisma.empty;
-    const rows = await this.prisma.$queryRaw<LeaderboardRow[]>(Prisma.sql`
+    const rawRows = await this.prisma.$queryRaw<Array<LeaderboardRow & { totalCount?: number }>>(Prisma.sql`
       WITH ranked AS (
         SELECT ROW_NUMBER() OVER (ORDER BY COALESCE(NULLIF(p.gti, 0), p.current_gti, 0) DESC, p.user_id DESC)::int AS rank,
+          COUNT(*) OVER()::int AS "totalCount",
           p.user_id AS "athleteId", p.id AS "profileId", p.district, p.state, p.primary_sport AS sport, p.gender,
           p.tier_classification AS "tierClassification", r.primary_role AS "primaryRole",
           COALESCE(r.total_matches,0)::int AS "totalMatches", COALESCE(r.win_count,0)::int AS "winCount",
@@ -302,14 +362,18 @@ export class LeaderboardsService {
         WHERE p.primary_sport IS NOT NULL AND p.is_scout_searchable AND u.is_active AND u.role = 'ATHLETE' AND i.status = 'VERIFIED'
           ${sport} ${state} ${district} ${gender} ${tier}
       ) SELECT * FROM ranked ${after} ORDER BY gti DESC, "athleteId" DESC LIMIT ${query.limit + 1}`);
-    return this.page(rows, query, scopeKey, eligibleCount, 'database');
+    const total = Number(rawRows[0]?.totalCount ?? 0);
+    const rows: LeaderboardRow[] = rawRows.map(({ totalCount: _tc, ...rest }) => rest);
+    return this.page(rows, query, scopeKey, total, 'database');
   }
 
   async rank(sport: SportType, athleteId: string, district?: string): Promise<number | null> {
     const normalizedDistrict = district ? normalizeLocationName(district) : undefined;
-    const districtFilter = district
-      ? Prisma.sql`AND (p.district ILIKE ${district} OR p.district ILIKE ${normalizedDistrict!} OR REPLACE(p.district, '-', ' ') ILIKE REPLACE(${district}, '-', ' '))`
-      : Prisma.empty;
+    const districtVariants = district ? this.locationVariants(district, normalizedDistrict) : [];
+    const districtFilter =
+      districtVariants.length > 0
+        ? Prisma.sql`AND lower(p.district) IN (${Prisma.join(districtVariants)})`
+        : Prisma.empty;
     const rows = await this.prisma.$queryRaw<Array<{ rank: number }>>(Prisma.sql`
       WITH ranked AS (
         SELECT p.user_id, ROW_NUMBER() OVER (ORDER BY COALESCE(NULLIF(p.gti,0),p.current_gti,0) DESC,p.user_id DESC)::int AS rank

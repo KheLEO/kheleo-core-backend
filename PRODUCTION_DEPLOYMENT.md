@@ -8,7 +8,7 @@ Use a dedicated PostgreSQL database and private networking. Enable automatic bac
 
 - **Railway:** create a service from `postgis/postgis:16-3.4`, set strong `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB=kheleo_core`, attach a persistent volume at `/var/lib/postgresql/data`, and use the private connection URL. Enable backups. A plain PostgreSQL template needs a PostGIS-capable image. [Railway PostgreSQL](https://docs.railway.com/databases/postgresql).
 - **RDS:** create PostgreSQL **16**, private subnets, encrypted storage, backups/PITR and a security group accepting 5432 only from application/migration hosts. Enable PostGIS as the migration owner. Use the provider CA for verified TLS; encode credentials in the URI. [RDS extension setup](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/Appendix.PostgreSQL.CommonDBATasks.Extensions.html).
-- **Supabase:** use a dedicated project with PostgreSQL 16 available in the selected region, checking `SHOW server_version` before continuing. Use the direct connection or session pooler on **5432**, including for migrations; avoid the transaction pooler on 6543 for this reference setup. The current migrations expect PostGIS in `public`. Disable the Data API or remove application schemas from its exposed schemas. If PostGIS already lives elsewhere, reconcile with a DBA; do not drop extensions with CASCADE or rewrite applied migrations. Supabase Auth can remain enabled separately. [Prisma connections](https://supabase.com/docs/guides/database/prisma).
+- **Supabase:** use a dedicated project with PostgreSQL 16 available in the selected region, checking `SHOW server_version` before continuing. Configure `DATABASE_URL` with the Supavisor **transaction pooler on port 6543** including `?pgbouncer=true&connection_limit=15&pool_timeout=10` (sized per Railway replica so total connections stay safely under Supabase pooler/Postgres limits) and set `DIRECT_URL` to the **session pooler or direct connection on port 5432** so `prisma migrate deploy` and admin scripts bypass pgbouncer safely. The current migrations expect PostGIS in `public`. Disable the Data API or remove application schemas from its exposed schemas. If PostGIS already lives elsewhere, reconcile with a DBA; do not drop extensions with CASCADE or rewrite applied migrations. Supabase Auth can remain enabled separately. [Prisma connections](https://supabase.com/docs/guides/database/prisma).
 
 As the migration owner, on the dedicated database:
 
@@ -46,7 +46,7 @@ openssl rand -hex 32 > keys/telemetry-hmac.hex
 openssl rand -hex 32 > keys/admin-invite.hex
 ```
 
-Import the generated 64-character hex values into your secret manager and the env template. Retain encrypted backups of RSA keys and identity pepper; all replicas must use the same values. Rotating the pepper without an identity migration breaks matching. Mount private keys read-only with permissions readable by the application account (Docker UID 1000). Never copy secrets into image layers, Git, build arguments or `NEXT_PUBLIC_*` variables.
+Import the generated 64-character hex values and base64-encoded RSA-3072 keys (`base64 < keys/private.pem | tr -d '\n'`) into Railway/secret manager and the env template (`JWT_PRIVATE_KEY` / `JWT_PUBLIC_KEY`). Retain encrypted backups of RSA keys and identity pepper; all replicas must use the identical key pair. Rotating the pepper without an identity migration breaks matching. When running Docker outside Railway, bind-mount private keys read-only with permissions readable by the application account (`node`, UID 1000) and pass `JWT_PRIVATE_KEY_PATH`/`JWT_PUBLIC_KEY_PATH`. Never copy secrets into image layers, Git, build arguments or `NEXT_PUBLIC_*` variables.
 
 ## 4. Backend environment, migrations and start
 
@@ -57,12 +57,15 @@ NODE_ENV=production
 PORT=3000
 APP_NAME=kheleo-core-backend
 CORS_ORIGINS=https://app.example.com
-DATABASE_URL=postgresql://kheleo:ENCODED_PASSWORD@DB_HOST:5432/kheleo_core?schema=public&sslmode=require&connect_timeout=5
+DATABASE_URL=postgresql://kheleo:ENCODED_PASSWORD@POOLER_HOST:6543/postgres?pgbouncer=true&connection_limit=15&pool_timeout=10&sslmode=require
+DIRECT_URL=postgresql://kheleo:ENCODED_PASSWORD@DB_HOST:5432/postgres?schema=public&sslmode=require&connect_timeout=5
 REDIS_URL=rediss://default:ENCODED_PASSWORD@REDIS_HOST:6380/0
-JWT_PRIVATE_KEY_PATH=/secure/kheleo/keys/private.pem
-JWT_PUBLIC_KEY_PATH=/secure/kheleo/keys/public.pem
+# Prefer base64 or inline PEM env secrets on Railway (or bind-mounted JWT_*_PATH in Docker):
+JWT_PRIVATE_KEY=BASE64_OR_PEM_RSA_3072_PRIVATE_KEY
+JWT_PUBLIC_KEY=BASE64_OR_PEM_RSA_3072_PUBLIC_KEY
 JWT_ACCESS_EXPIRY=15m
 JWT_REFRESH_EXPIRY=7d
+ENABLE_SWAGGER=false
 SUPABASE_URL=https://PROJECT.supabase.co
 SUPABASE_PUBLISHABLE_KEY=PUBLIC_PUBLISHABLE_OR_ANON_KEY
 SUPABASE_JWT_SECRET=
@@ -107,7 +110,7 @@ docker run -d --name kheleo-backend --restart unless-stopped \
 curl --fail --silent --show-error http://127.0.0.1:3000/api/v1/health
 ```
 
-The image runs as UID 1000 and checks health. Its entrypoint also gates startup on migrations; coordinate a single release migration job for multiple replicas. Health must return HTTP 200 with `status`, `db`, and `redis` all `ok`. `/docs` is Swagger UI and `/docs-json` is the controller specification. Restrict documentation ingress to operator networks if public discovery is unnecessary.
+The image runs as UID 1000 and checks health. Its entrypoint also gates startup on migrations; coordinate a single release migration job for multiple replicas. Health must return HTTP 200 with `status`, `db`, and `redis` all `ok`. Swagger UI (`/docs`) is disabled by default when `NODE_ENV=production` unless `ENABLE_SWAGGER=true` is explicitly set in a non-public operator environment.
 
 ## 5. Frontend environment, build and start
 
@@ -286,3 +289,26 @@ FROM outbox_events WHERE delivered_at IS NULL AND attempts > 3 ORDER BY created_
 ```
 
 Retain the previous immutable application images and matching public assets. For rollback, stop routing new traffic, preserve backups, and roll back application images only when compatible with the migrated schema; otherwise use a reviewed forward fix or tested restore. Do not delete permanent identity records or rewrite migration history to undo a release. Keep HMAC/RSA/pepper values consistent across frontend/backend replicas and releases.
+
+## 9. Railway dual-service API + dedicated Worker topology (Phase 2)
+
+To scale HTTP/WebSocket traffic independently from BullMQ workers and transactional outbox dispatching without duplicating background jobs:
+
+1. **API Service (`kheleo-core-backend-api`)**:
+   - Start command: `pnpm start:prod` (resolved to `dist/main.js`)
+   - Environment variables:
+     - `ENABLE_EMBEDDED_WORKERS=false` (disables `OutboxDispatcher`, `GtiWorkersModule`, and `MatchmakingWorkersModule` in HTTP replicas while preserving `QueueProducerService`, REST controllers, and WebSocket gateways)
+     - `RATE_LIMIT_ENABLED=true`
+     - `DATABASE_URL` pointing at Supabase Supavisor transaction pool (`:6543?pgbouncer=true&connection_limit=15&pool_timeout=10`)
+     - `DIRECT_URL` pointing at direct PostgreSQL (`:5432`)
+     - `JWT_PRIVATE_KEY` and `JWT_PUBLIC_KEY` (RSA-3072 Railway secrets; never commit private keys to Git or bake them into images)
+
+2. **Worker Service (`kheleo-core-backend-worker`)**:
+   - Start command: `pnpm start:worker` (resolved to `dist/worker.js`)
+   - Environment variables:
+     - Same `DATABASE_URL`, `DIRECT_URL`, `REDIS_*`, `JWT_PRIVATE_KEY` / `JWT_PUBLIC_KEY`, `IDENTITY_PEPPER`, and HMAC secrets as the API service.
+     - No public HTTP port binding required; real-time socket broadcasts (`GTI_UPDATED`, `MATCH_PAUSE_ALERT`, `SCOUT_TALENT_ALERT`, `ROSTER_FORMED`) and forced user disconnects are relayed to all connected API replicas over Redis Pub/Sub (`kheleo:ws:relay`).
+     - Keep Worker replica count at `1` during initial rollout (multiple workers share `outbox_events` row locks via `FOR UPDATE SKIP LOCKED` and idempotent BullMQ `jobId`s).
+
+3. **Build verification**:
+   - `pnpm build && node -e "require.resolve('./dist/main.js'); require.resolve('./dist/src/main.js'); require.resolve('./dist/worker.js'); require.resolve('./dist/src/worker.js')"`

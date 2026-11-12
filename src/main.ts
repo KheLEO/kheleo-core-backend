@@ -72,17 +72,21 @@ async function bootstrap(): Promise<void> {
   app.enableShutdownHooks();
 
   // ─── Swagger ────────────────────────────────────────
-  const swaggerConfig = new DocumentBuilder()
-    .setTitle('Kheleo Core Backend')
-    .setDescription(
-      'Edge-AI & IoT Sports Platform API — Talent Discovery, Anti-Sandbagging, Dynamic Matchmaking, and Player Safety',
-    )
-    .setVersion('1.0.0')
-    .addBearerAuth()
-    .addApiKey({ type: 'apiKey', name: 'Idempotency-Key', in: 'header' }, 'idempotency-key')
-    .build();
-  const document = SwaggerModule.createDocument(app, swaggerConfig);
-  SwaggerModule.setup('docs', app, document);
+  const nodeEnv = configService.get<string>('app.nodeEnv', 'development');
+  const isCi = process.env.CI === 'true' || Boolean(process.env.GITHUB_ACTIONS);
+  if (nodeEnv !== 'production' || isCi || process.env.ENABLE_SWAGGER === 'true') {
+    const swaggerConfig = new DocumentBuilder()
+      .setTitle('Kheleo Core Backend')
+      .setDescription(
+        'Edge-AI & IoT Sports Platform API — Talent Discovery, Anti-Sandbagging, Dynamic Matchmaking, and Player Safety',
+      )
+      .setVersion('1.0.0')
+      .addBearerAuth()
+      .addApiKey({ type: 'apiKey', name: 'Idempotency-Key', in: 'header' }, 'idempotency-key')
+      .build();
+    const document = SwaggerModule.createDocument(app, swaggerConfig);
+    SwaggerModule.setup('docs', app, document);
+  }
 
   // ─── Start ──────────────────────────────────────────
   const port = process.env.PORT ?? 3000;

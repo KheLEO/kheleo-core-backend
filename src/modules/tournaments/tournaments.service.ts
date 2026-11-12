@@ -5,8 +5,16 @@ import {
   Injectable,
   NotFoundException,
   Logger,
+  Optional,
 } from '@nestjs/common';
 import { PrismaService } from '../../infrastructure/database/prisma.service';
+import { RedisService } from '../../infrastructure/cache/redis.service';
+import {
+  bumpVersion,
+  CACHE_KEYS,
+  readThroughCache,
+  readVersion,
+} from '../../infrastructure/cache/cache-helper';
 import {
   PostgisSpatialRepository,
   SpatialTournamentRow,
@@ -66,6 +74,7 @@ export class TournamentsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly spatialRepo: PostgisSpatialRepository,
+    @Optional() private readonly redis?: RedisService,
   ) {}
 
   /**
@@ -73,6 +82,18 @@ export class TournamentsService {
    * Returns distance-ordered DTOs and a keyset cursor.
    */
   async findNearby(query: NearbyTournamentsQueryDto): Promise<NearbyPage<TournamentLocationDto>> {
+    const ver = await readVersion(this.redis, CACHE_KEYS.tournamentsVersion());
+    const radiusKm = query.radius_km ?? 50;
+    const limit = query.limit ?? 20;
+    const cacheSig = `${query.sport ?? 'ALL'}:${query.lat.toFixed(4)}:${query.lng.toFixed(4)}:${radiusKm}:${limit}:${query.cursor ?? 'start'}`;
+    return readThroughCache(this.redis, CACHE_KEYS.nearbyTournaments(ver, cacheSig), 30, async () =>
+      this.executeFindNearby(query),
+    );
+  }
+
+  private async executeFindNearby(
+    query: NearbyTournamentsQueryDto,
+  ): Promise<NearbyPage<TournamentLocationDto>> {
     const point = { lat: query.lat, lng: query.lng };
     const radiusKm = query.radius_km ?? 50;
     const limit = query.limit ?? 20;
@@ -226,7 +247,13 @@ export class TournamentsService {
    * Creates a new tournament.
    */
   async create(organizerId: string, dto: CreateTournamentDto): Promise<Tournament> {
-    return this.prisma.tournament.create({ data: { organizerId, ...this.tournamentData(dto) } });
+    const created = await this.prisma.tournament.create({
+      data: { organizerId, ...this.tournamentData(dto) },
+    });
+    await bumpVersion(this.redis, CACHE_KEYS.tournamentsVersion());
+    await bumpVersion(this.redis, CACHE_KEYS.organizerVersion(organizerId));
+    await bumpVersion(this.redis, CACHE_KEYS.organizerVersion('GLOBAL'));
+    return created;
   }
 
   async list(query: ListTournamentsQueryDto): Promise<PaginatedResponseDto<Tournament>> {
@@ -249,7 +276,7 @@ export class TournamentsService {
     actor: AuthenticatedJwtUser,
     dto: UpdateTournamentDto,
   ): Promise<Tournament> {
-    return runSerializableTransaction(this.prisma, async (transaction) => {
+    const updated = await runSerializableTransaction(this.prisma, async (transaction) => {
       const existing = await transaction.tournament.findUnique({ where: { id } });
       if (!existing) throw new NotFoundException('Tournament not found');
       assertTournamentOwner(existing.organizerId, actor);
@@ -260,15 +287,23 @@ export class TournamentsService {
         data: this.tournamentData(dto, existing),
       });
     });
+    await bumpVersion(this.redis, CACHE_KEYS.tournamentsVersion());
+    await bumpVersion(this.redis, CACHE_KEYS.organizerVersion(updated.organizerId));
+    await bumpVersion(this.redis, CACHE_KEYS.organizerVersion('GLOBAL'));
+    return updated;
   }
 
   async deleteTournament(id: string, actor: AuthenticatedJwtUser): Promise<Tournament> {
-    return runSerializableTransaction(this.prisma, async (transaction) => {
+    const deleted = await runSerializableTransaction(this.prisma, async (transaction) => {
       const existing = await transaction.tournament.findUnique({ where: { id } });
       if (!existing) throw new NotFoundException('Tournament not found');
       assertTournamentOwner(existing.organizerId, actor);
       return transaction.tournament.delete({ where: { id } });
     });
+    await bumpVersion(this.redis, CACHE_KEYS.tournamentsVersion());
+    await bumpVersion(this.redis, CACHE_KEYS.organizerVersion(deleted.organizerId));
+    await bumpVersion(this.redis, CACHE_KEYS.organizerVersion('GLOBAL'));
+    return deleted;
   }
 
   private tournamentData(dto: UpdateTournamentDto, existing?: Tournament): TournamentWriteData {
