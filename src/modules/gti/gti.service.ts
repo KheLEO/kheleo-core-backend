@@ -145,10 +145,20 @@ export class GtiService {
         activeEvidenceStatuses.length === 0 ||
         activeEvidenceStatuses.some((status) => status !== 'VERIFIED');
       const previousGti = profile.gti || Number(profile.currentGti);
+      // For unmeasured onboarding athletes without telemetry or matches, preserve the canonical 30.0 baseline on currentGti
+      const isUnmeasuredOnboarding =
+        !hasDrillData &&
+        !hasWearableData &&
+        !hasVerifiedMatches;
+
+      const effectiveCurrentGti = isUnmeasuredOnboarding
+        ? (Number(profile.currentGti) > 0 ? Number(profile.currentGti) : 30.0)
+        : gti;
+
       // Only write the derived composite. Component writers own their respective scores.
       await tx.athleteProfile.update({
         where: { id: profile.id },
-        data: { gti, currentGti: new Prisma.Decimal(gti) },
+        data: { gti, currentGti: new Prisma.Decimal(effectiveCurrentGti) },
       });
       await tx.gtiHistory.create({
         data: {
