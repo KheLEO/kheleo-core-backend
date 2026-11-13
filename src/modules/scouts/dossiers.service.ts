@@ -9,7 +9,6 @@ import { PrismaService } from '../../infrastructure/database/prisma.service';
 import { AuthenticatedJwtUser } from '../../common/guards/jwt-auth.guard';
 import { runSerializableTransaction } from '../../common/database/serializable-transaction';
 import { OutreachDto, OutreachAction } from './dto/outreach.dto';
-import { resolveProfileComponentScores } from '../gti/gti-score-reconciliation';
 
 export interface OutreachEvent {
   actionType: OutreachAction;
@@ -269,16 +268,13 @@ export class ScoutsDossiersService {
         weight_kg: profile.weightKg === null ? null : Number(profile.weightKg),
         dominant_side: profile.dominantSide,
       },
-      gti_breakdown: (() => {
-        const resolved = resolveProfileComponentScores(profile);
-        return {
-          gti: resolved.currentGti,
-          biomechanical_score: resolved.biomechanicalScore,
-          wearable_consistency_score: resolved.wearableScore,
-          match_performance_score: resolved.matchPerfScore,
-          posture_points: profile.posturePoints,
-        };
-      })(),
+      gti_breakdown: {
+        gti: profile.gti || Number(profile.currentGti),
+        biomechanical_score: profile.biomechanicalScore,
+        wearable_consistency_score: profile.trainingConsistencyScore,
+        match_performance_score: profile.matchPerformanceScore,
+        posture_points: profile.posturePoints,
+      },
       gti_history: profile.gtiHistories.map((entry) => ({
         gti: Number(entry.compositeGti),
         biomechanical_score: Number(entry.biomechanicalScore),

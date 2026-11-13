@@ -15,10 +15,6 @@ import { LeaderboardsService } from '../leaderboards/leaderboards.service';
 import { WsAuthGuard } from '../../infrastructure/realtime/ws-auth.guard';
 import { RedisService } from '../../infrastructure/cache/redis.service';
 import {
-  hasTransactionalOutboxTriggers,
-  notifyOutboxSubscribers,
-} from '../../infrastructure/outbox/outbox-authority';
-import {
   bumpVersion,
   CACHE_KEYS,
   invalidateAuthAndPassport,
@@ -264,12 +260,8 @@ export class AdminService {
       return user;
     });
     await invalidateAuthAndPassport(this.redis, id);
-    if (!hasTransactionalOutboxTriggers(this.prisma)) {
-      this.sockets.disconnectUser(id);
-      await this.leaderboards.syncAthlete(id);
-    } else {
-      notifyOutboxSubscribers(this.redis, 'REVOKE_SOCKETS');
-    }
+    this.sockets.disconnectUser(id);
+    await this.leaderboards.syncAthlete(id);
     return updated;
   }
   async tournaments(query: AdminTournamentsQuery): Promise<AdminPage<Tournament>> {

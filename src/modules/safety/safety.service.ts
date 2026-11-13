@@ -22,10 +22,6 @@ import { WsEventGateway } from '../../infrastructure/realtime/ws-event.gateway';
 import { QueueProducerService } from '../../infrastructure/queues/queue-producer.service';
 import { RedisService } from '../../infrastructure/cache/redis.service';
 import {
-  hasTransactionalOutboxTriggers,
-  notifyOutboxSubscribers,
-} from '../../infrastructure/outbox/outbox-authority';
-import {
   bumpVersion,
   CACHE_KEYS,
   invalidateCacheKeys,
@@ -274,9 +270,7 @@ export class SafetyService {
       }
       await bumpVersion(this.redis, CACHE_KEYS.organizerVersion('GLOBAL'));
     }
-    const outboxActive = hasTransactionalOutboxTriggers(this.prisma);
-    const outboxHandledPause = outboxActive && result.paused && result.createdNewAlert && Boolean(dto.match_id);
-    if (critical && !outboxHandledPause && (!outboxActive || !dto.match_id)) {
+    if (critical) {
       this.wsGateway.broadcastAutonomousMatchPause({
         event_id: randomUUID(),
         alert_id: result.alertId,
@@ -300,15 +294,11 @@ export class SafetyService {
         match_id: dto.match_id,
       });
     }
-    if (!outboxActive) {
-      if (result.shouldRecalculateGti) {
-        await this.queue.enqueueGtiRecalculation({
-          athleteId: dto.athlete_id,
-          trigger: 'WEARABLE_SYNC',
-        });
-      }
-    } else if (result.shouldRecalculateGti || outboxHandledPause) {
-      notifyOutboxSubscribers(this.redis, outboxHandledPause ? 'PAUSE' : 'GTI');
+    if (result.shouldRecalculateGti) {
+      await this.queue.enqueueGtiRecalculation({
+        athleteId: dto.athlete_id,
+        trigger: 'WEARABLE_SYNC',
+      });
     }
     return {
       alert_triggered: critical || warning,

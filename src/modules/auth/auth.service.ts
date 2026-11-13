@@ -377,13 +377,9 @@ export class AuthService {
             dominantSide: normalizedDominant ?? dto.profile.dominantSide,
             locationLat: coords.lat,
             locationLng: coords.lng,
-            currentGti: 0.0,
-            gti: 0.0,
-            biomechanicalScore: 0.0,
-            trainingConsistencyScore: 0.0,
-            wearableScore: 0.0,
-            matchPerformanceScore: 0.0,
-            matchPerfScore: 0.0,
+            currentGti: 30.0,
+            wearableScore: 50.0,
+            matchPerfScore: 50.0,
           },
         });
         profileId = profile.id;

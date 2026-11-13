@@ -7,10 +7,6 @@ import { runSerializableTransaction } from '../../common/database/serializable-t
 import { LeaderboardsService } from '../leaderboards/leaderboards.service';
 import { WsAuthGuard } from '../../infrastructure/realtime/ws-auth.guard';
 import { RedisService } from '../../infrastructure/cache/redis.service';
-import {
-  hasTransactionalOutboxTriggers,
-  notifyOutboxSubscribers,
-} from '../../infrastructure/outbox/outbox-authority';
 import { invalidateAuthAndPassport } from '../../infrastructure/cache/cache-helper';
 
 export interface UserResponse {
@@ -153,12 +149,8 @@ export class UsersService {
       return formatUserResponse(user);
     });
     await invalidateAuthAndPassport(this.redis, id);
-    if (!hasTransactionalOutboxTriggers(this.prisma)) {
-      this.sockets?.disconnectUser(id);
-      await this.leaderboards?.syncAthlete(id);
-    } else {
-      notifyOutboxSubscribers(this.redis, 'REVOKE_SOCKETS');
-    }
+    this.sockets?.disconnectUser(id);
+    await this.leaderboards?.syncAthlete(id);
     return updated;
   }
 }

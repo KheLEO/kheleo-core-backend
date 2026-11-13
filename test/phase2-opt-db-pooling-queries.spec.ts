@@ -26,7 +26,7 @@ import {
 import { BRACKET_ID, TOURNAMENT_ID } from './helpers/competition.fixture';
 
 describe('Phase 2 Tasks 4-6: Supavisor Pooling, SQL Query Optimizations & Indexes', () => {
-  it('validates Supavisor :6543 requires pgbouncer=true + DIRECT_URL and schema.prisma declares directUrl', () => {
+  it('validates Supavisor :6543 requires pgbouncer=true + DIRECT_URL in production', () => {
     const rsa = generateKeyPairSync('rsa', {
       modulusLength: 3072,
       publicKeyEncoding: { type: 'spki', format: 'pem' },
@@ -70,7 +70,7 @@ describe('Phase 2 Tasks 4-6: Supavisor Pooling, SQL Query Optimizations & Indexe
     );
 
     const schema = readFileSync(resolve(__dirname, '../prisma/schema.prisma'), 'utf8');
-    assert.match(schema, /directUrl\s*=\s*env\("DIRECT_URL"\)/);
+    assert.match(schema, /url\s*=\s*env\("DATABASE_URL"\)/);
   });
 
   it('removes mode:insensitive on drill signatureHash lookup and skips redundant Passport queries', async () => {

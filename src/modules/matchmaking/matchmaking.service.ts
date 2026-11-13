@@ -10,10 +10,6 @@ import { PrismaService } from '../../infrastructure/database/prisma.service';
 import { QueueProducerService } from '../../infrastructure/queues/queue-producer.service';
 import { MatchmakingGateway, RosterMemberPayload } from './matchmaking.gateway';
 import { RedisService } from '../../infrastructure/cache/redis.service';
-import {
-  hasTransactionalOutboxTriggers,
-  notifyOutboxSubscribers,
-} from '../../infrastructure/outbox/outbox-authority';
 import { bumpVersion, CACHE_KEYS } from '../../infrastructure/cache/cache-helper';
 import { JoinFreeAgentDto } from './dto/join-free-agent.dto';
 import {
@@ -174,16 +170,11 @@ export class MatchmakingService {
       throw error;
     });
 
-    // 7. Dispatch async matchmaking via authoritative outbox triggers in DB mode,
-    // or directly in triggerless unit-test mocks.
-    if (!hasTransactionalOutboxTriggers(this.prisma)) {
-      await this.queueProducer.enqueueBracketMatchmaking({
-        tournamentId,
-        bracketId,
-      });
-    } else {
-      notifyOutboxSubscribers(this.redis, 'MATCHMAKING');
-    }
+    // 7. Dispatch async matchmaking trigger to BullMQ queue
+    await this.queueProducer.enqueueBracketMatchmaking({
+      tournamentId,
+      bracketId,
+    });
 
     return {
       registrationId: registration.id,
@@ -359,16 +350,12 @@ export class MatchmakingService {
         await bumpVersion(this.redis, CACHE_KEYS.organizerVersion(created.organizerId));
       }
       await bumpVersion(this.redis, CACHE_KEYS.organizerVersion('GLOBAL'));
-      if (!hasTransactionalOutboxTriggers(this.prisma)) {
-        this.gateway.emitRosterFormed({
-          team_id: created.teamId,
-          team_name: created.teamName,
-          bracket_id: bracketId,
-          roster: created.roster,
-        });
-      } else {
-        notifyOutboxSubscribers(this.redis, 'ROSTER');
-      }
+      this.gateway.emitRosterFormed({
+        team_id: created.teamId,
+        team_name: created.teamName,
+        bracket_id: bracketId,
+        roster: created.roster,
+      });
       formed = true;
     }
   }

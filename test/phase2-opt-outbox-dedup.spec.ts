@@ -40,14 +40,10 @@ describe('Phase 2 Task 3: Event Deduplication & Outbox Optimization', () => {
     await db.close();
   });
 
-  it('skips duplicate imperative dispatches when transactional outbox triggers are active', async () => {
+  it('always enqueues imperative GTI recalculation directly to BullMQ matching main behavior', async () => {
     const f = await createSecurityFixture();
-    // Simulate a real PrismaClient delegate containing outboxEvent
-    const prismaWithOutbox = Object.assign(Object.create(null), f.prisma, {
-      outboxEvent: { updateMany: async () => ({ count: 0 }) },
-    }) as PrismaService;
-    const drillsWithOutbox = new DrillsService(prismaWithOutbox, f.queue);
-    await drillsWithOutbox.submitDrill(
+    const drillsService = new DrillsService(f.prisma, f.queue);
+    await drillsService.submitDrill(
       ATHLETE_ID,
       {
         sport: SportType.CRICKET,
@@ -60,7 +56,7 @@ describe('Phase 2 Task 3: Event Deduplication & Outbox Optimization', () => {
       },
       'a'.repeat(64),
     );
-    assert.equal(f.state.jobs.length, 0, 'Trigger-backed DB relies solely on OutboxDispatcher');
+    assert.equal(f.state.jobs.length, 1, 'Drill submissions must always enqueue GTI recalculation directly');
   });
 
   it('coalesces high-frequency same-day telemetry pings so GTI is only queued when consistency score or alert state changes', async () => {

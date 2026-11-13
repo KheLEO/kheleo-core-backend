@@ -10,10 +10,6 @@ import { createHash } from 'node:crypto';
 import { PrismaService } from '../../infrastructure/database/prisma.service';
 import { QueueProducerService } from '../../infrastructure/queues/queue-producer.service';
 import { RedisService } from '../../infrastructure/cache/redis.service';
-import {
-  hasTransactionalOutboxTriggers,
-  notifyOutboxSubscribers,
-} from '../../infrastructure/outbox/outbox-authority';
 import { CACHE_KEYS, invalidateCacheKeys } from '../../infrastructure/cache/cache-helper';
 import { AuthenticatedJwtUser } from '../../common/guards/jwt-auth.guard';
 import { runSerializableTransaction } from '../../common/database/serializable-transaction';
@@ -235,15 +231,11 @@ export class MatchResultsService {
       this.redis,
       result.participantAthleteIds.map((athleteId) => CACHE_KEYS.passport(athleteId)),
     );
-    if (!hasTransactionalOutboxTriggers(this.prisma)) {
-      await Promise.all(
-        result.participantAthleteIds.map((athleteId) =>
-          this.queue.enqueueGtiRecalculation({ athleteId, trigger: 'MATCH_COMPLETED' }),
-        ),
-      );
-    } else {
-      notifyOutboxSubscribers(this.redis, 'GTI');
-    }
+    await Promise.all(
+      result.participantAthleteIds.map((athleteId) =>
+        this.queue.enqueueGtiRecalculation({ athleteId, trigger: 'MATCH_COMPLETED' }),
+      ),
+    );
     return result;
   }
 }

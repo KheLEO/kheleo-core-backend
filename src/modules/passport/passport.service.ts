@@ -18,12 +18,7 @@ import { Prisma, SportPassportRecord, VerificationStatus } from '@prisma/client'
 import { runSerializableTransaction } from '../../common/database/serializable-transaction';
 import { assertAccountAccess } from '../../common/auth/account-access';
 import { AuthenticatedJwtUser } from '../../common/guards/jwt-auth.guard';
-import { resolveProfileComponentScores } from '../gti/gti-score-reconciliation';
 import { RedisService } from '../../infrastructure/cache/redis.service';
-import {
-  hasTransactionalOutboxTriggers,
-  notifyOutboxSubscribers,
-} from '../../infrastructure/outbox/outbox-authority';
 import {
   CACHE_KEYS,
   invalidateCacheKeys,
@@ -257,13 +252,6 @@ export class PassportService {
                 ? resolvedCoords.lng
                 : resolveCoordinatesForLocation(metadata.state ?? '', metadata.district ?? '').lng),
             isScoutSearchable: metadata.isScoutSearchable ?? false,
-            currentGti: 0.0,
-            gti: 0.0,
-            biomechanicalScore: 0.0,
-            trainingConsistencyScore: 0.0,
-            wearableScore: 0.0,
-            matchPerformanceScore: 0.0,
-            matchPerfScore: 0.0,
           },
           select: { id: true, primarySport: true, secondarySports: true },
         });
@@ -308,11 +296,7 @@ export class PassportService {
       { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted },
     );
     await invalidateCacheKeys(this.redis, [CACHE_KEYS.passport(userId)]);
-    if (!hasTransactionalOutboxTriggers(this.prisma)) {
-      await this.leaderboards?.syncAthlete(userId, result.previous);
-    } else {
-      notifyOutboxSubscribers(this.redis, 'LEADERBOARD');
-    }
+    await this.leaderboards?.syncAthlete(userId, result.previous);
 
     const identityStatus =
       result.profile.user?.identityRecord?.status ??
@@ -478,10 +462,6 @@ export class PassportService {
       }
     }
 
-    const resolvedScores = resolveProfileComponentScores(profile, {
-      preserveUnmeasuredOnboardingDefaults: true,
-    });
-
     return {
       userId: profile.userId,
       athleteProfileId: profile.id,
@@ -514,11 +494,11 @@ export class PassportService {
         weightKg: profile.weightKg ? Number(profile.weightKg) : null,
         dominantSide: normalizeDominantSide(profile.dominantSide) ?? profile.dominantSide,
       },
-      currentGti: resolvedScores.currentGti,
-      wearableScore: resolvedScores.wearableScore,
-      matchPerfScore: resolvedScores.matchPerfScore,
+      currentGti: Number(profile.currentGti),
+      wearableScore: Number(profile.wearableScore),
+      matchPerfScore: Number(profile.matchPerfScore),
       posturePoints: profile.posturePoints,
-      biomechanicalScore: resolvedScores.biomechanicalScore,
+      biomechanicalScore: Number(profile.biomechanicalScore ?? 0),
       identityStatus:
         identityStatusOverride ??
         profile.user?.identityRecord?.status ??

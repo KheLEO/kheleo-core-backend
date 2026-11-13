@@ -1,7 +1,6 @@
 datasource db {
   provider   = "postgresql"
   url        = env("DATABASE_URL")
-  directUrl  = env("DIRECT_URL")
   extensions = [postgis]
 }
 
@@ -200,15 +199,15 @@ model AthleteProfile {
   locationLat  Float?                                @map("location_lat")
   locationLng  Float?                                @map("location_lng")
 
-  currentGti                Decimal @default(0.00) @map("current_gti") @db.Decimal(5, 2)
+  currentGti                Decimal @default(30.00) @map("current_gti") @db.Decimal(5, 2)
   gti                       Float   @default(0.0) @map("gti")
   biomechanicalScore        Float   @default(0.0) @map("biomechanical_score")
   trainingConsistencyScore  Float   @default(0.0) @map("training_consistency_score")
   matchPerformanceScore     Float   @default(0.0) @map("match_performance_score")
   isRuralOrUnderrepresented Boolean @default(false) @map("is_rural_or_underrepresented")
   posturePoints             Int     @default(0) @map("posture_points")
-  wearableScore             Decimal @default(0.00) @map("wearable_score") @db.Decimal(5, 2)
-  matchPerfScore            Decimal @default(0.00) @map("match_perf_score") @db.Decimal(5, 2)
+  wearableScore             Decimal @default(50.00) @map("wearable_score") @db.Decimal(5, 2)
+  matchPerfScore            Decimal @default(50.00) @map("match_perf_score") @db.Decimal(5, 2)
   isScoutSearchable         Boolean @default(true) @map("is_scout_searchable")
 
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
