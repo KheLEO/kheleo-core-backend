@@ -985,7 +985,7 @@ describe('Interim Competition GTI weighting while Drills & Wearables are under p
     f.state.tables.sportPassportRecord.clear();
 
     const result = await f.services.gti.recalculateAthleteGti(ATHLETE_ID);
-    assert.equal(result.gti, 0);
+    assert.equal(result.gti, 30);
     assert.equal(result.provisional, true);
     assert.deepEqual(result.evidence, {
       biomechanical: 'NOT_AVAILABLE',

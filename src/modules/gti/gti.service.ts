@@ -129,7 +129,7 @@ export class GtiService {
         w3 = 0.40;
       }
 
-      const gti = this.computeCompositeGti(
+      const rawGti = this.computeCompositeGti(
         biomechanicalScore,
         wearableScore,
         matchPerformanceScore,
@@ -151,21 +151,30 @@ export class GtiService {
         !hasWearableData &&
         !hasVerifiedMatches;
 
-      const effectiveCurrentGti = isUnmeasuredOnboarding
+      const gti = isUnmeasuredOnboarding
         ? (Number(profile.currentGti) > 0 ? Number(profile.currentGti) : 30.0)
-        : gti;
+        : rawGti;
+
+      const effectiveWearableScore =
+        isUnmeasuredOnboarding && wearableScore === 0
+          ? (Number(profile.wearableScore) > 0 ? Number(profile.wearableScore) : 50)
+          : wearableScore;
+      const effectiveMatchScore =
+        isUnmeasuredOnboarding && matchPerformanceScore === 0
+          ? (Number(profile.matchPerfScore) > 0 ? Number(profile.matchPerfScore) : 50)
+          : matchPerformanceScore;
 
       // Only write the derived composite. Component writers own their respective scores.
       await tx.athleteProfile.update({
         where: { id: profile.id },
-        data: { gti, currentGti: new Prisma.Decimal(effectiveCurrentGti) },
+        data: { gti, currentGti: new Prisma.Decimal(gti) },
       });
       await tx.gtiHistory.create({
         data: {
           athleteId: profile.id,
           biomechanicalScore: new Prisma.Decimal(biomechanicalScore),
-          wearableScore: new Prisma.Decimal(wearableScore),
-          matchScore: new Prisma.Decimal(matchPerformanceScore),
+          wearableScore: new Prisma.Decimal(effectiveWearableScore),
+          matchScore: new Prisma.Decimal(effectiveMatchScore),
           compositeGti: new Prisma.Decimal(gti),
           calculationFactors: {
             w1,
@@ -214,8 +223,8 @@ export class GtiService {
         gti,
         previousGti,
         biomechanicalScore,
-        wearableScore,
-        matchPerformanceScore,
+        wearableScore: effectiveWearableScore,
+        matchPerformanceScore: effectiveMatchScore,
         evidence,
         provisional,
         alert,
