@@ -111,6 +111,9 @@ export class AthletePassportDto {
   @ApiPropertyOptional({ description: 'Real hardware telemetry received within the last 24 hours' })
   readonly watchQualified?: boolean;
 
+  @ApiPropertyOptional({ description: 'Hardware evidence expiry as Unix milliseconds' })
+  readonly watchExpiresAt?: number | null;
+
   @ApiPropertyOptional({ enum: [35, 100] })
   readonly biomechanicalCap?: number;
 

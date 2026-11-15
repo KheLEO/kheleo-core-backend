@@ -308,12 +308,48 @@ async function main() {
         },
         'POST',
       );
+    // Unlabeled athlete-JWT telemetry is not proof of a connected watch.
+    await until(async () => {
+      const value = await prisma.athleteProfile.findUniqueOrThrow({
+        where: { userId: athlete.id },
+      });
+      return value.gti === 77.25;
+    });
+    const capped = await request(`/passport/${athlete.id}`, athlete);
+    assert.equal(capped.biomechanicalScore, 35);
+    assert.equal(capped.watchQualified, false);
+    const hardware = {
+      ...telemetry,
+      heart_rate: 110,
+      spo2: 98,
+      skin_temperature: 36.8,
+      timestamp: Date.now(),
+      source: 'BLE',
+    };
+    const hardwareBody = JSON.stringify(hardware);
+    const hardwareResponse = await fetch(`${origin}/api/v1/safety/telemetry-webhook`, {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${token(athlete)}`,
+        'Content-Type': 'application/json',
+        'Idempotency-Key': randomUUID(),
+        'X-Device-Signature': createHmac('sha256', process.env.TELEMETRY_SERVICE_HMAC_SECRET)
+          .update(hardwareBody)
+          .digest('hex'),
+      },
+      body: hardwareBody,
+    });
+    assert.equal(hardwareResponse.status, 200, await hardwareResponse.text());
     const profile = await until(async () => {
       const value = await prisma.athleteProfile.findUniqueOrThrow({
         where: { userId: athlete.id },
       });
       return value.gti === 98.6 ? value : false;
     });
+    const connected = await request(`/passport/${athlete.id}`, athlete);
+    assert.equal(connected.biomechanicalScore, 96);
+    assert.equal(connected.watchQualified, true);
+    assert.ok(connected.watchExpiresAt > Date.now());
     await until(async () => scoutTalentEvents > 0);
     assert.equal(scoutMedicalEvents, 0);
     const leaderboard = await request(

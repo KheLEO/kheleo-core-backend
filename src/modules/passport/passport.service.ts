@@ -207,6 +207,7 @@ export class PassportService {
           currentGti: policy.gti,
           biomechanicalScore: policy.biomechanicalScore,
           watchQualified: policy.watchQualified,
+          watchExpiresAt: policy.watchExpiresAt,
           biomechanicalCap: policy.watchQualified ? 100 : 35,
           calculationMode: policy.calculationMode,
         }
@@ -401,6 +402,7 @@ export class PassportService {
           currentGti: policy.gti,
           biomechanicalScore: policy.biomechanicalScore,
           watchQualified: policy.watchQualified,
+          watchExpiresAt: policy.watchExpiresAt,
           biomechanicalCap: policy.watchQualified ? 100 : 35,
           calculationMode: policy.calculationMode,
         }
