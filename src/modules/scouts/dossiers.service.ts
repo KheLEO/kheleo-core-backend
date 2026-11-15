@@ -6,6 +6,7 @@ import {
 } from '@nestjs/common';
 import { AlertSeverity, Prisma, ScoutDossier, UserRole, VerificationStatus } from '@prisma/client';
 import { PrismaService } from '../../infrastructure/database/prisma.service';
+import { loadAthleteScorePolicies } from '../gti/biomechanical-policy';
 import { AuthenticatedJwtUser } from '../../common/guards/jwt-auth.guard';
 import { runSerializableTransaction } from '../../common/database/serializable-transaction';
 import { OutreachDto, OutreachAction } from './dto/outreach.dto';
@@ -214,6 +215,7 @@ export class ScoutsDossiersService {
     });
     if (!profile) throw new NotFoundException('Athlete passport not found');
     assertDossierVisibility(userId, profile.isScoutSearchable, viewer);
+    const policy = (await loadAthleteScorePolicies(this.prisma, [userId])).get(userId);
     if (
       viewer.role === 'SCOUT' &&
       viewer.sub !== userId &&
@@ -269,8 +271,8 @@ export class ScoutsDossiersService {
         dominant_side: profile.dominantSide,
       },
       gti_breakdown: {
-        gti: profile.gti || Number(profile.currentGti),
-        biomechanical_score: profile.biomechanicalScore,
+        gti: policy?.gti ?? (profile.gti || Number(profile.currentGti)),
+        biomechanical_score: policy?.biomechanicalScore ?? Math.min(35, profile.biomechanicalScore),
         wearable_consistency_score: profile.trainingConsistencyScore,
         match_performance_score: profile.matchPerformanceScore,
         posture_points: profile.posturePoints,

@@ -31,6 +31,8 @@ import { LeaderboardsService } from '../src/modules/leaderboards/leaderboards.se
 import { LeaderboardScope } from '../src/modules/leaderboards/leaderboards.dto';
 import { MatchmakingProcessor } from '../src/modules/matchmaking/processors/matchmaking.processor';
 import { PassportService } from '../src/modules/passport/passport.service';
+import { readParticipationSnapshot } from '../src/modules/tournaments/participation-policy';
+import { ScoutsService } from '../src/modules/scouts/scouts.service';
 import { BracketsService } from '../src/modules/brackets/brackets.service';
 import { SafetyService } from '../src/modules/safety/safety.service';
 import { createWave1SqlFixture } from './helpers/wave1-sql.fixture';
@@ -74,6 +76,7 @@ function deferred<T>() {
 describe('Wave 1: actual services against migrated memory-only PostgreSQL', () => {
   let f: Awaited<ReturnType<typeof createWave1SqlFixture>>;
   const queue = {
+    enqueueWatchExpiry: async () => {},
     enqueueGtiRecalculation: async () => 'local-job',
     enqueueScoutAlert: async () => 'local-scout',
   } as unknown as QueueProducerService;
@@ -116,7 +119,7 @@ describe('Wave 1: actual services against migrated memory-only PostgreSQL', () =
     assert.equal(factors.calculationMode, result.calculationMode);
   });
 
-  it('scores a real first drill at 80, then normalizes drill plus wearable without matches', async () => {
+  it('caps a first drill at 35 without hardware and normalizes drill plus wearable without matches', async () => {
     const { userId, profileId } = await f.seedAthlete();
     await new DrillsService(f.prisma, queue).submitDrill(
       userId,
@@ -133,7 +136,7 @@ describe('Wave 1: actual services against migrated memory-only PostgreSQL', () =
     );
     const gti = new GtiService(f.prisma, leaderboards, queue, ws);
     const drill = await gti.recalculateAthleteGti(userId);
-    assert.equal(drill.gti, 80);
+    assert.equal(drill.gti, 35);
     assert.deepEqual(drill.weights, { w1: 1, w2: 0, w3: 0 });
     assert.equal(drill.provisional, false);
     await f.db.query(
@@ -145,7 +148,7 @@ describe('Wave 1: actual services against migrated memory-only PostgreSQL', () =
       [profileId],
     );
     const both = await gti.recalculateAthleteGti(userId);
-    assert.equal(both.gti, 48.75);
+    assert.equal(both.gti, 22.5);
     assert.deepEqual(both.weights, { w1: 0.5833, w2: 0.4167, w3: 0 });
     const history = (
       await f.db.query<{ calculation_factors: Record<string, unknown>; composite_gti: string }>(
@@ -238,7 +241,7 @@ describe('Wave 1: actual services against migrated memory-only PostgreSQL', () =
     assert.equal(noPrimary.gti, 0);
   });
 
-  it('does not heal zero-score drills or accounts with health activity', async () => {
+  it('preserves measured zero drills but restores onboarding when only a safety alert exists', async () => {
     const drilled = await f.seedAthlete();
     await new DrillsService(f.prisma, queue).submitDrill(
       drilled.userId,
@@ -270,8 +273,153 @@ describe('Wave 1: actual services against migrated memory-only PostgreSQL', () =
     );
     assert.equal(
       (await new PassportService(f.prisma).getPassportByUserId(alerted.userId)).currentGti,
+      30,
+    );
+    const empty = await f.seedAthlete();
+    await f.db.query('UPDATE athlete_profiles SET current_gti=0,gti=0 WHERE id=$1', [
+      empty.profileId,
+    ]);
+    await f.db.query(
+      "INSERT INTO wearable_sessions(id,athlete_id,session_date,source) VALUES($1,$2,current_date,'DEVICE_HMAC')",
+      [randomUUID(), empty.userId],
+    );
+    assert.equal(
+      (await new PassportService(f.prisma).getPassportByUserId(empty.userId)).currentGti,
+      30,
+    );
+  });
+
+  it('uses the corrected starter score and watch cap in the real tournament eligibility path before stored scores catch up', async () => {
+    const { userId, profileId } = await f.seedAthlete();
+    await f.db.query(
+      "UPDATE athlete_profiles SET date_of_birth='2000-01-01',gender='MALE',current_gti=0,gti=0 WHERE id=$1",
+      [profileId],
+    );
+    const tx = {
+      ...f.prisma,
+      bracket: {
+        findUnique: async () => ({
+          tournamentId: 'test-tournament',
+          minGti: 20,
+          maxGti: 100,
+          tournament: {
+            status: 'REGISTRATION_OPEN',
+            registrationDeadline: new Date(Date.now() + 86400000),
+          },
+        }),
+      },
+    } as unknown as Prisma.TransactionClient;
+    assert.equal(
+      (await readParticipationSnapshot(tx, 'test-tournament', 'test-bracket', userId)).athleteGti,
+      30,
+    );
+    await f.db.query(
+      'UPDATE athlete_profiles SET biomechanical_score=95,current_gti=95,gti=95 WHERE id=$1',
+      [profileId],
+    );
+    assert.equal(
+      (await readParticipationSnapshot(tx, 'test-tournament', 'test-bracket', userId)).athleteGti,
+      35,
+    );
+  });
+
+  it('applies hardware caps to existing accounts, cached passports, calculations and expired telemetry without destroying measurements', async () => {
+    const { userId, profileId } = await f.seedAthlete(true);
+    await f.db.query(
+      "UPDATE athlete_profiles SET primary_sport='BASKETBALL',biomechanical_score=95,current_gti=95,gti=95 WHERE id=$1",
+      [profileId],
+    );
+    const redis = memoryRedis();
+    const passport = new PassportService(
+      f.prisma,
+      undefined,
+      undefined,
+      redis as unknown as RedisService,
+    );
+    const unconnected = await passport.getPassportByUserId(userId);
+    assert.equal(unconnected.biomechanicalScore, 35);
+    assert.equal(unconnected.currentGti, 35);
+    assert.equal(unconnected.watchQualified, false);
+    const rankings = new LeaderboardsService(f.prisma, {
+      client: { zcard: async () => 0 },
+    } as unknown as RedisService);
+    const page = await rankings.list({
+      sport: SportType.BASKETBALL,
+      scope: LeaderboardScope.NATIONAL,
+      limit: 20,
+    });
+    assert.equal(page.data[0]!.gti, 35);
+    assert.equal(page.data[0]!.biomechanical_score, 35);
+    const scouts = new ScoutsService(f.prisma);
+    assert.equal(
+      (await scouts.getScoutFeed({ sport: 'BASKETBALL', min_gti: 50, limit: 20 })).total,
       0,
     );
+    await f.db.query(
+      `INSERT INTO wearable_sessions(id,athlete_id,session_date,source,readings_count,hardware_observed_at)
+      VALUES($1,$2,current_date,'BLE',1,now())`,
+      [randomUUID(), userId],
+    );
+    await f.db.query(
+      'UPDATE athlete_profiles SET training_consistency_score=5,wearable_score=5 WHERE id=$1',
+      [profileId],
+    );
+    const connected = await passport.getPassportByUserId(userId);
+    assert.equal(connected.biomechanicalScore, 95);
+    assert.equal(connected.currentGti, 57.5);
+    assert.equal(connected.watchQualified, true);
+    const prospects = await scouts.getScoutFeed({ sport: 'BASKETBALL', min_gti: 50, limit: 20 });
+    assert.equal(prospects.total, 1);
+    assert.equal(prospects.data[0]!.biomechanical_score, 95);
+    const expirations: number[] = [];
+    const expiryQueue = {
+      ...queue,
+      enqueueWatchExpiry: async (_id: string, at: number) => {
+        expirations.push(at);
+      },
+    } as unknown as QueueProducerService;
+    const gti = new GtiService(f.prisma, leaderboards, expiryQueue, ws);
+    const result = await gti.recalculateAthleteGti(userId);
+    assert.equal(result.biomechanicalScore, connected.biomechanicalScore);
+    assert.equal(result.gti, connected.currentGti);
+    assert.equal(expirations.length, 1);
+    assert.ok(expirations[0]! > Date.now());
+    // Simulator activity cannot extend the separate hardware timestamp.
+    await f.db.query(
+      `UPDATE wearable_sessions SET source='SIMULATOR',observed_at=now(),
+      hardware_observed_at=now()-interval '25 hours' WHERE athlete_id=$1`,
+      [userId],
+    );
+    const expired = await passport.getPassportByUserId(userId);
+    assert.equal(expired.biomechanicalScore, 35);
+    assert.equal(expired.currentGti, 22.5);
+    assert.equal(expired.watchQualified, false);
+    assert.equal((await gti.recalculateAthleteGti(userId, 'WATCH_EVIDENCE_EXPIRY')).gti, 22.5);
+    assert.equal(expirations.length, 1);
+    const row = (
+      await f.db.query<{ biomechanical_score: number }>(
+        'SELECT biomechanical_score FROM athlete_profiles WHERE id=$1',
+        [profileId],
+      )
+    ).rows[0]!;
+    assert.equal(row.biomechanical_score, 95);
+  });
+
+  it('does not unlock the cap for simulator, unlabeled JWT, or empty hardware sessions', async () => {
+    for (const source of ['SIMULATOR', 'ATHLETE_JWT', 'DEVICE_HMAC']) {
+      const { userId, profileId } = await f.seedAthlete();
+      await f.db.query('UPDATE athlete_profiles SET biomechanical_score=90 WHERE id=$1', [
+        profileId,
+      ]);
+      await f.db.query(
+        `INSERT INTO wearable_sessions(id,athlete_id,session_date,source,readings_count)
+        VALUES($1,$2,current_date,$3::"TelemetrySource",1)`,
+        [randomUUID(), userId, source],
+      );
+      const profile = await new PassportService(f.prisma).getPassportByUserId(userId);
+      assert.equal(profile.biomechanicalScore, 35);
+      assert.equal(profile.watchQualified, false);
+    }
   });
 
   it('falls back from partial Redis membership and preserves count across empty cursor pages', async () => {
@@ -308,7 +456,9 @@ describe('Wave 1: actual services against migrated memory-only PostgreSQL', () =
     const { userId, profileId } = await f.seedAthlete();
     const opponent = await f.seedAthlete();
     const organizerId = randomUUID();
-    await f.db.query("INSERT INTO users(id,role,updated_at) VALUES($1,'ORGANIZER',now())", [organizerId]);
+    await f.db.query("INSERT INTO users(id,role,updated_at) VALUES($1,'ORGANIZER',now())", [
+      organizerId,
+    ]);
     const tournamentId = randomUUID(),
       bracketId = randomUUID();
     await f.db.query(
@@ -322,7 +472,15 @@ describe('Wave 1: actual services against migrated memory-only PostgreSQL', () =
     ]);
     await f.db.query(
       'INSERT INTO verified_match_results(id,bracket_id,reported_by_id,request_key,fingerprint,participant_athlete_ids,winner_athlete_ids) VALUES($1,$2,$3,$4,$5,$6::uuid[],$7::uuid[])',
-      [randomUUID(), bracketId, organizerId, randomUUID(), 'a'.repeat(64), [userId, opponent.userId], [opponent.userId]],
+      [
+        randomUUID(),
+        bracketId,
+        organizerId,
+        randomUUID(),
+        'a'.repeat(64),
+        [userId, opponent.userId],
+        [opponent.userId],
+      ],
     );
     await f.db.query('UPDATE athlete_profiles SET gti=0,current_gti=0 WHERE id=$1', [profileId]);
     assert.equal((await new PassportService(f.prisma).getPassportByUserId(userId)).currentGti, 0);

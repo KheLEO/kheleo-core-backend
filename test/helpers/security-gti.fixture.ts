@@ -39,6 +39,7 @@ import { GtiService } from '../../src/modules/gti/gti.service';
 import { AdminController } from '../../src/modules/admin/admin.controller';
 import { AdminService } from '../../src/modules/admin/admin.service';
 import { HealthService } from '../../src/modules/health/health.service';
+import { scorePolicyFixture } from './score-policy.fixture';
 import { LeaderboardsService } from '../../src/modules/leaderboards/leaderboards.service';
 import { MatchResultsController } from '../../src/modules/tournaments/match-results.controller';
 import { MatchResultsService } from '../../src/modules/tournaments/match-results.service';
@@ -96,9 +97,11 @@ function matches(row: unknown, where: unknown): boolean {
     if ('in' in condition)
       return (
         Array.isArray(condition.in) &&
-        condition.in.some((entry: unknown) => condition.mode === 'insensitive'
-          ? String(actual).toLowerCase() === String(entry).toLowerCase()
-          : compare(actual, entry) === 0)
+        condition.in.some((entry: unknown) =>
+          condition.mode === 'insensitive'
+            ? String(actual).toLowerCase() === String(entry).toLowerCase()
+            : compare(actual, entry) === 0,
+        )
       );
     if ('notIn' in condition)
       return (
@@ -451,7 +454,50 @@ export async function createSecurityFixture() {
     };
   };
   const client = Object.assign(Object.fromEntries(names.map((name) => [name, repo(name)])), {
-    $queryRaw: async (): Promise<unknown[]> => [{ ready: 1 }],
+    $queryRaw: async (sql: Prisma.Sql): Promise<unknown[]> => {
+      if (!sql?.text?.includes('FROM athlete_score_policy')) return [{ ready: 1 }];
+      if (sql.text.includes('scout_feed_policy')) {
+        const ordered = [...tables.athleteProfile.values()]
+          .map((profile) => ({ profile, row: decorate('athleteProfile', profile) }))
+          .filter(
+            ({ row }) =>
+              row.isScoutSearchable &&
+              fields(row.user).isActive &&
+              fields(fields(row.user).identityRecord).status === 'VERIFIED',
+          )
+          .sort(
+            (a, b) =>
+              Number(b.profile.currentGti) - Number(a.profile.currentGti) ||
+              a.profile.id.localeCompare(b.profile.id),
+          );
+        const cursor = sql.text.includes('WHERE score <') ? String(sql.values[1]) : undefined;
+        const start = cursor ? ordered.findIndex((item) => item.profile.id === cursor) + 1 : 0;
+        return ordered
+          .slice(start, start + Number(sql.values.at(-1)))
+          .map(({ profile }) => ({ id: profile.id, totalCount: ordered.length }));
+      }
+      return [...tables.athleteProfile.values()]
+        .filter((profile) => sql.values.includes(profile.userId))
+        .map((profile) =>
+          scorePolicyFixture(
+            profile,
+            [...tables.drillSubmission.values()].filter((row) => row.athleteId === profile.userId),
+            [...tables.wearableSession.values()].filter((row) => row.athleteId === profile.userId),
+            [...tables.verifiedMatchResult.values()].filter(
+              (row) =>
+                (row.participantAthleteIds as string[])?.includes(String(profile.userId)) &&
+                (!profile.primarySport ||
+                  fields(fields(decorate('verifiedMatchResult', row).bracket).tournament).sport ===
+                    profile.primarySport),
+            ),
+            [...tables.sportPassportRecord.values()].filter(
+              (row) =>
+                row.athleteId === profile.id &&
+                (!profile.primarySport || row.sport === profile.primarySport),
+            ),
+          ),
+        );
+    },
     $transaction: async (
       operation: (tx: Prisma.TransactionClient) => Promise<unknown>,
       options: { isolationLevel: Prisma.TransactionIsolationLevel },
@@ -486,6 +532,7 @@ export async function createSecurityFixture() {
   });
   const prisma = client as unknown as PrismaService;
   const queue = {
+    enqueueWatchExpiry: async () => {},
     enqueueGtiRecalculation: async (payload: GtiRecalculationPayload) => {
       state.jobs.push(payload);
       return randomUUID();

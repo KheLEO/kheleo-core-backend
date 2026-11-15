@@ -10,7 +10,8 @@ import {
 
 export interface GtiRecalculationPayload {
   readonly athleteId: string;
-  readonly trigger: 'DRILL_SUBMISSION' | 'MATCH_COMPLETED' | 'WEARABLE_SYNC' | 'MANUAL';
+  readonly trigger:
+    'DRILL_SUBMISSION' | 'MATCH_COMPLETED' | 'WEARABLE_SYNC' | 'MANUAL' | 'WATCH_EVIDENCE_EXPIRY';
 }
 
 export interface MatchmakingPayload {
@@ -116,6 +117,21 @@ export class QueueProducerService {
     });
 
     return job.id ?? '';
+  }
+
+  async enqueueWatchExpiry(athleteId: string, expiresAt: number): Promise<void> {
+    await this.gtiCalcQueue.add(
+      'recalculate',
+      { athleteId, trigger: 'WATCH_EVIDENCE_EXPIRY' },
+      {
+        jobId: deterministicJobId('gti', `watch-expiry-${athleteId}-${expiresAt}`),
+        delay: Math.max(0, expiresAt - Date.now()),
+        attempts: 3,
+        backoff: { type: 'exponential', delay: 2000 },
+        removeOnComplete: 100,
+        removeOnFail: 500,
+      },
+    );
   }
 
   async enqueueBracketMatchmaking(

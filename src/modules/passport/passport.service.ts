@@ -16,6 +16,7 @@ import { CursorPaginationQueryDto } from '../../common/dto/cursor-pagination-que
 import { PaginatedResponseDto } from '../../common/dto/paginated-response.dto';
 import { Prisma, SportPassportRecord, VerificationStatus } from '@prisma/client';
 import { runSerializableTransaction } from '../../common/database/serializable-transaction';
+import { loadAthleteScorePolicies } from '../gti/biomechanical-policy';
 import { assertAccountAccess } from '../../common/auth/account-access';
 import { AuthenticatedJwtUser } from '../../common/guards/jwt-auth.guard';
 import { RedisService } from '../../infrastructure/cache/redis.service';
@@ -134,8 +135,7 @@ export class PassportService {
             return { profile: current, repaired: false };
           const evidence = await Promise.all([
             tx.drillSubmission.count({ where: { athleteId: userId } }),
-            tx.wearableSession.count({ where: { athleteId: userId } }),
-            tx.healthAlert.count({ where: { athleteId: userId } }),
+            tx.wearableSession.count({ where: { athleteId: userId, readingsCount: { gt: 0 } } }),
             tx.verifiedMatchResult.count({ where: { participantAthleteIds: { has: userId } } }),
             tx.sportPassportRecord.count({
               where: { athleteId: current.id, totalMatches: { gt: 0 } },
@@ -200,7 +200,17 @@ export class PassportService {
       }
     }
 
-    return dto;
+    const policy = (await loadAthleteScorePolicies(this.prisma, [userId])).get(userId);
+    return policy
+      ? {
+          ...dto,
+          currentGti: policy.gti,
+          biomechanicalScore: policy.biomechanicalScore,
+          watchQualified: policy.watchQualified,
+          biomechanicalCap: policy.watchQualified ? 100 : 35,
+          calculationMode: policy.calculationMode,
+        }
+      : dto;
   }
 
   private hasWipedOnboardingSignature(profile: AthletePassportRecord): boolean {
@@ -383,7 +393,18 @@ export class PassportService {
       user.identityRecord?.status ??
       VerificationStatus.UNVERIFIED;
 
-    return this.mapToAthletePassportDto(result.profile, identityStatus);
+    const responseDto = this.mapToAthletePassportDto(result.profile, identityStatus);
+    const policy = (await loadAthleteScorePolicies(this.prisma, [userId])).get(userId);
+    return policy
+      ? {
+          ...responseDto,
+          currentGti: policy.gti,
+          biomechanicalScore: policy.biomechanicalScore,
+          watchQualified: policy.watchQualified,
+          biomechanicalCap: policy.watchQualified ? 100 : 35,
+          calculationMode: policy.calculationMode,
+        }
+      : responseDto;
   }
 
   async updatePassport(userId: string, dto: UpdatePassportDto): Promise<AthletePassportDto> {

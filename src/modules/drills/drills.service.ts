@@ -6,6 +6,7 @@ import { CACHE_KEYS, invalidateCacheKeys } from '../../infrastructure/cache/cach
 import { SubmitDrillDto } from './dto/submit-drill.dto';
 import { DrillSignatureVersion, Prisma } from '@prisma/client';
 import { runSerializableTransaction } from '../../common/database/serializable-transaction';
+import { loadAthleteScorePolicies } from '../gti/biomechanical-policy';
 import {
   outboxIdMatches,
   deliverDirectOutbox,
@@ -114,10 +115,12 @@ export class DrillsService {
       `Drill submitted for athlete ${athleteId}: formScore=${dto.form_score}, newBiomechanicalScore=${result.currentBiomechanicalScore}`,
     );
 
+    const policy = (await loadAthleteScorePolicies(this.prisma, [athleteId])).get(athleteId);
     return {
       success: true,
       posture_points_awarded: posturePointsAwarded,
-      current_biomechanical_score: result.currentBiomechanicalScore,
+      current_biomechanical_score:
+        policy?.biomechanicalScore ?? Math.min(35, result.currentBiomechanicalScore),
     };
   }
 }

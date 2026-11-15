@@ -3,6 +3,7 @@ import { PrismaService } from '../../infrastructure/database/prisma.service';
 import { ScoutFeedQueryDto } from './dto/scout-feed-query.dto';
 import { Prisma, SportType, VerificationStatus } from '@prisma/client';
 import { normalizeLocationName } from '../../common/constants/india-locations';
+import { loadAthleteScorePolicies } from '../gti/biomechanical-policy';
 
 export interface ProspectSummary {
   readonly athlete_id: string;
@@ -43,7 +44,6 @@ export class ScoutsService {
         isActive: true,
         identityRecord: { status: VerificationStatus.VERIFIED },
       },
-      OR: [{ gti: { gte: minGti } }, { currentGti: { gte: new Prisma.Decimal(minGti) } }],
     };
 
     if (query.sport) {
@@ -74,46 +74,79 @@ export class ScoutsService {
       };
     }
 
-    const [total, profiles] = await Promise.all([
-      this.prisma.athleteProfile.count({ where }),
-      this.prisma.athleteProfile.findMany({
-        where,
-        take: limit + 1,
-        ...(query.cursor_id ? { cursor: { id: query.cursor_id }, skip: 1 } : {}),
-        orderBy: [{ currentGti: 'desc' }, { id: 'asc' }],
-        select: {
-          id: true,
-          userId: true,
-          gti: true,
-          currentGti: true,
-          primarySport: true,
-          district: true,
-          state: true,
-          tierClassification: true,
-          isRuralOrUnderrepresented: true,
-          biomechanicalScore: true,
-          trainingConsistencyScore: true,
-          wearableScore: true,
-          matchPerformanceScore: true,
-          matchPerfScore: true,
-          posturePoints: true,
-          user: {
-            select: {
-              _count: {
-                select: {
-                  scoutAlerts: { where: { isAcknowledged: false } },
-                },
+    const districts = (where.district as Prisma.StringFilter | undefined)?.in as
+      string[] | undefined;
+    const sportFilter =
+      typeof where.primarySport === 'string'
+        ? Prisma.sql`AND p.primary_sport=${where.primarySport}::"SportType"`
+        : Prisma.empty;
+    const districtFilter = districts?.length
+      ? Prisma.sql`AND lower(p.district) IN (${Prisma.join(districts.map((value) => value.toLowerCase()))})`
+      : Prisma.empty;
+    const after = query.cursor_id
+      ? Prisma.sql`WHERE score < (SELECT score FROM eligible WHERE id=${query.cursor_id}::uuid)
+      OR (score = (SELECT score FROM eligible WHERE id=${query.cursor_id}::uuid) AND id>${query.cursor_id}::uuid)`
+      : Prisma.empty;
+    const counted = await this.prisma.$queryRaw<
+      Array<{ id: string | null; totalCount: number }>
+    >(Prisma.sql`
+      /* scout_feed_policy */
+      WITH eligible AS (
+        SELECT p.id,p.effective_gti AS score FROM athlete_score_policy p
+        JOIN users u ON u.id=p.user_id JOIN identity_verifications i ON i.user_id=u.id
+        WHERE p.effective_gti>=${minGti} AND p.is_scout_searchable AND u.is_active
+          AND u.role='ATHLETE' AND i.status='VERIFIED' ${sportFilter} ${districtFilter}
+      )
+      SELECT page.id,totals."totalCount" FROM (SELECT COUNT(*)::int AS "totalCount" FROM eligible) totals
+      LEFT JOIN LATERAL (SELECT id,score FROM eligible ${after} ORDER BY score DESC,id ASC LIMIT ${limit + 1}) page ON true
+      ORDER BY page.score DESC,page.id ASC
+    `);
+    const total = Number(counted[0]?.totalCount ?? 0);
+    const ids = counted.flatMap((row) => (row.id ? [row.id] : []));
+    const unorderedProfiles = await this.prisma.athleteProfile.findMany({
+      where: { id: { in: ids } },
+      select: {
+        id: true,
+        userId: true,
+        gti: true,
+        currentGti: true,
+        primarySport: true,
+        district: true,
+        state: true,
+        tierClassification: true,
+        isRuralOrUnderrepresented: true,
+        biomechanicalScore: true,
+        trainingConsistencyScore: true,
+        wearableScore: true,
+        matchPerformanceScore: true,
+        matchPerfScore: true,
+        posturePoints: true,
+        user: {
+          select: {
+            _count: {
+              select: {
+                scoutAlerts: { where: { isAcknowledged: false } },
               },
             },
           },
         },
-      }),
-    ]);
+      },
+    });
+    const byId = new Map(unorderedProfiles.map((profile) => [profile.id, profile]));
+    const profiles = ids.flatMap((id) => {
+      const profile = byId.get(id);
+      return profile ? [profile] : [];
+    });
 
     const hasMore = profiles.length > limit;
     const pageProfiles = hasMore ? profiles.slice(0, limit) : profiles;
+    const policies = await loadAthleteScorePolicies(
+      this.prisma,
+      pageProfiles.map((p) => p.userId),
+    );
     const data: ProspectSummary[] = pageProfiles.map((p) => {
-      const gtiValue = p.gti > 0 ? p.gti : Number(p.currentGti);
+      const policy = policies.get(p.userId);
+      const gtiValue = policy?.gti ?? (p.gti > 0 ? p.gti : Number(p.currentGti));
       return {
         athlete_id: p.userId,
         profile_id: p.id,
@@ -125,7 +158,7 @@ export class ScoutsService {
         is_rural_or_underrepresented:
           p.isRuralOrUnderrepresented ||
           ['RURAL', 'TIER_3', 'TIER_2'].includes(String(p.tierClassification)),
-        biomechanical_score: p.biomechanicalScore,
+        biomechanical_score: policy?.biomechanicalScore ?? Math.min(35, p.biomechanicalScore),
         training_consistency_score:
           p.trainingConsistencyScore > 0 ? p.trainingConsistencyScore : Number(p.wearableScore),
         match_performance_score:

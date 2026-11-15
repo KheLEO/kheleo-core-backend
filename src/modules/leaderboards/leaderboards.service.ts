@@ -11,6 +11,7 @@ import {
   readVersion,
 } from '../../infrastructure/cache/cache-helper';
 import { normalizeLocationName } from '../../common/constants/india-locations';
+import { loadAthleteScorePolicies } from '../gti/biomechanical-policy';
 import {
   LeaderboardCursor,
   LeaderboardRow,
@@ -38,6 +39,7 @@ export class LeaderboardsService {
         include: { user: { include: { identityRecord: true } } },
       });
       const membershipKey = `leaderboard:memberships:${userId}`;
+      const policy = (await loadAthleteScorePolicies(this.prisma, [userId])).get(userId);
       // The Lua update atomically removes old geography/sport memberships and writes the current ones.
       const keysFor = (
         value:
@@ -79,7 +81,7 @@ export class LeaderboardsService {
         1,
         membershipKey,
         userId,
-        profile ? profile.gti || Number(profile.currentGti) : 0,
+        profile ? (policy?.gti ?? (profile.gti || Number(profile.currentGti))) : 0,
         JSON.stringify([...keysFor(profile), ...keysFor(previous)]),
         JSON.stringify(keys),
       );
@@ -229,12 +231,24 @@ export class LeaderboardsService {
       if (!profile) throw new BadRequestException('Cursor athlete is outside this leaderboard');
       cursor = {
         id: profile.userId,
-        score: profile.gti || Number(profile.currentGti),
+        score:
+          (await loadAthleteScorePolicies(this.prisma, [profile.userId])).get(profile.userId)
+            ?.gti ??
+          (profile.gti || Number(profile.currentGti)),
         scope: scopeKey,
       };
     }
     try {
       if (filtered) throw new Error('Demographic ranks use the database');
+      const drift = await this.prisma.$queryRaw<Array<{ userId: string }>>(Prisma.sql`
+        SELECT p.user_id AS "userId" FROM athlete_score_policy p
+        JOIN users u ON u.id=p.user_id JOIN identity_verifications i ON i.user_id=p.user_id
+        WHERE (p.biomechanical_score>35 OR p.current_gti<=0)
+          AND p.primary_sport IS NOT NULL AND p.is_scout_searchable
+          AND u.is_active AND u.role='ATHLETE' AND i.status='VERIFIED'
+          AND p.effective_gti IS DISTINCT FROM COALESCE(NULLIF(p.gti,0),p.current_gti,0)::float8 LIMIT 1
+      `);
+      if (drift.length) throw new Error('Watch policy changed scores; rank from the database');
       const [eligibleCount, cachedTotal] = await Promise.all([
         this.prisma.athleteProfile.count({ where }),
         this.redis.client.zcard(key),
@@ -243,13 +257,10 @@ export class LeaderboardsService {
         throw new Error('Leaderboard cache is empty or incomplete');
       }
       const ver = await readVersion(this.redis, CACHE_KEYS.leaderboardVersion());
-      const pageCacheKey = CACHE_KEYS.leaderboardPage(
-        ver,
-        scopeKey,
-        query.cursor ?? query.cursor_id,
-        query.limit,
-      );
-      return await readThroughCache(this.redis, pageCacheKey, 20, async () => {
+      const pageCacheKey =
+        'watch-policy-v1:' +
+        CACHE_KEYS.leaderboardPage(ver, scopeKey, query.cursor ?? query.cursor_id, query.limit);
+      const page = await readThroughCache(this.redis, pageCacheKey, 20, async () => {
         let offset = 0;
         if (cursor) {
           const [rank, score] = await Promise.all([
@@ -297,10 +308,12 @@ export class LeaderboardsService {
           },
         });
         const byId = new Map(profiles.map((profile) => [profile.userId, profile]));
+        const policies = await loadAthleteScorePolicies(this.prisma, ids);
         const entries: LeaderboardRow[] = ids.map((id, index) => {
           const profile = byId.get(id);
           const score = Number(raw[index * 2 + 1]);
-          if (!profile || (profile.gti || Number(profile.currentGti)) !== score)
+          const policy = policies.get(id);
+          if (!profile || (policy?.gti ?? (profile.gti || Number(profile.currentGti))) !== score)
             throw new Error('Leaderboard cache is stale');
           const record = profile.sportRecords?.find(
             (entry) => entry.sport === profile.primarySport,
@@ -313,7 +326,8 @@ export class LeaderboardsService {
             state: profile.state,
             sport: profile.primarySport!,
             gti: score,
-            biomechanicalScore: profile.biomechanicalScore,
+            biomechanicalScore:
+              policy?.biomechanicalScore ?? Math.min(35, profile.biomechanicalScore),
             wearableScore: profile.trainingConsistencyScore,
             matchPerformanceScore: profile.matchPerformanceScore,
             gender: profile.gender,
@@ -325,6 +339,21 @@ export class LeaderboardsService {
         });
         return this.page(entries, query, scopeKey, cachedTotal, 'redis');
       });
+      const latest = await loadAthleteScorePolicies(
+        this.prisma,
+        page.data.map((row) => row.athleteId),
+      );
+      if (
+        page.data.some((row) => {
+          const policy = latest.get(row.athleteId);
+          return (
+            policy &&
+            (policy.gti !== row.gti || policy.biomechanicalScore !== row.biomechanicalScore)
+          );
+        })
+      )
+        throw new Error('Cached page predates the current watch policy');
+      return page;
     } catch (error: unknown) {
       this.logger.debug(`Reading leaderboard from database: ${String(error)}`);
     }
@@ -366,9 +395,9 @@ export class LeaderboardsService {
         SELECT p.user_id AS "athleteId", p.id AS "profileId", p.district, p.state, p.primary_sport AS sport, p.gender,
           p.tier_classification AS "tierClassification", r.primary_role AS "primaryRole",
           COALESCE(r.total_matches,0)::int AS "totalMatches", COALESCE(r.win_count,0)::int AS "winCount",
-          COALESCE(NULLIF(p.gti, 0), p.current_gti, 0)::float8 AS gti,
-          p.biomechanical_score AS "biomechanicalScore", p.training_consistency_score AS "wearableScore", p.match_performance_score AS "matchPerformanceScore"
-        FROM athlete_profiles p JOIN users u ON u.id = p.user_id JOIN identity_verifications i ON i.user_id = u.id
+          p.effective_gti AS gti,
+          p.effective_biomechanical_score AS "biomechanicalScore", p.training_consistency_score AS "wearableScore", p.match_performance_score AS "matchPerformanceScore"
+        FROM athlete_score_policy p JOIN users u ON u.id = p.user_id JOIN identity_verifications i ON i.user_id = u.id
         LEFT JOIN sport_passport_records r ON r.athlete_id = p.id AND r.sport = p.primary_sport
         WHERE p.primary_sport IS NOT NULL AND p.is_scout_searchable AND u.is_active AND u.role = 'ATHLETE' AND i.status = 'VERIFIED'
           ${sport} ${state} ${district} ${gender} ${tier}
@@ -397,8 +426,8 @@ export class LeaderboardsService {
         : Prisma.empty;
     const rows = await this.prisma.$queryRaw<Array<{ rank: number }>>(Prisma.sql`
       WITH ranked AS (
-        SELECT p.user_id, ROW_NUMBER() OVER (ORDER BY COALESCE(NULLIF(p.gti,0),p.current_gti,0) DESC,p.user_id DESC)::int AS rank
-        FROM athlete_profiles p JOIN users u ON u.id=p.user_id JOIN identity_verifications i ON i.user_id=u.id
+        SELECT p.user_id, ROW_NUMBER() OVER (ORDER BY p.effective_gti DESC,p.user_id DESC)::int AS rank
+        FROM athlete_score_policy p JOIN users u ON u.id=p.user_id JOIN identity_verifications i ON i.user_id=u.id
         WHERE p.primary_sport=${sport}::"SportType" AND p.is_scout_searchable AND u.is_active AND u.role='ATHLETE' AND i.status='VERIFIED' ${districtFilter}
       ) SELECT rank FROM ranked WHERE user_id=${athleteId}::uuid`);
     return rows[0]?.rank ?? null;

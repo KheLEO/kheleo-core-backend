@@ -213,7 +213,8 @@ describe('Phase 4 drill integrity and measured GTI pipelines', () => {
       drill({ form_score: 100 }),
       signature('new'),
     );
-    assert.equal(result.current_biomechanical_score, 66.67);
+    assert.equal(result.current_biomechanical_score, 35);
+    assert.equal(f.profile().biomechanicalScore, 66.67);
     assert.equal(f.state.tables.drillSubmission.size, 3);
     assert.equal(f.state.jobs.length, 1);
     assert.ok(
@@ -570,6 +571,12 @@ describe('Phase 4 drill integrity and measured GTI pipelines', () => {
 
   it('retries GTI using the latest components and never overwrites a component with a derived snapshot', async () => {
     const f = await createSecurityFixture();
+    f.state.tables.wearableSession.set('hardware', {
+      id: 'hardware',
+      athleteId: ATHLETE_ID,
+      readingsCount: 1,
+      hardwareObservedAt: new Date(),
+    });
     f.setProfile({
       biomechanicalScore: 80,
       trainingConsistencyScore: 20,
@@ -592,7 +599,7 @@ describe('Phase 4 drill integrity and measured GTI pipelines', () => {
 
   it('serves ranked state/district leaderboard pages over HTTP and removes obsolete memberships', async () => {
     const f = await createSecurityFixture();
-    f.setProfile({ gti: 90, currentGti: new Prisma.Decimal(90), biomechanicalScore: 92 });
+    f.setProfile({ gti: 90, currentGti: new Prisma.Decimal(90), biomechanicalScore: 30 });
     f.setProfile({ gti: 88, currentGti: new Prisma.Decimal(88) }, OPPONENT_ID);
     await f.services.leaderboards.syncAthlete(ATHLETE_ID);
     await f.services.leaderboards.syncAthlete(OPPONENT_ID);
@@ -618,7 +625,7 @@ describe('Phase 4 drill integrity and measured GTI pipelines', () => {
       assert.equal(body.source, 'redis');
       assert.equal(body.data[0]?.athleteId, ATHLETE_ID);
       assert.equal(body.data[0]?.rank, 1);
-      assert.equal(body.data[0]?.biomechanicalScore, 92);
+      assert.equal(body.data[0]?.biomechanicalScore, 30);
       const next = await app.inject({
         method: 'GET',
         url: `/api/v1/gti/leaderboards?sport=CRICKET&scope=DISTRICT&state=Maharashtra&district=Pune&limit=1&cursor=${body.nextCursor}`,
@@ -695,7 +702,12 @@ describe('Phase 4 drill integrity and measured GTI pipelines', () => {
       sessionId = randomUUID(),
       resultId = randomUUID();
     f.state.tables.drillSubmission.set(drillId, { id: drillId, athleteId: ATHLETE_ID });
-    f.state.tables.wearableSession.set(sessionId, { id: sessionId, athleteId: ATHLETE_ID });
+    f.state.tables.wearableSession.set(sessionId, {
+      id: sessionId,
+      athleteId: ATHLETE_ID,
+      readingsCount: 1,
+      hardwareObservedAt: new Date(),
+    });
     f.state.tables.verifiedMatchResult.set(resultId, {
       id: resultId,
       bracketId: BRACKET_ID,
@@ -783,7 +795,8 @@ describe('Phase 4 drill integrity and measured GTI pipelines', () => {
       matchPerformanceScore: 100,
     });
     const result = await f.services.gti.recalculateAthleteGti(ATHLETE_ID);
-    assert.equal(result.gti, 100);
+    assert.equal(result.gti, 77.25);
+    assert.equal(result.biomechanicalScore, 35);
     assert.equal(result.provisional, true);
     assert.deepEqual(result.evidence, {
       biomechanical: 'NOT_AVAILABLE',
@@ -829,6 +842,10 @@ describe('Prompt 1 labeled telemetry', () => {
         assert.equal(f.state.pauses.at(-1)?.tournament_id, TOURNAMENT_ID);
         assert.equal([...f.state.tables.healthAlert.values()][0]?.source, source);
         assert.equal([...f.state.tables.wearableSession.values()][0]?.source, source);
+        assert.equal(
+          Boolean([...f.state.tables.wearableSession.values()][0]?.hardwareObservedAt),
+          source === 'BLE',
+        );
         if (source === 'BLE')
           assert.deepEqual([...f.state.tables.wearableSession.values()][0]?.baselineFields, [
             'spo2',
@@ -935,8 +952,8 @@ describe('Interim Competition GTI weighting while Drills & Wearables are under p
 
     const result = await f.services.gti.recalculateAthleteGti(ATHLETE_ID);
     // Active weights: w1 = 0.35 / 0.75 = 0.4667, w3 = 0.40 / 0.75 = 0.5333
-    // Expected GTI = Math.min(100, 90 * 0.4667 + 0 * 0 + 80 * 0.5333) = 42.003 + 42.664 = 84.67
-    assert.equal(result.gti, 84.67);
+    // No qualifying watch: form is capped at 35, with active drill/match weights preserved.
+    assert.equal(result.gti, 59);
     assert.equal(result.provisional, false);
     assert.deepEqual(result.evidence, {
       biomechanical: 'VERIFIED',
@@ -955,7 +972,12 @@ describe('Interim Competition GTI weighting while Drills & Wearables are under p
     const drillId = randomUUID();
     f.state.tables.drillSubmission.set(drillId, { id: drillId, athleteId: ATHLETE_ID });
     const sessionId = randomUUID();
-    f.state.tables.wearableSession.set(sessionId, { id: sessionId, athleteId: ATHLETE_ID });
+    f.state.tables.wearableSession.set(sessionId, {
+      id: sessionId,
+      athleteId: ATHLETE_ID,
+      readingsCount: 1,
+      hardwareObservedAt: new Date(),
+    });
     const matchResultId = randomUUID();
     f.state.tables.verifiedMatchResult.set(matchResultId, {
       id: matchResultId,

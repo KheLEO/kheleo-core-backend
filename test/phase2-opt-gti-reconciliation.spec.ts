@@ -61,7 +61,7 @@ describe('Phase 2 Task 2: GTI Data-Model Baseline & Main Formula Verification', 
     const drillId = randomUUID();
     drillOnly.state.tables.drillSubmission.set(drillId, { id: drillId, athleteId: ATHLETE_ID });
     const drillGti = await drillOnly.services.gti.recalculateAthleteGti(ATHLETE_ID);
-    assert.equal(drillGti.gti, 80);
+    assert.equal(drillGti.gti, 35);
     assert.deepEqual(drillGti.evidence, {
       biomechanical: 'VERIFIED',
       wearable: 'NOT_AVAILABLE',
@@ -77,7 +77,11 @@ describe('Phase 2 Task 2: GTI Data-Model Baseline & Main Formula Verification', 
       matchPerformanceScore: 0,
     });
     const sessionId = randomUUID();
-    wearableOnly.state.tables.wearableSession.set(sessionId, { id: sessionId, athleteId: ATHLETE_ID });
+    wearableOnly.state.tables.wearableSession.set(sessionId, {
+      id: sessionId,
+      athleteId: ATHLETE_ID,
+      readingsCount: 1,
+    });
     const wearableGti = await wearableOnly.services.gti.recalculateAthleteGti(ATHLETE_ID);
     assert.equal(wearableGti.gti, 45);
     assert.equal(wearableGti.provisional, false);
@@ -133,9 +137,10 @@ describe('Phase 2 Task 2: GTI Data-Model Baseline & Main Formula Verification', 
           current_gti: string;
           wearable_score: string;
           match_perf_score: string;
-        }>('SELECT current_gti, wearable_score, match_perf_score FROM athlete_profiles WHERE user_id=$1', [
-          freshUser,
-        ])
+        }>(
+          'SELECT current_gti, wearable_score, match_perf_score FROM athlete_profiles WHERE user_id=$1',
+          [freshUser],
+        )
       ).rows[0]!;
       assert.equal(Number(freshRow.current_gti), 30);
       assert.equal(Number(freshRow.wearable_score), 50);

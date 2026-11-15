@@ -34,6 +34,7 @@ import {
   ResumeSafetyDto,
 } from './dto/telemetry-webhook.dto';
 import { runSerializableTransaction } from '../../common/database/serializable-transaction';
+import { WATCH_TELEMETRY_WINDOW_MS } from '../gti/biomechanical-policy';
 import {
   outboxIdMatches,
   deliverDirectOutbox,
@@ -172,10 +173,25 @@ export class SafetyService {
       }
       const day = new Date(timestamp);
       day.setUTCHours(0, 0, 0, 0);
+      // Keep hardware freshness separate: a simulator must neither erase nor extend it.
+      const hardwareObservedAt =
+        source === TelemetrySource.BLE || source === TelemetrySource.DEVICE_HMAC
+          ? new Date()
+          : undefined;
+      const hardwareConnectionChanged =
+        hardwareObservedAt &&
+        profile.biomechanicalScore > 35 &&
+        (await tx.wearableSession.count({
+          where: {
+            athleteId: dto.athlete_id,
+            hardwareObservedAt: { gte: new Date(Date.now() - WATCH_TELEMETRY_WINDOW_MS) },
+          },
+        })) === 0;
       await tx.wearableSession.upsert({
         where: { athleteId_sessionDate: { athleteId: dto.athlete_id, sessionDate: day } },
         create: {
           athleteId: dto.athlete_id,
+          hardwareObservedAt,
           sessionDate: day,
           readingsCount: 1,
           heartRateSum: dto.heart_rate,
@@ -186,6 +202,7 @@ export class SafetyService {
           baselineFields: dto.baseline_fields ?? [],
         },
         update: {
+          hardwareObservedAt,
           observedAt: new Date(),
           source,
           baselineFields: dto.baseline_fields ?? [],
@@ -246,7 +263,8 @@ export class SafetyService {
         alertId: alert?.id,
         createdNewAlert,
         paused,
-        shouldRecalculateGti: trainingScoreChanged || createdNewAlert,
+        shouldRecalculateGti:
+          trainingScoreChanged || createdNewAlert || Boolean(hardwareConnectionChanged),
         tournamentId,
         organizerId,
         bracketId,

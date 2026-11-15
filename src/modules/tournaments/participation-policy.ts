@@ -1,6 +1,7 @@
 import { BadRequestException, ConflictException, NotFoundException } from '@nestjs/common';
 import { Prisma, TournamentStatus } from '@prisma/client';
 import { assertAccountAccess } from '../../common/auth/account-access';
+import { loadAthleteScorePolicies } from '../gti/biomechanical-policy';
 
 export const participationProfileSelect = {
   id: true,
@@ -95,7 +96,8 @@ export async function readParticipationSnapshot(
     throw new NotFoundException('Bracket does not exist in this tournament');
   if (!registrationIsOpen(bracket.tournament))
     throw new BadRequestException('Tournament registration is closed or its deadline has passed');
-  const athleteGti = Number(profile.currentGti);
+  const policy = (await loadAthleteScorePolicies(transaction, [userId])).get(userId);
+  const athleteGti = policy?.gti ?? Number(profile.currentGti);
   await assertScoreFitsBracket(transaction, bracket, athleteGti);
   return { profile, bracket, athleteGti };
 }

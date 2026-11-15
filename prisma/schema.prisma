@@ -637,6 +637,7 @@ enum TelemetrySource {
 }
 
 model WearableSession {
+  hardwareObservedAt   DateTime?       @map("hardware_observed_at") @db.Timestamptz
   readingsCount        Int             @default(0) @map("readings_count")
   heartRateSum         Float           @default(0) @map("heart_rate_sum")
   spo2Sum              Float           @default(0) @map("spo2_sum")

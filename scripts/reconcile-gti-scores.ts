@@ -72,6 +72,7 @@ export interface GtiReconciliationSummary {
 }
 
 interface RawProfileAuditRow {
+  watch_qualified: boolean;
   id: string;
   user_id: string;
   primary_sport: string | null;
@@ -154,8 +155,9 @@ async function reconcileSnapshot(
       ap.match_performance_score,
       ap.wearable_score,
       ap.match_perf_score,
+      ap.watch_qualified,
       (SELECT COUNT(*)::int FROM drill_submissions ds WHERE ds.athlete_id = ap.user_id) AS drills_count,
-      (SELECT COUNT(*)::int FROM wearable_sessions ws WHERE ws.athlete_id = ap.user_id) AS sessions_count,
+      (SELECT COUNT(*)::int FROM wearable_sessions ws WHERE ws.athlete_id = ap.user_id AND ws.readings_count>0) AS sessions_count,
       (SELECT COUNT(*)::int FROM health_alerts ha WHERE ha.athlete_id = ap.user_id) AS alerts_count,
       (SELECT COUNT(*)::int FROM verified_match_results vmr WHERE ap.user_id = ANY(vmr.participant_athlete_ids)) AS all_matches_count,
       COALESCE((SELECT SUM(spr.total_matches)::int FROM sport_passport_records spr WHERE spr.athlete_id = ap.id), 0) AS all_passport_matches,
@@ -173,7 +175,7 @@ async function reconcileSnapshot(
         WHERE spr.athlete_id = ap.id
           AND (ap.primary_sport IS NULL OR spr.sport = ap.primary_sport)
       ), 0) AS total_passport_matches
-    FROM athlete_profiles ap
+    FROM athlete_score_policy ap
     ORDER BY ap.created_at ASC, ap.id ASC
   `);
 
@@ -207,6 +209,7 @@ async function reconcileSnapshot(
 
     const commonInput = {
       biomechanicalScore: biomechanical,
+      watchQualified: p.watch_qualified,
       wearableScore: authoritativeWearable,
       matchPerformanceScore: authoritativeMatch,
       drillsCount: Number(p.drills_count),
@@ -219,17 +222,13 @@ async function reconcileSnapshot(
 
     const reconciled = evaluateGtiBreakdown({ ...commonInput, legacyMatchActivityCheck: false });
     const legacyBuggy = evaluateGtiBreakdown({ ...commonInput, legacyMatchActivityCheck: true });
-    const hasWearableEvidence =
-      commonInput.sessionsCount > 0 ||
-      commonInput.healthAlertsCount > 0 ||
-      authoritativeWearable > 0;
+    const hasWearableEvidence = commonInput.sessionsCount > 0 || authoritativeWearable > 0;
     const hasMatchEvidence = reconciled.hasRecordedMatchActivity;
 
     const categories: GtiDriftCategory[] = [];
     const hasAnyEvidence =
       commonInput.drillsCount > 0 ||
       commonInput.sessionsCount > 0 ||
-      commonInput.healthAlertsCount > 0 ||
       Number(p.all_matches_count) > 0 ||
       Number(p.all_passport_matches) > 0 ||
       biomechanical > 0 ||

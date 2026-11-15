@@ -11,6 +11,7 @@ import { LeaderboardPage, LeaderboardsQueryDto } from '../leaderboards/leaderboa
 import { normalizeLocationName } from '../../common/constants/india-locations';
 import { assertAccountAccess } from '../../common/auth/account-access';
 import { evaluateGtiBreakdown } from './gti-score-reconciliation';
+import { loadAthleteScorePolicies } from './biomechanical-policy';
 import {
   outboxIdMatches,
   deliverDirectOutbox,
@@ -18,6 +19,9 @@ import {
 } from '../../infrastructure/outbox/outbox-authority';
 
 export interface GtiComputationResult {
+  readonly watchQualified: boolean;
+  readonly biomechanicalCap: number;
+  readonly watchExpiresAt?: number | null;
   readonly athleteId: string;
   readonly gti: number;
   readonly previousGti: number;
@@ -92,13 +96,15 @@ export class GtiService {
           };
         }
       }
-      const biomechanicalScore = profile.biomechanicalScore ?? 0;
+      const rawBiomechanicalScore = profile.biomechanicalScore ?? 0;
       const wearableScore = profile.trainingConsistencyScore ?? 0;
       const matchPerformanceScore = profile.matchPerformanceScore ?? 0;
 
-      const [drills, sessions, healthAlerts, matches, sportRecords] = await Promise.all([
+      const [drills, sessions, healthAlerts, matches, sportRecords, policies] = await Promise.all([
         tx.drillSubmission.count({ where: { athleteId: profile.userId } }),
-        tx.wearableSession.count({ where: { athleteId: profile.userId } }),
+        tx.wearableSession.count({
+          where: { athleteId: profile.userId, readingsCount: { gt: 0 } },
+        }),
         tx.healthAlert.count({ where: { athleteId: profile.userId } }),
         tx.verifiedMatchResult.count({
           where: {
@@ -113,12 +119,16 @@ export class GtiService {
           },
           select: { totalMatches: true },
         }),
+        loadAthleteScorePolicies(tx, [profile.userId]),
       ]);
+      const watchQualified = policies.get(profile.userId)?.watchQualified ?? false;
+      const watchExpiresAt = policies.get(profile.userId)?.watchExpiresAt ?? null;
 
       const totalMatches = (sportRecords ?? []).reduce((sum, r) => sum + (r.totalMatches || 0), 0);
-      const { gti, w1, w2, w3, evidence, provisional, isUnmeasuredOnboarding } =
+      const { gti, biomechanicalScore, w1, w2, w3, evidence, provisional, isUnmeasuredOnboarding } =
         evaluateGtiBreakdown({
-          biomechanicalScore,
+          biomechanicalScore: rawBiomechanicalScore,
+          watchQualified,
           wearableScore,
           matchPerformanceScore,
           drillsCount: drills,
@@ -201,6 +211,9 @@ export class GtiService {
               ? {
                   deliveryId,
                   deliveryResult: {
+                    watchQualified,
+                    watchExpiresAt,
+                    biomechanicalCap: watchQualified ? 100 : 35,
                     athleteId: profile.userId,
                     gti,
                     previousGti,
@@ -222,6 +235,9 @@ export class GtiService {
       });
       return {
         replayed: false,
+        watchQualified,
+        watchExpiresAt,
+        biomechanicalCap: watchQualified ? 100 : 35,
         profile,
         gti,
         previousGti,
@@ -237,6 +253,9 @@ export class GtiService {
       };
     });
     const response: GtiComputationResult = {
+      watchQualified: result.watchQualified ?? false,
+      biomechanicalCap: result.biomechanicalCap ?? 35,
+      watchExpiresAt: result.watchExpiresAt,
       athleteId: result.profile.userId,
       gti: result.gti,
       previousGti: result.previousGti,
@@ -250,6 +269,9 @@ export class GtiService {
       weights: result.weights,
       calculationMode: result.calculationMode,
     };
+    if (response.watchQualified && response.watchExpiresAt) {
+      await this.queue.enqueueWatchExpiry(response.athleteId, response.watchExpiresAt);
+    }
     if (result.replayed) {
       signalOutboxWakeup();
       return response;

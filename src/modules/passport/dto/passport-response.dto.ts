@@ -1,4 +1,4 @@
-import { ApiProperty } from '@nestjs/swagger';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { SportType, TierClassification, VerificationStatus } from '@prisma/client';
 
 export class VerifiedPhysicalStatsDto {
@@ -107,6 +107,15 @@ export class AthletePassportDto {
 
   @ApiProperty({ example: 65.0, description: 'Biomechanical form score (0-100)' })
   readonly biomechanicalScore!: number;
+
+  @ApiPropertyOptional({ description: 'Real hardware telemetry received within the last 24 hours' })
+  readonly watchQualified?: boolean;
+
+  @ApiPropertyOptional({ enum: [35, 100] })
+  readonly biomechanicalCap?: number;
+
+  @ApiPropertyOptional({ enum: ['ONBOARDING_BASELINE', 'WEIGHTED'] })
+  readonly calculationMode?: 'ONBOARDING_BASELINE' | 'WEIGHTED';
 
   @ApiProperty({
     enum: VerificationStatus,

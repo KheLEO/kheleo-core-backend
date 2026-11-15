@@ -35,6 +35,51 @@ describe('PostGIS baseline migration', () => {
     await database.close();
   });
 
+  it('upgrades existing hardware evidence and queues one policy refresh per accessible athlete', async () => {
+    const legacy = new PGlite('memory://', { extensions: { postgis } });
+    try {
+      const root = resolve(__dirname, '../prisma/migrations');
+      const latest = '20261116000000_watch_score_policy';
+      for (const entry of readdirSync(root, { withFileTypes: true })
+        .filter((item) => item.isDirectory() && item.name < latest)
+        .sort((a, b) => a.name.localeCompare(b.name)))
+        await legacy.exec(readFileSync(resolve(root, entry.name, 'migration.sql'), 'utf8'));
+      const users = Array.from({ length: 4 }, () => randomUUID());
+      for (const [index, id] of users.entries()) {
+        await legacy.query(
+          "INSERT INTO users(id,role,is_active,updated_at) VALUES($1,'ATHLETE',$2,now())",
+          [id, index !== 2],
+        );
+        await legacy.query(
+          "INSERT INTO athlete_profiles(id,user_id,district,state,updated_at) VALUES($1,$2,'Pune','Maharashtra',now())",
+          [randomUUID(), id],
+        );
+        await legacy.query(
+          `INSERT INTO wearable_sessions(id,athlete_id,session_date,source,readings_count,simulator_readings)
+          VALUES($1,$2,current_date,$3::"TelemetrySource",1,$4)`,
+          [randomUUID(), id, index === 1 ? 'SIMULATOR' : 'DEVICE_HMAC', index === 1 ? 1 : 0],
+        );
+        if (index === 3)
+          await legacy.query(
+            "INSERT INTO identity_verifications(id,user_id,id_hash,id_type,status) VALUES($1,$2,$3,'AADHAAR','REVOKED')",
+            [randomUUID(), id, 'a'.repeat(64)],
+          );
+      }
+      await legacy.exec(readFileSync(resolve(root, latest, 'migration.sql'), 'utf8'));
+      const policies = await legacy.query<{ user_id: string; watch_qualified: boolean }>(
+        'SELECT user_id,watch_qualified FROM athlete_score_policy',
+      );
+      assert.equal(policies.rows.find((row) => row.user_id === users[0])!.watch_qualified, true);
+      assert.equal(policies.rows.find((row) => row.user_id === users[1])!.watch_qualified, false);
+      const jobs = await legacy.query<{ athlete_id: string }>(
+        "SELECT payload->>'athleteId' AS athlete_id FROM outbox_events WHERE payload->>'deliveryId' LIKE 'watch-policy-v1-%'",
+      );
+      assert.deepEqual(jobs.rows.map((row) => row.athlete_id).sort(), users.slice(0, 2).sort());
+    } finally {
+      await legacy.close();
+    }
+  });
+
   async function createUser(): Promise<string> {
     const userId = randomUUID();
     await database.query('INSERT INTO users (id, updated_at) VALUES ($1, now())', [userId]);
@@ -487,7 +532,7 @@ describe('PostGIS baseline migration', () => {
         [randomUUID(), userId, randomUUID().replaceAll('-', '').padEnd(64, '0')],
       );
       await database.query(
-        `UPDATE athlete_profiles SET state=$2,gti=$3,current_gti=$4,biomechanical_score=95,training_consistency_score=90,match_performance_score=85 WHERE id=$1`,
+        `UPDATE athlete_profiles SET state=$2,gti=$3,current_gti=$4,biomechanical_score=35,training_consistency_score=90,match_performance_score=85 WHERE id=$1`,
         [profileId, n === 3 ? 'Karnataka' : 'Maharashtra', n === 0 ? 0 : 88, n === 0 ? 92 : 88],
       );
       seeded.push({ userId, profileId });

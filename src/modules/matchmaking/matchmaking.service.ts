@@ -1,4 +1,5 @@
 import { recordSandbaggingRejection } from '../tournaments/sandbagging-audit';
+import { loadAthleteScorePolicies } from '../gti/biomechanical-policy';
 import {
   Injectable,
   ConflictException,
@@ -406,6 +407,14 @@ export class MatchmakingService {
       bracket.tournament.rulesConfig,
     );
     const candidates = await this.loadCandidates(transaction, tournamentId, bracketId);
+    const policies = await loadAthleteScorePolicies(
+      transaction,
+      candidates.map((candidate) => candidate.userId),
+    );
+    for (const candidate of candidates) {
+      const policy = policies.get(candidate.userId);
+      if (policy) candidate.user.athleteProfile.currentGti = new Prisma.Decimal(policy.gti);
+    }
     const assigned = this.matchCandidatesToSlots(candidates, slots, {
       minGti: Number(bracket.minGti),
       maxGti: Number(bracket.maxGti),

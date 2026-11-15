@@ -44,6 +44,7 @@ export async function createWave1SqlFixture(withOutbox = false) {
       ...camel(raw),
       user: {
         ...camel(user),
+        _count: { scoutAlerts: 0 },
         identityRecord: user.identity_status ? { status: user.identity_status } : null,
       },
       sportRecords: (
@@ -55,10 +56,10 @@ export async function createWave1SqlFixture(withOutbox = false) {
     };
   };
   const countRows = (table: string) => ({
-    count: async ({ where }: { where: { athleteId: string } }) =>
+    count: async ({ where }: { where: { athleteId: string; readingsCount?: { gt: number } } }) =>
       (
         await query<{ count: number }>(
-          `SELECT count(*)::int AS count FROM ${table} WHERE athlete_id=$1`,
+          `SELECT count(*)::int AS count FROM ${table} WHERE athlete_id=$1 ${where.readingsCount ? 'AND readings_count>0' : ''}`,
           [where.athleteId],
         )
       ).rows[0]!.count,
@@ -113,8 +114,14 @@ export async function createWave1SqlFixture(withOutbox = false) {
         JOIN users u ON u.id=p.user_id JOIN identity_verifications i ON i.user_id=u.id
         WHERE p.primary_sport='CRICKET' AND p.is_scout_searchable AND u.role='ATHLETE' AND u.is_active AND i.status='VERIFIED'`)
         ).rows[0]!.count,
-      findMany: async ({ where }: { where: { AND: Array<{ userId?: { in: string[] } }> } }) => {
-        const ids = where.AND.find((part) => part.userId)?.userId?.in ?? [];
+      findMany: async ({
+        where,
+      }: {
+        where: { AND?: Array<{ userId?: { in: string[] } }>; id?: { in: string[] } };
+      }) => {
+        if (where.id?.in)
+          return Promise.all(where.id.in.map((id) => findProfile({ where: { id } })));
+        const ids = where.AND?.find((part) => part.userId)?.userId?.in ?? [];
         return Promise.all(ids.map(async (userId) => findProfile({ where: { userId } })));
       },
     },

@@ -170,6 +170,7 @@ export function createAuthFixture(options: FixtureOptions = {}) {
       ? state.user
       : null;
   const prisma = {
+    $queryRaw: async () => [],
     user: {
       findUnique: async ({
         where,

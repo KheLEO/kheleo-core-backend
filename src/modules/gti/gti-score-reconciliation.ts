@@ -1,3 +1,5 @@
+import { biomechanicalScoreForWatch } from './biomechanical-policy';
+
 export interface ProfileScoreColumns {
   readonly gti?: number | null;
   readonly currentGti?: unknown;
@@ -124,22 +126,26 @@ export function evaluateGtiBreakdown(input: {
   readonly totalPassportMatches: number;
   readonly legacyMatchActivityCheck?: boolean;
   readonly onboardingGti?: number;
+  readonly watchQualified?: boolean;
 }): GtiBreakdownEvaluation {
   const {
-    biomechanicalScore,
+    biomechanicalScore: rawBiomechanicalScore,
     wearableScore,
     matchPerformanceScore,
     drillsCount,
     sessionsCount,
-    healthAlertsCount,
     matchesCount,
     totalPassportMatches,
     legacyMatchActivityCheck = false,
     onboardingGti = 30,
+    watchQualified = false,
   } = input;
 
+  const biomechanicalScore = biomechanicalScoreForWatch(rawBiomechanicalScore, watchQualified);
+
   const hasDrillData = drillsCount > 0 || biomechanicalScore > 0;
-  const hasWearableData = sessionsCount > 0 || healthAlertsCount > 0 || wearableScore > 0;
+  // A safety alert alone is not a wearable measurement or a training session.
+  const hasWearableData = sessionsCount > 0 || wearableScore > 0;
   const hasVerifiedMatches = matchesCount > 0 || totalPassportMatches > 0;
   const hasRecordedMatchActivity = legacyMatchActivityCheck
     ? hasVerifiedMatches || matchPerformanceScore !== 50
@@ -147,7 +153,7 @@ export function evaluateGtiBreakdown(input: {
 
   const evidence: GtiEvidenceStatus = {
     biomechanical: drillsCount > 0 ? 'VERIFIED' : 'NOT_AVAILABLE',
-    wearable: sessionsCount > 0 || healthAlertsCount > 0 ? 'VERIFIED' : 'NOT_AVAILABLE',
+    wearable: sessionsCount > 0 ? 'VERIFIED' : 'NOT_AVAILABLE',
     matchPerformance: hasVerifiedMatches ? 'VERIFIED' : 'NOT_AVAILABLE',
   };
 
