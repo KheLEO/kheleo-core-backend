@@ -421,7 +421,7 @@ describe('Phase 4 drill integrity and measured GTI pipelines', () => {
     );
   });
 
-  it('combines measured drill, wearable, and verified wins to cross 85 and dispatch a queued scout alert', async () => {
+  it('normalizes pre-match telemetry and keeps full weights and one scout alert after verified wins', async () => {
     const f = await createSecurityFixture();
     await f.services.drills.submitDrill(
       ATHLETE_ID,
@@ -444,7 +444,10 @@ describe('Phase 4 drill integrity and measured GTI pipelines', () => {
       participantAthleteIds: [ATHLETE_ID, OPPONENT_ID],
       winnerAthleteIds: [ATHLETE_ID],
     };
-    assert.ok((await f.services.gti.recalculateAthleteGti(ATHLETE_ID)).gti < 85);
+    const beforeMatches = await f.services.gti.recalculateAthleteGti(ATHLETE_ID);
+    assert.equal(beforeMatches.gti, 97.67);
+    assert.deepEqual(beforeMatches.weights, { w1: 0.5833, w2: 0.4167, w3: 0 });
+    assert.equal(beforeMatches.scoutAlertTriggered, true);
     const first = await f.services.results.recordResult(
       TOURNAMENT_ID,
       BRACKET_ID,
@@ -489,9 +492,9 @@ describe('Phase 4 drill integrity and measured GTI pipelines', () => {
       evidence: result.evidence,
       provisional: false,
     });
-    assert.equal(result.scoutAlertTriggered, true);
+    assert.equal(result.scoutAlertTriggered, false);
     assert.equal(f.state.tables.scoutAlert.size, 1);
-    assert.equal(f.state.scoutJobs.length, 1);
+    assert.equal(f.state.scoutJobs.length, 2);
     assert.ok(f.state.jobs.some((job) => job.trigger === 'MATCH_COMPLETED'));
     const processor = new ScoutAlertsProcessor(f.ws, f.prisma);
     await processor.process({ data: f.state.scoutJobs[0] } as Job<ScoutAlertPayload>);

@@ -1,299 +1,191 @@
 import 'dotenv/config';
-import { PrismaClient, Prisma } from '@prisma/client';
+import { PrismaClient } from '@prisma/client';
 import Redis from 'ioredis';
 import { resolve } from 'node:path';
-import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
+import {
+  GtiReconciliationSummary,
+  prismaReconciliationDb,
+  reconcileGtiRecords,
+  ReconcileSqlDb,
+} from './reconcile-gti-scores';
 
 export interface CorrectionResult {
   readonly mode: 'PRISMA_DATABASE' | 'SIMULATED_VERIFICATION';
+  readonly dryRun: boolean;
   readonly totalScanned: number;
+  readonly eligibleCount: number;
   readonly correctedCount: number;
   readonly remainingAtZero: number;
   readonly invalidatedCacheCount: number;
   readonly correctedAccounts: Array<{
     readonly profileId: string;
     readonly userId: string;
-    readonly email: string | null;
-    readonly phone: string | null;
     readonly previousCurrentGti: number;
     readonly newCurrentGti: number;
     readonly previousWearableScore: number;
     readonly newWearableScore: number;
     readonly previousMatchPerfScore: number;
     readonly newMatchPerfScore: number;
+    readonly updated: boolean;
   }>;
 }
 
 export function maskPhone(phone?: string | null): string | null {
   if (!phone) return null;
   const trimmed = phone.trim();
-  if (trimmed.length <= 4) return '***';
-  return trimmed.slice(0, 3) + '*****' + trimmed.slice(-4);
+  return trimmed.length <= 4 ? '***' : trimmed.slice(0, 3) + '*****' + trimmed.slice(-4);
 }
 
-export async function fixBaselinesWithPrisma(prisma: PrismaClient): Promise<CorrectionResult> {
-  const candidates = await prisma.athleteProfile.findMany({
-    where: {
-      OR: [
-        { currentGti: { lte: 0 } },
-        { wearableScore: { lte: 0 } },
-        { matchPerfScore: { lte: 0 } },
-      ],
-    },
-    include: {
-      user: {
-        select: {
-          id: true,
-          email: true,
-          phone: true,
-          name: true,
-        },
-      },
-    },
-  });
-
-  const correctedAccounts: CorrectionResult['correctedAccounts'] = [];
-
-  for (const profile of candidates) {
-    const prevGti = Number(profile.currentGti);
-    const prevWearable = Number(profile.wearableScore);
-    const prevMatch = Number(profile.matchPerfScore);
-
-    await prisma.athleteProfile.update({
-      where: { id: profile.id },
-      data: {
-        currentGti: new Prisma.Decimal(30.00),
-        wearableScore: new Prisma.Decimal(50.00),
-        matchPerfScore: new Prisma.Decimal(50.00),
-      },
-    });
-
-    correctedAccounts.push({
-      profileId: profile.id,
-      userId: profile.userId,
-      email: profile.user?.email ?? null,
-      phone: maskPhone(profile.user?.phone),
-      previousCurrentGti: prevGti,
-      newCurrentGti: 30.00,
-      previousWearableScore: prevWearable,
-      newWearableScore: 50.00,
-      previousMatchPerfScore: prevMatch,
-      newMatchPerfScore: 50.00,
-    });
-  }
-
-  // Invalidate Redis passport caches if configured
-  let invalidatedCacheCount = 0;
-  const userIds = candidates.map((c) => c.userId);
-  if (userIds.length > 0) {
-    invalidatedCacheCount = await invalidateRedisPassportCaches(userIds);
-  }
-
-  const remaining = await prisma.athleteProfile.count({
-    where: {
-      currentGti: { lte: 0 },
-    },
-  });
-
+function correctionResult(
+  summary: GtiReconciliationSummary,
+  mode: CorrectionResult['mode'],
+  apply: boolean,
+  remainingAtZero: number,
+  invalidatedCacheCount: number,
+): CorrectionResult {
+  const eligible = summary.affected.filter((entry) => entry.eligibleForUpdate);
   return {
-    mode: 'PRISMA_DATABASE',
-    totalScanned: candidates.length,
-    correctedCount: correctedAccounts.length,
-    remainingAtZero: remaining,
+    mode,
+    dryRun: !apply,
+    totalScanned: summary.totalProfilesScanned,
+    eligibleCount: eligible.length,
+    correctedCount: summary.updatedCount,
+    remainingAtZero,
     invalidatedCacheCount,
-    correctedAccounts,
+    correctedAccounts: eligible.map((entry) => ({
+      profileId: entry.profileId,
+      userId: entry.userId,
+      previousCurrentGti: entry.existingCurrentGti,
+      newCurrentGti: entry.proposedScores.currentGti,
+      previousWearableScore: entry.existingWearableScore,
+      newWearableScore: entry.proposedScores.wearableScore,
+      previousMatchPerfScore: entry.existingMatchPerfScore,
+      newMatchPerfScore: entry.proposedScores.matchPerfScore,
+      updated: entry.updated,
+    })),
   };
+}
+
+export async function fixBaselinesWithPrisma(
+  prisma: PrismaClient,
+  options: { readonly apply?: boolean } = {},
+): Promise<CorrectionResult> {
+  const apply = options.apply ?? false;
+  // Reads, evidence qualification, and all four score writes share one Serializable Prisma transaction.
+  const summary = await reconcileGtiRecords(prismaReconciliationDb(prisma), {
+    apply,
+    baselineOnly: true,
+  });
+  const updatedIds = summary.affected.filter((entry) => entry.updated).map((entry) => entry.userId);
+  const invalidated = updatedIds.length ? await invalidateRedisPassportCaches(updatedIds) : 0;
+  const remaining = await prisma.athleteProfile.count({ where: { currentGti: { lte: 0 } } });
+  return correctionResult(summary, 'PRISMA_DATABASE', apply, remaining, invalidated);
 }
 
 export async function invalidateRedisPassportCaches(userIds: string[]): Promise<number> {
-  const redisHost = process.env.REDIS_HOST;
-  const redisUrl = process.env.REDIS_URL;
-  if (!redisHost && !redisUrl) {
-    console.log('[Redis] No REDIS_HOST or REDIS_URL configured. Cache invalidation skipped.');
-    return 0;
-  }
-
-  let redis: Redis | null = null;
+  if (!process.env.REDIS_HOST && !process.env.REDIS_URL) return 0;
+  const redis = process.env.REDIS_URL
+    ? new Redis(process.env.REDIS_URL, {
+        lazyConnect: true,
+        maxRetriesPerRequest: 1,
+        connectTimeout: 1500,
+      })
+    : new Redis({
+        host: process.env.REDIS_HOST,
+        port: Number(process.env.REDIS_PORT || 6379),
+        username: process.env.REDIS_USERNAME || undefined,
+        password: process.env.REDIS_PASSWORD || undefined,
+        db: Number(process.env.REDIS_DB || 0),
+        ...(process.env.REDIS_TLS === 'true' ? { tls: { rejectUnauthorized: true } } : {}),
+        lazyConnect: true,
+        maxRetriesPerRequest: 1,
+        connectTimeout: 1500,
+      });
   try {
-    redis = redisUrl
-      ? new Redis(redisUrl, { lazyConnect: true, maxRetriesPerRequest: 1, connectTimeout: 1500 })
-      : new Redis({
-          host: redisHost || 'localhost',
-          port: Number(process.env.REDIS_PORT || 6379),
-          password: process.env.REDIS_PASSWORD || undefined,
-          lazyConnect: true,
-          maxRetriesPerRequest: 1,
-          connectTimeout: 1500,
-        });
-
     await redis.connect();
-    const passportKeys = userIds.map((id) => `passport:v1:${id}`);
-    const authKeys = userIds.map((id) => `auth:v1:user:${id}`);
-    const allKeys = [...passportKeys, ...authKeys];
-    await redis.del(...allKeys);
-    console.log(`[Redis] Successfully invalidated ${passportKeys.length} passport cache keys in Redis.`);
-    return passportKeys.length;
-  } catch (err) {
-    console.warn(`[Redis] Note: Redis cache invalidation bypassed: ${(err as Error).message}`);
+    await redis.del(
+      ...userIds.flatMap((id) => [`passport:v1:${id}`, `auth:v1:user:${id}`]),
+      'heatmap:v1:regional',
+    );
+    await redis.incr('leaderboard:v1:ver');
+    return userIds.length;
+  } catch (error: unknown) {
+    console.warn(`[Redis] Post-commit cache invalidation failed: ${String(error)}`);
     return 0;
   } finally {
-    if (redis) {
-      redis.disconnect();
-    }
+    redis.disconnect();
   }
 }
 
-export async function fixBaselinesWithPGlite(): Promise<CorrectionResult> {
+export async function fixBaselinesWithPGlite(
+  options: { readonly apply?: boolean } = {},
+): Promise<CorrectionResult> {
   const { PGlite } = await import('@electric-sql/pglite');
   const { postgis } = await import('@electric-sql/pglite-postgis');
-  const db = new PGlite({ extensions: { postgis } });
-
-  console.log('[BaselineFixer] Initializing schema migrations in verification engine...');
-  const migrationsDir = resolve(__dirname, '../prisma/migrations');
-  const migrationDirs = readdirSync(migrationsDir, { withFileTypes: true })
-    .filter((d) => d.isDirectory())
-    .sort((a, b) => a.name.localeCompare(b.name));
-
-  for (const dir of migrationDirs) {
-    const sqlPath = resolve(migrationsDir, dir.name, 'migration.sql');
-    if (existsSync(sqlPath)) {
-      await db.exec(readFileSync(sqlPath, 'utf8'));
+  const db = new PGlite('memory://', { extensions: { postgis } });
+  try {
+    const root = resolve(__dirname, '../prisma/migrations');
+    for (const dir of readdirSync(root, { withFileTypes: true })
+      .filter((d) => d.isDirectory())
+      .sort((a, b) => a.name.localeCompare(b.name))) {
+      await db.exec(readFileSync(resolve(root, dir.name, 'migration.sql'), 'utf8'));
     }
-  }
-
-  // Seed sample developer/test accounts that were affected by the 0.0 baseline experiment
-  const sampleAccounts = [
-    { id: randomUUID(), userId: randomUUID(), email: 'developer.athlete1@kheleo.dev', phone: '+919876543210' },
-    { id: randomUUID(), userId: randomUUID(), email: 'qa.tester2@kheleo.test', phone: '+919123456789' },
-    { id: randomUUID(), userId: randomUUID(), email: 'staging.preview3@kheleo.internal', phone: '+919988776655' },
-  ];
-
-  for (const acc of sampleAccounts) {
+    const uid = randomUUID();
+    await db.query('INSERT INTO users(id, updated_at) VALUES($1, now())', [uid]);
     await db.query(
-      'INSERT INTO users(id, email, phone, role, updated_at) VALUES($1, $2, $3, $4, now())',
-      [acc.userId, acc.email, acc.phone, 'ATHLETE'],
+      "INSERT INTO athlete_profiles(id,user_id,district,state,current_gti,wearable_score,match_perf_score,updated_at) VALUES($1,$2,'Pune','Maharashtra',0,50,50,now())",
+      [randomUUID(), uid],
     );
-    await db.query(
-      `INSERT INTO athlete_profiles(
-        id, user_id, district, state, current_gti, wearable_score, match_perf_score, updated_at
-      ) VALUES($1, $2, 'Pune', 'Maharashtra', 0.00, 0.00, 0.00, now())`,
-      [acc.id, acc.userId],
-    );
+    const adapter: ReconcileSqlDb = {
+      query: async <T = Record<string, unknown>>(sql: string, params: unknown[] = []) =>
+        db.query<T>(sql, params),
+      transaction: (operation) =>
+        db.transaction((tx) =>
+          operation({
+            query: async <T = Record<string, unknown>>(sql: string, params: unknown[] = []) =>
+              tx.query<T>(sql, params),
+          }),
+        ),
+    };
+    const apply = options.apply ?? false;
+    const summary = await reconcileGtiRecords(adapter, { apply, baselineOnly: true });
+    const remaining = (
+      await db.query<{ count: number }>(
+        'SELECT count(*)::int AS count FROM athlete_profiles WHERE current_gti<=0',
+      )
+    ).rows[0]!.count;
+    return correctionResult(summary, 'SIMULATED_VERIFICATION', apply, remaining, 0);
+  } finally {
+    await db.close();
   }
-
-  // Scan for affected developer accounts
-  const scanResult = await db.query<{
-    id: string;
-    user_id: string;
-    email: string | null;
-    phone: string | null;
-    current_gti: string;
-    wearable_score: string;
-    match_perf_score: string;
-  }>(`
-    SELECT p.id, p.user_id, u.email, u.phone, p.current_gti, p.wearable_score, p.match_perf_score
-    FROM athlete_profiles p
-    JOIN users u ON u.id = p.user_id
-    WHERE p.current_gti <= 0 OR p.wearable_score <= 0 OR p.match_perf_score <= 0
-  `);
-
-  const correctedAccounts: CorrectionResult['correctedAccounts'] = [];
-
-  for (const row of scanResult.rows) {
-    await db.query(
-      `UPDATE athlete_profiles
-       SET current_gti = 30.00, wearable_score = 50.00, match_perf_score = 50.00, updated_at = now()
-       WHERE id = $1`,
-      [row.id],
-    );
-
-    correctedAccounts.push({
-      profileId: row.id,
-      userId: row.user_id,
-      email: row.email,
-      phone: maskPhone(row.phone),
-      previousCurrentGti: Number(row.current_gti),
-      newCurrentGti: 30.00,
-      previousWearableScore: Number(row.wearable_score),
-      newWearableScore: 50.00,
-      previousMatchPerfScore: Number(row.match_perf_score),
-      newMatchPerfScore: 50.00,
-    });
-  }
-
-  const remainingResult = await db.query<{ count: string }>(`
-    SELECT count(*)::text as count FROM athlete_profiles WHERE current_gti <= 0
-  `);
-  const remainingAtZero = Number(remainingResult.rows[0]?.count || 0);
-
-  await db.close();
-
-  return {
-    mode: 'SIMULATED_VERIFICATION',
-    totalScanned: scanResult.rows.length,
-    correctedCount: correctedAccounts.length,
-    remainingAtZero,
-    invalidatedCacheCount: correctedAccounts.length,
-    correctedAccounts,
-  };
 }
 
 export async function main(): Promise<void> {
-  const databaseUrl = process.env.DATABASE_URL || process.env.DIRECT_URL;
-
-  console.log('════════════════════════════════════════════════════════════════════════');
-  console.log('   KHELEO: ATHLETE PROFILE GTI BASELINE RESTORATION & CACHE FLUSH   ');
-  console.log('════════════════════════════════════════════════════════════════════════');
-
+  const apply = process.argv.includes('--apply');
+  const databaseUrl = process.env.DIRECT_URL || process.env.DATABASE_URL;
   let result: CorrectionResult;
-
   if (databaseUrl) {
-    console.log(`[Target] Connected to live PostgreSQL database.`);
-    const prisma = new PrismaClient({
-      datasources: { db: { url: databaseUrl } },
-    });
+    const prisma = new PrismaClient({ datasources: { db: { url: databaseUrl } } });
     try {
-      result = await fixBaselinesWithPrisma(prisma);
+      result = await fixBaselinesWithPrisma(prisma, { apply });
     } finally {
       await prisma.$disconnect();
     }
   } else {
-    console.log('[Notice] No DATABASE_URL or DIRECT_URL set in local environment.');
-    console.log('[Notice] Running in simulated verification mode against PostgreSQL engine fixture.');
-    console.log('[Notice] (To target Railway or live Postgres, provide DATABASE_URL in environment)');
-    result = await fixBaselinesWithPGlite();
-  }
-
-  console.log('\n─── CORRECTION RESULTS SUMMARY ──────────────────────────────────────────');
-  console.log(`Execution Mode          : ${result.mode}`);
-  console.log(`Total Profiles Scanned  : ${result.totalScanned}`);
-  console.log(`Profiles Corrected      : ${result.correctedCount}`);
-  console.log(`Remaining Profiles at 0 : ${result.remainingAtZero}`);
-  console.log(`Passport Caches Flushed : ${result.invalidatedCacheCount}`);
-
-  console.log('\n─── CORRECTED ACCOUNTS LOG ─────────────────────────────────────────────');
-  for (const acc of result.correctedAccounts) {
     console.log(
-      `✔ Profile ID: ${acc.profileId} | User: ${acc.userId} | Email: ${acc.email ?? 'N/A'} | Phone: ${acc.phone ?? 'N/A'}` +
-        `\n  → currentGti: ${acc.previousCurrentGti.toFixed(2)} → ${acc.newCurrentGti.toFixed(2)}` +
-        ` | wearableScore: ${acc.previousWearableScore.toFixed(2)} → ${acc.newWearableScore.toFixed(2)}` +
-        ` | matchPerfScore: ${acc.previousMatchPerfScore.toFixed(2)} → ${acc.newMatchPerfScore.toFixed(2)}`,
+      '[Notice] No database configured; demonstrating the repair on a memory-only synthetic fixture.',
     );
+    result = await fixBaselinesWithPGlite({ apply });
   }
-
-  if (result.remainingAtZero === 0) {
-    console.log('\n✔ VERIFICATION SUCCESSFUL: Zero active developer profiles remain at 0.0 GTI.');
-  } else {
-    console.error(`\n✖ WARNING: ${result.remainingAtZero} profile(s) still remain at 0.0 GTI!`);
-    process.exit(1);
-  }
+  console.log(JSON.stringify({ execution: apply ? 'APPLY' : 'DRY_RUN', ...result }, null, 2));
+  // Measured athletes may legitimately remain at zero; that is not a repair failure.
 }
 
 if (require.main === module) {
-  main().catch((err) => {
-    console.error('Fatal execution error:', err);
-    process.exit(1);
+  void main().catch((error: unknown) => {
+    console.error(error);
+    process.exitCode = 1;
   });
 }
-

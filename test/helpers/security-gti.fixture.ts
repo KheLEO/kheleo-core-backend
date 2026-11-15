@@ -96,7 +96,9 @@ function matches(row: unknown, where: unknown): boolean {
     if ('in' in condition)
       return (
         Array.isArray(condition.in) &&
-        condition.in.some((entry: unknown) => compare(actual, entry) === 0)
+        condition.in.some((entry: unknown) => condition.mode === 'insensitive'
+          ? String(actual).toLowerCase() === String(entry).toLowerCase()
+          : compare(actual, entry) === 0)
       );
     if ('notIn' in condition)
       return (
@@ -542,6 +544,11 @@ export async function createSecurityFixture() {
   const leaderboards = new LeaderboardsService(prisma, redis);
   const jwt = new JwtStrategy(auth.config, prisma);
   const sockets = new WsAuthGuard(jwt);
+  // HTTP fixtures have a healthy local delivery surface; transport failure is tested separately.
+  sockets.configure({
+    use: () => {},
+    local: { in: () => ({ disconnectSockets: () => {} }) },
+  } as never);
   const services = {
     organizer: new OrganizerService(prisma, {
       processBracketPool: async (tournamentId: string, bracketId: string) => {

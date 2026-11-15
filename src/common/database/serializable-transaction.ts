@@ -1,5 +1,9 @@
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../infrastructure/database/prisma.service';
+import {
+  captureOutboxIntents,
+  signalOutboxWakeup,
+} from '../../infrastructure/outbox/outbox-authority';
 
 const MAX_TRANSACTION_ATTEMPTS = 3;
 
@@ -9,9 +13,14 @@ export async function runSerializableTransaction<TResult>(
 ): Promise<TResult> {
   for (let attempt = 1; attempt <= MAX_TRANSACTION_ATTEMPTS; attempt += 1) {
     try {
-      return await prisma.$transaction(operation, {
-        isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
-      });
+      const result = await prisma.$transaction(
+        async (tx) => captureOutboxIntents(tx, await operation(tx)),
+        {
+          isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
+        },
+      );
+      signalOutboxWakeup();
+      return result;
     } catch (error: unknown) {
       const isRetryableConflict =
         error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2034';

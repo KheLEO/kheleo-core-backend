@@ -196,14 +196,17 @@ export class LeaderboardsService {
       ...(query.scope !== LeaderboardScope.NATIONAL
         ? {
             state: normalizedState
-              ? { in: [query.state!, normalizedState], mode: 'insensitive' }
+              ? { in: this.locationVariants(query.state, normalizedState), mode: 'insensitive' }
               : query.state,
           }
         : {}),
       ...(query.scope === LeaderboardScope.DISTRICT
         ? {
             district: normalizedDistrict
-              ? { in: [query.district!, normalizedDistrict], mode: 'insensitive' }
+              ? {
+                  in: this.locationVariants(query.district, normalizedDistrict),
+                  mode: 'insensitive',
+                }
               : query.district,
           }
         : {}),
@@ -232,6 +235,13 @@ export class LeaderboardsService {
     }
     try {
       if (filtered) throw new Error('Demographic ranks use the database');
+      const [eligibleCount, cachedTotal] = await Promise.all([
+        this.prisma.athleteProfile.count({ where }),
+        this.redis.client.zcard(key),
+      ]);
+      if (cachedTotal === 0 || cachedTotal !== eligibleCount) {
+        throw new Error('Leaderboard cache is empty or incomplete');
+      }
       const ver = await readVersion(this.redis, CACHE_KEYS.leaderboardVersion());
       const pageCacheKey = CACHE_KEYS.leaderboardPage(
         ver,
@@ -240,8 +250,6 @@ export class LeaderboardsService {
         query.limit,
       );
       return await readThroughCache(this.redis, pageCacheKey, 20, async () => {
-        const cachedTotal = await this.redis.client.zcard(key);
-        if (cachedTotal === 0) throw new Error('Leaderboard cache is empty');
         let offset = 0;
         if (cursor) {
           const [rank, score] = await Promise.all([
@@ -294,7 +302,9 @@ export class LeaderboardsService {
           const score = Number(raw[index * 2 + 1]);
           if (!profile || (profile.gti || Number(profile.currentGti)) !== score)
             throw new Error('Leaderboard cache is stale');
-          const record = profile.sportRecords?.find((entry) => entry.sport === profile.primarySport);
+          const record = profile.sportRecords?.find(
+            (entry) => entry.sport === profile.primarySport,
+          );
           return {
             rank: offset + index + 1,
             athleteId: id,
@@ -348,11 +358,12 @@ export class LeaderboardsService {
     const after = cursor
       ? Prisma.sql`WHERE (gti, "athleteId") < (${cursor.score}::float8, ${cursor.id}::uuid)`
       : Prisma.empty;
-    const rawRows = await this.prisma.$queryRaw<Array<LeaderboardRow & { totalCount?: number }>>(Prisma.sql`
-      WITH ranked AS (
-        SELECT ROW_NUMBER() OVER (ORDER BY COALESCE(NULLIF(p.gti, 0), p.current_gti, 0) DESC, p.user_id DESC)::int AS rank,
-          COUNT(*) OVER()::int AS "totalCount",
-          p.user_id AS "athleteId", p.id AS "profileId", p.district, p.state, p.primary_sport AS sport, p.gender,
+    type CountedRow = LeaderboardRow & { totalCount: number };
+    const rawRows = await this.prisma.$queryRaw<
+      Array<CountedRow | { athleteId: null; totalCount: number }>
+    >(Prisma.sql`
+      WITH eligible AS (
+        SELECT p.user_id AS "athleteId", p.id AS "profileId", p.district, p.state, p.primary_sport AS sport, p.gender,
           p.tier_classification AS "tierClassification", r.primary_role AS "primaryRole",
           COALESCE(r.total_matches,0)::int AS "totalMatches", COALESCE(r.win_count,0)::int AS "winCount",
           COALESCE(NULLIF(p.gti, 0), p.current_gti, 0)::float8 AS gti,
@@ -361,9 +372,19 @@ export class LeaderboardsService {
         LEFT JOIN sport_passport_records r ON r.athlete_id = p.id AND r.sport = p.primary_sport
         WHERE p.primary_sport IS NOT NULL AND p.is_scout_searchable AND u.is_active AND u.role = 'ATHLETE' AND i.status = 'VERIFIED'
           ${sport} ${state} ${district} ${gender} ${tier}
-      ) SELECT * FROM ranked ${after} ORDER BY gti DESC, "athleteId" DESC LIMIT ${query.limit + 1}`);
+      ), ranked AS (
+        SELECT ROW_NUMBER() OVER (ORDER BY gti DESC, "athleteId" DESC)::int AS rank, * FROM eligible
+      )
+      SELECT page.*, totals."totalCount"
+      FROM (SELECT COUNT(*)::int AS "totalCount" FROM eligible) totals
+      LEFT JOIN LATERAL (
+        SELECT * FROM ranked ${after} ORDER BY gti DESC, "athleteId" DESC LIMIT ${query.limit + 1}
+      ) page ON true
+      ORDER BY page.gti DESC, page."athleteId" DESC`);
     const total = Number(rawRows[0]?.totalCount ?? 0);
-    const rows: LeaderboardRow[] = rawRows.map(({ totalCount: _tc, ...rest }) => rest);
+    const rows: LeaderboardRow[] = rawRows
+      .filter((row): row is CountedRow => row.athleteId !== null)
+      .map(({ totalCount: _tc, ...rest }) => rest);
     return this.page(rows, query, scopeKey, total, 'database');
   }
 

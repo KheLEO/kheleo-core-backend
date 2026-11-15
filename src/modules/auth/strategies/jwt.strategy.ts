@@ -7,7 +7,11 @@ import * as jwt from 'jsonwebtoken';
 import { UserRole, VerificationStatus } from '@prisma/client';
 import { PrismaService } from '../../../infrastructure/database/prisma.service';
 import { RedisService } from '../../../infrastructure/cache/redis.service';
-import { CACHE_KEYS, readThroughCache } from '../../../infrastructure/cache/cache-helper';
+import {
+  CACHE_KEYS,
+  invalidateAuthAndPassport,
+  readThroughCache,
+} from '../../../infrastructure/cache/cache-helper';
 import { assertAccountAccess } from '../../../common/auth/account-access';
 import { AuthenticatedJwtUser } from '../../../common/guards/jwt-auth.guard';
 import { loadLocalJwtKeys } from '../jwt-keys';
@@ -114,11 +118,13 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     ) {
       throw new UnauthorizedException('Invalid or expired token payload');
     }
-    const cachedUser = await readThroughCache<CachedAuthUserRecord | null>(
+    let loadedFromDatabase = false;
+    let cachedUser = await readThroughCache<CachedAuthUserRecord | null>(
       this.redis,
       CACHE_KEYS.authUser(payload.sub),
       120,
       async () => {
+        loadedFromDatabase = true;
         const record = await this.prisma.user.findUnique({
           where: { id: payload.sub as string },
           select: {
@@ -141,12 +147,53 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
         };
       },
     );
+    if (!loadedFromDatabase) {
+      // Cached contact details are safe to reuse; access decisions must survive a missed Redis invalidation.
+      const current = await this.prisma.user.findUnique({
+        where: { id: payload.sub },
+        select: {
+          id: true,
+          role: true,
+          isActive: true,
+          identityRecord: { select: { status: true } },
+        },
+      });
+      if (!current) {
+        await invalidateAuthAndPassport(this.redis, payload.sub);
+        throw new UnauthorizedException('Account does not exist');
+      }
+      const identityStatus = current.identityRecord?.status ?? null;
+      if (
+        !cachedUser ||
+        cachedUser.role !== current.role ||
+        cachedUser.isActive !== current.isActive ||
+        cachedUser.identityStatus !== identityStatus
+      ) {
+        await invalidateAuthAndPassport(this.redis, payload.sub);
+      }
+      cachedUser = {
+        id: current.id,
+        role: current.role,
+        isActive: current.isActive,
+        identityStatus,
+        email: cachedUser?.email ?? null,
+        phone: cachedUser?.phone ?? null,
+      };
+    }
     if (!cachedUser) throw new UnauthorizedException('Account does not exist');
-    assertAccountAccess({
-      isActive: cachedUser.isActive,
-      identityRecord: cachedUser.identityStatus ? { status: cachedUser.identityStatus } : null,
-    });
-    if (['ORGANIZER', 'SCOUT'].includes(cachedUser.role) && cachedUser.identityStatus !== 'VERIFIED')
+    try {
+      assertAccountAccess({
+        isActive: cachedUser.isActive,
+        identityRecord: cachedUser.identityStatus ? { status: cachedUser.identityStatus } : null,
+      });
+    } catch (error: unknown) {
+      await invalidateAuthAndPassport(this.redis, payload.sub);
+      throw error;
+    }
+    if (
+      ['ORGANIZER', 'SCOUT'].includes(cachedUser.role) &&
+      cachedUser.identityStatus !== 'VERIFIED'
+    )
       throw new ForbiddenException('Administrator identity verification is pending');
     const metadataRole = isRecord(payload.user_metadata) ? payload.user_metadata.role : undefined;
     const claimedRole = payload.role === 'authenticated' ? metadataRole : payload.role;

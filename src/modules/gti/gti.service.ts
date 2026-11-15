@@ -10,6 +10,12 @@ import { LeaderboardsService } from '../leaderboards/leaderboards.service';
 import { LeaderboardPage, LeaderboardsQueryDto } from '../leaderboards/leaderboards.dto';
 import { normalizeLocationName } from '../../common/constants/india-locations';
 import { assertAccountAccess } from '../../common/auth/account-access';
+import { evaluateGtiBreakdown } from './gti-score-reconciliation';
+import {
+  outboxIdMatches,
+  deliverDirectOutbox,
+  signalOutboxWakeup,
+} from '../../infrastructure/outbox/outbox-authority';
 
 export interface GtiComputationResult {
   readonly athleteId: string;
@@ -26,6 +32,8 @@ export interface GtiComputationResult {
     readonly matchPerformance: 'VERIFIED' | 'NOT_AVAILABLE';
   };
   readonly provisional: boolean;
+  readonly weights: { readonly w1: number; readonly w2: number; readonly w3: number };
+  readonly calculationMode: 'ONBOARDING_BASELINE' | 'WEIGHTED';
 }
 @Injectable()
 export class GtiService {
@@ -55,6 +63,7 @@ export class GtiService {
   async recalculateAthleteGti(
     athleteId: string,
     triggerType = 'MANUAL_RECALCULATION',
+    deliveryId?: string,
   ): Promise<GtiComputationResult> {
     const result = await runSerializableTransaction(this.prisma, async (tx) => {
       const include = { user: { include: { identityRecord: true } } } as const;
@@ -63,6 +72,26 @@ export class GtiService {
         (await tx.athleteProfile.findUnique({ where: { id: athleteId }, include }));
       if (!profile) throw new NotFoundException('Athlete profile not found');
       assertAccountAccess(profile.user);
+      if (deliveryId) {
+        const previous = await tx.gtiHistory.findFirst({
+          where: {
+            athleteId: profile.id,
+            calculationFactors: { path: ['deliveryId'], equals: deliveryId },
+          },
+        });
+        if (previous) {
+          const stored = (previous.calculationFactors as Prisma.JsonObject).deliveryResult;
+          if (!stored || typeof stored !== 'object' || Array.isArray(stored))
+            throw new Error('Invalid GTI delivery receipt');
+          return {
+            profile,
+            ...(stored as unknown as GtiComputationResult),
+            alert: null,
+            created: false,
+            replayed: true,
+          };
+        }
+      }
       const biomechanicalScore = profile.biomechanicalScore ?? 0;
       const wearableScore = profile.trainingConsistencyScore ?? 0;
       const matchPerformanceScore = profile.matchPerformanceScore ?? 0;
@@ -78,114 +107,49 @@ export class GtiService {
           },
         }),
         tx.sportPassportRecord.findMany({
-          where: { athleteId: profile.id },
+          where: {
+            athleteId: profile.id,
+            ...(profile.primarySport ? { sport: profile.primarySport } : {}),
+          },
           select: { totalMatches: true },
         }),
       ]);
 
-      const totalMatches = (sportRecords ?? []).reduce(
-        (sum, r) => sum + (r.totalMatches || 0),
-        0,
-      );
-      const hasDrillData = drills > 0 || biomechanicalScore > 0;
-      const hasWearableData = sessions > 0 || healthAlerts > 0 || wearableScore > 0;
-      const hasVerifiedMatches = matches > 0 || totalMatches > 0;
-      const hasRecordedMatchActivity = hasVerifiedMatches || matchPerformanceScore !== 50;
-
-      const evidence: GtiComputationResult['evidence'] = {
-        biomechanical: drills > 0 ? 'VERIFIED' : 'NOT_AVAILABLE',
-        wearable: sessions > 0 || healthAlerts > 0 ? 'VERIFIED' : 'NOT_AVAILABLE',
-        matchPerformance: hasVerifiedMatches ? 'VERIFIED' : 'NOT_AVAILABLE',
-      };
-
-      let w1 = 0.35;
-      let w2 = 0.25;
-      let w3 = 0.40;
-
-      if (hasDrillData && hasWearableData) {
-        // Case 1: Standard Full-Telemetry Mode
-        w1 = 0.35;
-        w2 = 0.25;
-        w3 = 0.40;
-      } else if (!hasDrillData && !hasWearableData && hasRecordedMatchActivity) {
-        // Case 2: Interim Tournament Competition Mode (Drills & Wearables under production)
-        w1 = 0.0;
-        w2 = 0.0;
-        w3 = 1.0;
-      } else if (hasDrillData || hasWearableData || hasRecordedMatchActivity) {
-        // Case 3: Partial Telemetry Mode
-        const rawW1 = hasDrillData ? 0.35 : 0;
-        const rawW2 = hasWearableData ? 0.25 : 0;
-        const rawW3 = hasRecordedMatchActivity ? 0.40 : 0;
-        const activeWeightSum = rawW1 + rawW2 + rawW3;
-        if (activeWeightSum > 0) {
-          w1 = Number((rawW1 / activeWeightSum).toFixed(4));
-          w2 = Number((rawW2 / activeWeightSum).toFixed(4));
-          w3 = Number((rawW3 / activeWeightSum).toFixed(4));
-        }
-      } else {
-        w1 = 0.35;
-        w2 = 0.25;
-        w3 = 0.40;
-      }
-
-      const rawGti = this.computeCompositeGti(
-        biomechanicalScore,
-        wearableScore,
-        matchPerformanceScore,
-        { w1, w2, w3 },
-      );
-
-      const activeEvidenceStatuses: Array<'VERIFIED' | 'NOT_AVAILABLE'> = [];
-      if (hasDrillData) activeEvidenceStatuses.push(evidence.biomechanical);
-      if (hasWearableData) activeEvidenceStatuses.push(evidence.wearable);
-      if (hasRecordedMatchActivity) activeEvidenceStatuses.push(evidence.matchPerformance);
-
-      const provisional =
-        activeEvidenceStatuses.length === 0 ||
-        activeEvidenceStatuses.some((status) => status !== 'VERIFIED');
+      const totalMatches = (sportRecords ?? []).reduce((sum, r) => sum + (r.totalMatches || 0), 0);
+      const { gti, w1, w2, w3, evidence, provisional, isUnmeasuredOnboarding } =
+        evaluateGtiBreakdown({
+          biomechanicalScore,
+          wearableScore,
+          matchPerformanceScore,
+          drillsCount: drills,
+          sessionsCount: sessions,
+          healthAlertsCount: healthAlerts,
+          matchesCount: matches,
+          totalPassportMatches: totalMatches,
+          onboardingGti: Number(profile.currentGti) > 0 ? Number(profile.currentGti) : 30,
+        });
       const previousGti = profile.gti || Number(profile.currentGti);
-      // For unmeasured onboarding athletes without telemetry or matches, preserve the canonical 30.0 baseline on currentGti
-      const isUnmeasuredOnboarding =
-        !hasDrillData &&
-        !hasWearableData &&
-        !hasVerifiedMatches;
-
-      const gti = isUnmeasuredOnboarding
-        ? (Number(profile.currentGti) > 0 ? Number(profile.currentGti) : 30.0)
-        : rawGti;
+      const calculationMode = isUnmeasuredOnboarding
+        ? ('ONBOARDING_BASELINE' as const)
+        : ('WEIGHTED' as const);
 
       const effectiveWearableScore =
         isUnmeasuredOnboarding && wearableScore === 0
-          ? (Number(profile.wearableScore) > 0 ? Number(profile.wearableScore) : 50)
+          ? Number(profile.wearableScore) > 0
+            ? Number(profile.wearableScore)
+            : 50
           : wearableScore;
       const effectiveMatchScore =
         isUnmeasuredOnboarding && matchPerformanceScore === 0
-          ? (Number(profile.matchPerfScore) > 0 ? Number(profile.matchPerfScore) : 50)
+          ? Number(profile.matchPerfScore) > 0
+            ? Number(profile.matchPerfScore)
+            : 50
           : matchPerformanceScore;
 
       // Only write the derived composite. Component writers own their respective scores.
       await tx.athleteProfile.update({
         where: { id: profile.id },
         data: { gti, currentGti: new Prisma.Decimal(gti) },
-      });
-      await tx.gtiHistory.create({
-        data: {
-          athleteId: profile.id,
-          biomechanicalScore: new Prisma.Decimal(biomechanicalScore),
-          wearableScore: new Prisma.Decimal(effectiveWearableScore),
-          matchScore: new Prisma.Decimal(effectiveMatchScore),
-          compositeGti: new Prisma.Decimal(gti),
-          calculationFactors: {
-            w1,
-            w2,
-            w3,
-            calculationVersion: 'gti-v2',
-            triggerType,
-            evidence,
-            provisional,
-          },
-        },
       });
       const eligible =
         profile.user.role === 'ATHLETE' &&
@@ -218,7 +182,46 @@ export class GtiService {
               },
             })
           : null);
+      await tx.gtiHistory.create({
+        data: {
+          athleteId: profile.id,
+          biomechanicalScore: new Prisma.Decimal(biomechanicalScore),
+          wearableScore: new Prisma.Decimal(effectiveWearableScore),
+          matchScore: new Prisma.Decimal(effectiveMatchScore),
+          compositeGti: new Prisma.Decimal(gti),
+          calculationFactors: {
+            w1,
+            w2,
+            w3,
+            calculationVersion: 'gti-v2',
+            triggerType,
+            evidence,
+            provisional,
+            ...(deliveryId
+              ? {
+                  deliveryId,
+                  deliveryResult: {
+                    athleteId: profile.userId,
+                    gti,
+                    previousGti,
+                    biomechanicalScore,
+                    wearableScore: effectiveWearableScore,
+                    matchPerformanceScore: effectiveMatchScore,
+                    eliteBreached: gti >= 85,
+                    scoutAlertTriggered: alert !== null && existing === null,
+                    evidence,
+                    provisional,
+                    weights: { w1, w2, w3 },
+                    calculationMode,
+                  },
+                }
+              : {}),
+            ...(isUnmeasuredOnboarding ? { calculationMode, baselineGti: gti } : {}),
+          },
+        },
+      });
       return {
+        replayed: false,
         profile,
         gti,
         previousGti,
@@ -229,27 +232,11 @@ export class GtiService {
         provisional,
         alert,
         created: alert !== null && existing === null,
+        weights: { w1, w2, w3 },
+        calculationMode,
       };
     });
-    await invalidateCacheKeys(this.redis, [CACHE_KEYS.passport(result.profile.userId)]);
-    await this.leaderboards.syncAthlete(result.profile.userId);
-    if (result.alert)
-      await this.queue.enqueueScoutAlert({
-        alertId: result.alert.id,
-        athleteId: result.profile.userId,
-        newGti: result.gti,
-        sport: String(result.profile.primarySport),
-        district: result.profile.district ?? '',
-        state: result.profile.state ?? '',
-        tierClassification: result.profile.tierClassification,
-      });
-    this.ws.broadcastGtiUpdated({
-      athleteId: result.profile.userId,
-      previousGti: result.previousGti,
-      newGti: result.gti,
-      eliteBreached: result.gti >= 85,
-    });
-    return {
+    const response: GtiComputationResult = {
       athleteId: result.profile.userId,
       gti: result.gti,
       previousGti: result.previousGti,
@@ -260,7 +247,53 @@ export class GtiService {
       scoutAlertTriggered: result.created,
       evidence: result.evidence,
       provisional: result.provisional,
+      weights: result.weights,
+      calculationMode: result.calculationMode,
     };
+    if (result.replayed) {
+      signalOutboxWakeup();
+      return response;
+    }
+    await invalidateCacheKeys(this.redis, [CACHE_KEYS.passport(result.profile.userId)]);
+    await deliverDirectOutbox(
+      this.prisma,
+      result,
+      'LEADERBOARD',
+      (payload) => outboxIdMatches(payload.athleteId, result.profile.userId),
+      () => this.leaderboards.syncAthlete(result.profile.userId, undefined, true),
+    );
+    if (result.alert)
+      await deliverDirectOutbox(
+        this.prisma,
+        result,
+        'SCOUT',
+        (payload) => outboxIdMatches(payload.alertId, result.alert!.id),
+        () =>
+          this.queue.enqueueScoutAlert({
+            alertId: result.alert!.id,
+            athleteId: result.profile.userId,
+            newGti: result.gti,
+            sport: String(result.profile.primarySport),
+            district: result.profile.district ?? '',
+            state: result.profile.state ?? '',
+            tierClassification: result.profile.tierClassification,
+          }),
+      );
+    await deliverDirectOutbox(
+      this.prisma,
+      result,
+      'GTI_UPDATED',
+      (payload) => outboxIdMatches(payload.athleteId, result.profile.userId),
+      (event) =>
+        this.ws.broadcastGtiUpdated({
+          eventId: event?.id,
+          athleteId: result.profile.userId,
+          previousGti: result.previousGti,
+          newGti: result.gti,
+          eliteBreached: result.gti >= 85,
+        }),
+    );
+    return response;
   }
   async calculateAthleteGti(athleteId: string): Promise<GtiComputationResult> {
     return this.recalculateAthleteGti(athleteId);

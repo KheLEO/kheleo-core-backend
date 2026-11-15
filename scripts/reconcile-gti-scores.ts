@@ -1,5 +1,5 @@
 import 'dotenv/config';
-import { PrismaClient } from '@prisma/client';
+import { Prisma, PrismaClient } from '@prisma/client';
 import { evaluateGtiBreakdown } from '../src/modules/gti/gti-score-reconciliation';
 
 export type GtiDriftCategory =
@@ -11,6 +11,22 @@ export type GtiDriftCategory =
 
 export interface ReconcileSqlDb {
   query<T = Record<string, unknown>>(sql: string, params?: unknown[]): Promise<{ rows: T[] }>;
+  transaction?<T>(operation: (tx: ReconcileSqlDb) => Promise<T>): Promise<T>;
+}
+
+export function prismaReconciliationDb(prisma: PrismaClient): ReconcileSqlDb {
+  const adapter = (client: Pick<Prisma.TransactionClient, '$queryRawUnsafe'>): ReconcileSqlDb => ({
+    query: async <T = Record<string, unknown>>(sql: string, params: unknown[] = []) => ({
+      rows: await client.$queryRawUnsafe<T[]>(sql, ...params),
+    }),
+  });
+  return {
+    ...adapter(prisma),
+    transaction: (operation) =>
+      prisma.$transaction((tx) => operation(adapter(tx)), {
+        isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
+      }),
+  };
 }
 
 export interface AffectedAthleteReport {
@@ -37,6 +53,13 @@ export interface AffectedAthleteReport {
     readonly eligibleAfter: boolean;
   }>;
   readonly updated: boolean;
+  readonly eligibleForUpdate: boolean;
+  readonly proposedScores: {
+    readonly gti: number;
+    readonly currentGti: number;
+    readonly wearableScore: number;
+    readonly matchPerfScore: number;
+  };
 }
 
 export interface GtiReconciliationSummary {
@@ -64,6 +87,8 @@ interface RawProfileAuditRow {
   alerts_count: number | string;
   matches_count: number | string;
   total_passport_matches: number | string;
+  all_matches_count: number | string;
+  all_passport_matches: number | string;
 }
 
 interface RegistrationBoundsRow {
@@ -86,18 +111,36 @@ function rankBySport(
   }
   const ranks = new Map<string, number>();
   for (const list of bySport.values()) {
-    list.sort((a, b) => (b.score !== a.score ? b.score - a.score : a.userId.localeCompare(b.userId)));
+    list.sort((a, b) =>
+      b.score !== a.score ? b.score - a.score : a.userId.localeCompare(b.userId),
+    );
     list.forEach((entry, idx) => ranks.set(entry.userId, idx + 1));
   }
   return ranks;
 }
 
+interface ReconciliationOptions {
+  readonly apply?: boolean;
+  readonly baselineOnly?: boolean;
+  // Retained for CLI compatibility; it never resets healthy onboarding baselines.
+  readonly resetUnmeasuredBaseline?: boolean;
+}
+
 export async function reconcileGtiRecords(
   db: ReconcileSqlDb,
-  options: { readonly apply?: boolean; readonly resetUnmeasuredBaseline?: boolean } = {},
+  options: ReconciliationOptions = {},
+): Promise<GtiReconciliationSummary> {
+  if (db.transaction) return db.transaction((tx) => reconcileSnapshot(tx, options));
+  if (options.apply)
+    throw new Error('Applying GTI reconciliation requires a pinned interactive transaction');
+  return reconcileSnapshot(db, options);
+}
+
+async function reconcileSnapshot(
+  db: ReconcileSqlDb,
+  options: ReconciliationOptions,
 ): Promise<GtiReconciliationSummary> {
   const apply = options.apply ?? false;
-  const resetUnmeasuredBaseline = options.resetUnmeasuredBaseline ?? false;
 
   const { rows: profiles } = await db.query<RawProfileAuditRow>(`
     SELECT
@@ -114,6 +157,8 @@ export async function reconcileGtiRecords(
       (SELECT COUNT(*)::int FROM drill_submissions ds WHERE ds.athlete_id = ap.user_id) AS drills_count,
       (SELECT COUNT(*)::int FROM wearable_sessions ws WHERE ws.athlete_id = ap.user_id) AS sessions_count,
       (SELECT COUNT(*)::int FROM health_alerts ha WHERE ha.athlete_id = ap.user_id) AS alerts_count,
+      (SELECT COUNT(*)::int FROM verified_match_results vmr WHERE ap.user_id = ANY(vmr.participant_athlete_ids)) AS all_matches_count,
+      COALESCE((SELECT SUM(spr.total_matches)::int FROM sport_passport_records spr WHERE spr.athlete_id = ap.id), 0) AS all_passport_matches,
       (
         SELECT COUNT(*)::int
         FROM verified_match_results vmr
@@ -126,6 +171,7 @@ export async function reconcileGtiRecords(
         SELECT SUM(spr.total_matches)::int
         FROM sport_passport_records spr
         WHERE spr.athlete_id = ap.id
+          AND (ap.primary_sport IS NULL OR spr.sport = ap.primary_sport)
       ), 0) AS total_passport_matches
     FROM athlete_profiles ap
     ORDER BY ap.created_at ASC, ap.id ASC
@@ -168,26 +214,38 @@ export async function reconcileGtiRecords(
       healthAlertsCount: Number(p.alerts_count),
       matchesCount: Number(p.matches_count),
       totalPassportMatches: Number(p.total_passport_matches),
+      onboardingGti: existingCurrentGti > 0 ? existingCurrentGti : 30,
     };
 
     const reconciled = evaluateGtiBreakdown({ ...commonInput, legacyMatchActivityCheck: false });
     const legacyBuggy = evaluateGtiBreakdown({ ...commonInput, legacyMatchActivityCheck: true });
+    const hasWearableEvidence =
+      commonInput.sessionsCount > 0 ||
+      commonInput.healthAlertsCount > 0 ||
+      authoritativeWearable > 0;
+    const hasMatchEvidence = reconciled.hasRecordedMatchActivity;
 
     const categories: GtiDriftCategory[] = [];
     const hasAnyEvidence =
       commonInput.drillsCount > 0 ||
       commonInput.sessionsCount > 0 ||
       commonInput.healthAlertsCount > 0 ||
-      commonInput.matchesCount > 0 ||
-      commonInput.totalPassportMatches > 0 ||
+      Number(p.all_matches_count) > 0 ||
+      Number(p.all_passport_matches) > 0 ||
       biomechanical > 0 ||
       authoritativeWearable > 0 ||
       authoritativeMatch > 0;
 
-    if (
+    const wipedOnboarding =
       !hasAnyEvidence &&
-      (existingCurrentGti === 30 || existingWearableScore === 50 || existingMatchPerfScore === 50)
-    ) {
+      existingCurrentGti <= 0 &&
+      existingGti <= 0 &&
+      biomechanical === 0 &&
+      authoritativeWearable === 0 &&
+      authoritativeMatch === 0 &&
+      [0, 50].includes(existingWearableScore) &&
+      [0, 50].includes(existingMatchPerfScore);
+    if (wipedOnboarding) {
       categories.push('UNMEASURED_SYNTHETIC_BASELINE');
     }
     if (
@@ -202,11 +260,8 @@ export async function reconcileGtiRecords(
       categories.push('MATCH_ACTIVITY_BUG_0_NEQ_50');
     }
     if (
-      (authoritativeWearable > 0 && Math.abs(existingWearableScore - authoritativeWearable) > 0.01) ||
-      (authoritativeMatch > 0 && Math.abs(existingMatchPerfScore - authoritativeMatch) > 0.01) ||
-      (hasAnyEvidence &&
-        ((authoritativeWearable === 0 && existingWearableScore === 50) ||
-          (authoritativeMatch === 0 && existingMatchPerfScore === 50)))
+      (hasWearableEvidence && Math.abs(existingWearableScore - authoritativeWearable) > 0.01) ||
+      (hasMatchEvidence && Math.abs(existingMatchPerfScore - authoritativeMatch) > 0.01)
     ) {
       categories.push('COMPONENT_MIRROR_DRIFT');
     }
@@ -218,12 +273,39 @@ export async function reconcileGtiRecords(
     }
 
     const beforeComposite = existingGti > 0 ? existingGti : existingCurrentGti;
-    const afterComposite =
-      categories.includes('CUSTOM_LEGACY_SCORE_REVIEW')
-        ? beforeComposite
-        : hasAnyEvidence || resetUnmeasuredBaseline || existingGti === 0 && existingCurrentGti === 0
-          ? reconciled.gti
-          : existingCurrentGti;
+    const canUpdate =
+      wipedOnboarding ||
+      (!options.baselineOnly &&
+        hasAnyEvidence &&
+        !categories.includes('CUSTOM_LEGACY_SCORE_REVIEW'));
+    const afterComposite = canUpdate ? (wipedOnboarding ? 30 : reconciled.gti) : existingCurrentGti;
+    const proposedScores = canUpdate
+      ? {
+          gti: afterComposite,
+          currentGti: afterComposite,
+          wearableScore: wipedOnboarding
+            ? 50
+            : hasWearableEvidence
+              ? authoritativeWearable
+              : existingWearableScore,
+          matchPerfScore: wipedOnboarding
+            ? 50
+            : hasMatchEvidence
+              ? authoritativeMatch
+              : existingMatchPerfScore,
+        }
+      : {
+          gti: existingGti,
+          currentGti: existingCurrentGti,
+          wearableScore: existingWearableScore,
+          matchPerfScore: existingMatchPerfScore,
+        };
+    const eligibleForUpdate =
+      canUpdate &&
+      (Math.abs(proposedScores.gti - existingGti) > 0.01 ||
+        Math.abs(proposedScores.currentGti - existingCurrentGti) > 0.01 ||
+        Math.abs(proposedScores.wearableScore - existingWearableScore) > 0.01 ||
+        Math.abs(proposedScores.matchPerfScore - existingMatchPerfScore) > 0.01);
 
     return {
       profile: p,
@@ -239,6 +321,8 @@ export async function reconcileGtiRecords(
       categories,
       beforeComposite,
       afterComposite,
+      eligibleForUpdate,
+      proposedScores,
     };
   });
 
@@ -262,118 +346,110 @@ export async function reconcileGtiRecords(
   let customLegacyReviewCount = 0;
   let eligibilityTransitions = 0;
 
-  if (apply) {
-    await db.query('BEGIN');
-  }
-  try {
-    for (const entry of evaluations) {
-      if (entry.categories.includes('CUSTOM_LEGACY_SCORE_REVIEW')) {
-        customLegacyReviewCount++;
-      }
-      if (entry.categories.length === 0) continue;
+  for (const entry of evaluations) {
+    if (entry.categories.includes('CUSTOM_LEGACY_SCORE_REVIEW')) {
+      customLegacyReviewCount++;
+    }
+    if (entry.categories.length === 0) continue;
 
-      const userRegs = regByUser.get(entry.profile.user_id) ?? [];
-      const affectedRegistrations = userRegs
-        .map((reg) => {
-          const minGti = Number(reg.min_gti);
-          const maxGti = Number(reg.max_gti);
-          const eligibleBefore = entry.existingCurrentGti >= minGti && entry.existingCurrentGti <= maxGti;
-          const eligibleAfter = entry.afterComposite >= minGti && entry.afterComposite <= maxGti;
-          if (eligibleBefore !== eligibleAfter) eligibilityTransitions++;
-          return {
-            registrationId: reg.registration_id,
-            bracketId: reg.bracket_id,
-            minGti,
-            maxGti,
-            eligibleBefore,
-            eligibleAfter,
-          };
-        })
-        .filter((reg) => reg.eligibleBefore !== reg.eligibleAfter);
+    const userRegs = regByUser.get(entry.profile.user_id) ?? [];
+    const affectedRegistrations = userRegs
+      .map((reg) => {
+        const minGti = Number(reg.min_gti);
+        const maxGti = Number(reg.max_gti);
+        const eligibleBefore =
+          entry.existingCurrentGti >= minGti && entry.existingCurrentGti <= maxGti;
+        const eligibleAfter = entry.afterComposite >= minGti && entry.afterComposite <= maxGti;
+        if (eligibleBefore !== eligibleAfter) eligibilityTransitions++;
+        return {
+          registrationId: reg.registration_id,
+          bracketId: reg.bracket_id,
+          minGti,
+          maxGti,
+          eligibleBefore,
+          eligibleAfter,
+        };
+      })
+      .filter((reg) => reg.eligibleBefore !== reg.eligibleAfter);
 
-      let updated = false;
-      const canSafelyMutate = !entry.categories.includes('CUSTOM_LEGACY_SCORE_REVIEW');
+    let updated = false;
+    if (apply && entry.eligibleForUpdate) {
+      const {
+        gti: nextGti,
+        currentGti: nextCurrentGti,
+        wearableScore: nextWearable,
+        matchPerfScore: nextMatch,
+      } = entry.proposedScores;
 
-      if (apply && canSafelyMutate) {
-        const shouldResetComposite =
-          entry.hasAnyEvidence ||
-          (entry.categories.includes('UNMEASURED_SYNTHETIC_BASELINE') && resetUnmeasuredBaseline);
-
-        const nextGti = shouldResetComposite ? entry.reconciled.gti : entry.existingGti;
-        const nextCurrentGti = shouldResetComposite ? entry.reconciled.gti : entry.existingCurrentGti;
-        const nextWearable = entry.authoritativeWearable;
-        const nextMatch = entry.authoritativeMatch;
-
-        await db.query(
-          `
+      await db.query(
+        `
           UPDATE athlete_profiles
           SET gti = $2,
               current_gti = $3,
               wearable_score = $4,
-              match_perf_score = $5
+              match_perf_score = $5,
+              updated_at = now()
           WHERE id = $1
+          RETURNING id
         `,
-          [entry.profile.id, nextGti, nextCurrentGti, nextWearable, nextMatch],
-        );
+        [entry.profile.id, nextGti, nextCurrentGti, nextWearable, nextMatch],
+      );
 
-        if (shouldResetComposite && Math.abs(entry.existingCurrentGti - nextCurrentGti) > 0.01) {
-          await db.query(
-            `
+      if (Math.abs(entry.existingCurrentGti - nextCurrentGti) > 0.01) {
+        await db.query(
+          `
             INSERT INTO gti_histories
               (id, athlete_id, biomechanical_score, wearable_score, match_score, composite_gti, calculation_factors)
             VALUES
               (gen_random_uuid(), $1, $2, $3, $4, $5, $6::jsonb)
+            RETURNING id
           `,
-            [
-              entry.profile.id,
-              entry.reconciled.biomechanicalScore,
-              entry.authoritativeWearable,
-              entry.authoritativeMatch,
-              entry.reconciled.gti,
-              JSON.stringify({
-                w1: entry.reconciled.w1,
-                w2: entry.reconciled.w2,
-                w3: entry.reconciled.w3,
-                calculationVersion: 'gti-v2-reconciled',
-                triggerType: 'DATA_RECONCILIATION',
-                previousCurrentGti: entry.existingCurrentGti,
-                evidence: entry.reconciled.evidence,
-                provisional: entry.reconciled.provisional,
-              }),
-            ],
-          );
-        }
-        updated = true;
-        updatedCount++;
+          [
+            entry.profile.id,
+            entry.reconciled.biomechanicalScore,
+            nextWearable,
+            nextMatch,
+            nextCurrentGti,
+            JSON.stringify({
+              w1: entry.reconciled.w1,
+              w2: entry.reconciled.w2,
+              w3: entry.reconciled.w3,
+              calculationVersion: 'gti-v2-reconciled',
+              triggerType: 'DATA_RECONCILIATION',
+              previousCurrentGti: entry.existingCurrentGti,
+              evidence: entry.reconciled.evidence,
+              provisional: entry.reconciled.provisional,
+              ...(entry.reconciled.isUnmeasuredOnboarding
+                ? { calculationMode: 'ONBOARDING_BASELINE', baselineGti: nextCurrentGti }
+                : {}),
+            }),
+          ],
+        );
       }
+      updated = true;
+      updatedCount++;
+    }
 
-      affected.push({
-        profileId: entry.profile.id,
-        userId: entry.profile.user_id,
-        primarySport: entry.profile.primary_sport,
-        categories: entry.categories,
-        existingCurrentGti: entry.existingCurrentGti,
-        existingGti: entry.existingGti,
-        recalculatedGti: entry.reconciled.gti,
-        legacyBuggyGti: entry.legacyBuggy.gti,
-        existingWearableScore: entry.existingWearableScore,
-        authoritativeWearableScore: entry.authoritativeWearable,
-        existingMatchPerfScore: entry.existingMatchPerfScore,
-        authoritativeMatchPerfScore: entry.authoritativeMatch,
-        sportRankBefore: beforeRanks.get(entry.profile.user_id) ?? null,
-        sportRankAfter: afterRanks.get(entry.profile.user_id) ?? null,
-        affectedRegistrations,
-        updated,
-      });
-    }
-    if (apply) {
-      await db.query('COMMIT');
-    }
-  } catch (error) {
-    if (apply) {
-      await db.query('ROLLBACK');
-    }
-    throw error;
+    affected.push({
+      profileId: entry.profile.id,
+      userId: entry.profile.user_id,
+      primarySport: entry.profile.primary_sport,
+      categories: entry.categories,
+      existingCurrentGti: entry.existingCurrentGti,
+      existingGti: entry.existingGti,
+      recalculatedGti: entry.reconciled.gti,
+      legacyBuggyGti: entry.legacyBuggy.gti,
+      existingWearableScore: entry.existingWearableScore,
+      authoritativeWearableScore: entry.authoritativeWearable,
+      existingMatchPerfScore: entry.existingMatchPerfScore,
+      authoritativeMatchPerfScore: entry.authoritativeMatch,
+      sportRankBefore: beforeRanks.get(entry.profile.user_id) ?? null,
+      sportRankAfter: afterRanks.get(entry.profile.user_id) ?? null,
+      affectedRegistrations,
+      updated,
+      eligibleForUpdate: entry.eligibleForUpdate,
+      proposedScores: entry.proposedScores,
+    });
   }
 
   return {
@@ -395,12 +471,7 @@ async function runCli(): Promise<void> {
   const resetUnmeasuredBaseline = process.argv.includes('--reset-unmeasured-baseline');
   const prisma = new PrismaClient();
   try {
-    const adapter: ReconcileSqlDb = {
-      query: async <T = Record<string, unknown>>(sql: string, params: unknown[] = []) => {
-        const rows = (await prisma.$queryRawUnsafe<T[]>(sql, ...params)) as T[];
-        return { rows };
-      },
-    };
+    const adapter = prismaReconciliationDb(prisma);
     const summary = await reconcileGtiRecords(adapter, { apply, resetUnmeasuredBaseline });
     console.log(JSON.stringify({ mode: apply ? 'APPLY' : 'DRY_RUN', ...summary }, null, 2));
   } finally {

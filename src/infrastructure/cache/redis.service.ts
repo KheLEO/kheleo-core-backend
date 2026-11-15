@@ -3,6 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import Redis from 'ioredis';
 
 import { redisOptions } from './redis-options';
+import { OUTBOX_WAKEUP_CHANNEL, registerOutboxWakeupPublisher } from '../outbox/outbox-authority';
 
 @Injectable()
 export class RedisService implements OnApplicationShutdown {
@@ -12,6 +13,7 @@ export class RedisService implements OnApplicationShutdown {
 
   constructor(private readonly configService: ConfigService) {
     this.client = new Redis(redisOptions(this.configService));
+    registerOutboxWakeupPublisher(() => this.client.publish(OUTBOX_WAKEUP_CHANNEL, 'commit'));
 
     this.client.on('connect', () => this.logger.log('Redis connected'));
     this.client.on('error', (err) => this.logger.error('Redis error', err));

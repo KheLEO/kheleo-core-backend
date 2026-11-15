@@ -8,6 +8,7 @@ import { LeaderboardsService } from '../leaderboards/leaderboards.service';
 import { WsAuthGuard } from '../../infrastructure/realtime/ws-auth.guard';
 import { RedisService } from '../../infrastructure/cache/redis.service';
 import { invalidateAuthAndPassport } from '../../infrastructure/cache/cache-helper';
+import { outboxIdMatches, deliverDirectOutbox } from '../../infrastructure/outbox/outbox-authority';
 
 export interface UserResponse {
   readonly id: string;
@@ -18,7 +19,8 @@ export interface UserResponse {
   readonly isActive: boolean;
   readonly isVerified: boolean;
   readonly isLegit: boolean;
-  readonly identityStatus: VerificationStatus | 'VERIFIED' | 'UNVERIFIED' | 'FLAGGED_DUPLICATE' | 'REVOKED';
+  readonly identityStatus:
+    VerificationStatus | 'VERIFIED' | 'UNVERIFIED' | 'FLAGGED_DUPLICATE' | 'REVOKED';
   readonly createdAt: Date;
   readonly updatedAt: Date;
 }
@@ -149,8 +151,20 @@ export class UsersService {
       return formatUserResponse(user);
     });
     await invalidateAuthAndPassport(this.redis, id);
-    this.sockets?.disconnectUser(id);
-    await this.leaderboards?.syncAthlete(id);
+    await deliverDirectOutbox(
+      this.prisma,
+      updated,
+      'REVOKE_SOCKETS',
+      (payload) => outboxIdMatches(payload.athleteId, id),
+      () => this.sockets?.disconnectUser(id),
+    );
+    await deliverDirectOutbox(
+      this.prisma,
+      updated,
+      'LEADERBOARD',
+      (payload) => outboxIdMatches(payload.athleteId, id),
+      () => this.leaderboards?.syncAthlete(id, undefined, true),
+    );
     return updated;
   }
 }

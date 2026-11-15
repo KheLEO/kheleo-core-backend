@@ -27,7 +27,7 @@ export class DrillsController {
 
   @Post('submit')
   @HttpCode(HttpStatus.OK)
-  @UseGuards(JwtAuthGuard, RolesGuard, RateLimitGuard, DrillSignatureGuard)
+  @UseGuards(JwtAuthGuard, RolesGuard, DrillSignatureGuard, RateLimitGuard)
   @RateLimit({ keyPrefix: 'drills:submit', limit: 30, windowSeconds: 60 })
   @Roles(UserRole.ATHLETE)
   @UseInterceptors(IdempotencyInterceptor)

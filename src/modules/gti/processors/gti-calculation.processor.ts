@@ -18,7 +18,7 @@ export class GtiCalculationProcessor extends WorkerHost {
     const { athleteId, trigger } = job.data;
 
     try {
-      const result = await this.gtiService.recalculateAthleteGti(athleteId, trigger);
+      const result = await this.gtiService.recalculateAthleteGti(athleteId, trigger, job.id);
       const durationMs = Math.round((performance.now() - started) * 100) / 100;
       this.logger.log(
         `GTI job ${job.id ?? 'inline'} calculated Athlete=${athleteId} GTI=${result.gti} in ${durationMs}ms`,

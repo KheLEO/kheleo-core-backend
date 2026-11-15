@@ -78,20 +78,29 @@ export class RedisWsBridge implements OnModuleDestroy {
     }
   }
 
-  publishEmit(namespace: string, rooms: readonly string[], event: string, payload: unknown): void {
+  async publishEmit(
+    namespace: string,
+    rooms: readonly string[],
+    event: string,
+    payload: unknown,
+  ): Promise<boolean> {
     const client = this.redis?.client;
-    if (!client || typeof client.publish !== 'function') return;
+    if (!client || typeof client.publish !== 'function')
+      throw new Error('WS relay Redis publisher is unavailable');
     const msg: WsRelayMessage = { type: 'emit', namespace, rooms, event, payload };
-    void client.publish(WS_RELAY_CHANNEL, JSON.stringify(msg)).catch((err: unknown) => {
-      this.logger.warn(`WS relay publish failed for ${event}: ${String(err)}`);
-    });
+    const subscribers = await client.publish(WS_RELAY_CHANNEL, JSON.stringify(msg));
+    if (subscribers === 0) throw new Error('WS relay has no subscribed API instances');
+    return true;
   }
 
-  publishDisconnect(userId: string): void {
+  async publishDisconnect(userId: string): Promise<boolean> {
     const client = this.redis?.client;
-    if (!client || typeof client.publish !== 'function') return;
+    if (!client || typeof client.publish !== 'function')
+      throw new Error('WS relay Redis publisher is unavailable');
     const msg: WsRelayMessage = { type: 'disconnect', userId };
-    void client.publish(WS_RELAY_CHANNEL, JSON.stringify(msg)).catch(() => undefined);
+    const subscribers = await client.publish(WS_RELAY_CHANNEL, JSON.stringify(msg));
+    if (subscribers === 0) throw new Error('WS relay has no subscribed API instances');
+    return true;
   }
 
   async onModuleDestroy(): Promise<void> {
@@ -105,4 +114,3 @@ export class RedisWsBridge implements OnModuleDestroy {
     }
   }
 }
-

@@ -35,7 +35,7 @@ export class ScoutAlertsProcessor extends WorkerHost {
       profile.gti < 85
     )
       return false;
-    this.ws.broadcastScoutTalent({
+    await this.ws.broadcastScoutTalent({
       ...job.data,
       newGti: profile.gti,
       sport: profile.primarySport,

@@ -180,7 +180,9 @@ describe('Phase 2 Tasks 4-6: Supavisor Pooling, SQL Query Optimizations & Indexe
     assert.strictEqual(result.wearable_summary.sessions_monitored, 3);
 
     let authCalls = 0;
+    let revalidationCalls = 0;
     const fakeStrategy = {
+      validate: async (user: unknown) => { revalidationCalls++; return user; },
       authenticateToken: async () => {
         authCalls++;
         return {
@@ -206,9 +208,10 @@ describe('Phase 2 Tasks 4-6: Supavisor Pooling, SQL Query Optimizations & Indexe
       switchToWs: () => ({ getClient: () => socket }),
     } as unknown as ExecutionContext);
     assert.strictEqual(authCalls, 1, 'WsAuthGuard must authenticate once across handshake + messages');
+    assert.strictEqual(revalidationCalls, 1, 'Each message must recheck account access');
   });
 
-  it('batches MatchResultsService participant queries and removes Leaderboards COUNT(*) before Redis', async () => {
+  it('batches MatchResultsService participant queries and verifies Redis leaderboard completeness', async () => {
     const f = await createSecurityFixture();
     let findManyCalls = 0;
     const origFindMany = f.prisma.athleteProfile.findMany;
@@ -229,13 +232,15 @@ describe('Phase 2 Tasks 4-6: Supavisor Pooling, SQL Query Optimizations & Indexe
     );
     assert.strictEqual(findManyCalls, 1, 'Expected 1 batched athleteProfile.findMany for all participants');
 
-    // Verify Redis leaderboard hit does NOT trigger athleteProfile.count
+    // A populated Redis set must still match the authoritative eligible count.
     f.setProfile({ gti: 90, currentGti: new Prisma.Decimal(90), primarySport: SportType.CRICKET });
     await f.services.leaderboards.syncAthlete(ATHLETE_ID);
+    await f.services.leaderboards.syncAthlete(OPPONENT_ID);
     let countCalls = 0;
-    f.prisma.athleteProfile.count = (async () => {
+    const originalCount = f.prisma.athleteProfile.count.bind(f.prisma.athleteProfile);
+    f.prisma.athleteProfile.count = (async (args: Prisma.AthleteProfileCountArgs) => {
       countCalls++;
-      return 999;
+      return originalCount(args);
     }) as typeof f.prisma.athleteProfile.count;
     const page = await f.services.leaderboards.list({
       sport: SportType.CRICKET,
@@ -243,7 +248,7 @@ describe('Phase 2 Tasks 4-6: Supavisor Pooling, SQL Query Optimizations & Indexe
       limit: 10,
     });
     assert.strictEqual(page.source, 'redis');
-    assert.strictEqual(countCalls, 0, 'Redis hit must not query PostgreSQL COUNT(*)');
+    assert.strictEqual(countCalls, 1, 'Redis set must be checked against PostgreSQL eligibility');
   });
 
   describe('Migrated PostgreSQL EXPLAIN ANALYZE index & query plan verification', () => {

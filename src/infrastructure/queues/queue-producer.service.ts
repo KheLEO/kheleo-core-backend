@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
+import { createHash } from 'node:crypto';
 import {
   QUEUE_GTI_CALCULATION,
   QUEUE_MATCHMAKING,
@@ -54,6 +55,9 @@ export function unavailableQueue(name: string): QueueHealthStatus {
     completed: null,
   };
 }
+export function deterministicJobId(kind: string, deliveryId: string): string {
+  return `${kind}-${createHash('sha256').update(deliveryId).digest('hex')}`;
+}
 @Injectable()
 export class QueueProducerService {
   constructor(
@@ -104,7 +108,7 @@ export class QueueProducerService {
     deliveryId?: string,
   ): Promise<string> {
     const job = await this.gtiCalcQueue.add('recalculate', payload, {
-      ...(deliveryId ? { jobId: deliveryId } : {}),
+      ...(deliveryId ? { jobId: deterministicJobId('gti', deliveryId) } : {}),
       attempts: 3,
       backoff: { type: 'exponential', delay: 2000 },
       removeOnComplete: 100,
@@ -119,7 +123,7 @@ export class QueueProducerService {
     deliveryId?: string,
   ): Promise<string> {
     const job = await this.matchmakingQueue.add('process-bracket-pool', payload, {
-      ...(deliveryId ? { jobId: deliveryId } : {}),
+      ...(deliveryId ? { jobId: deterministicJobId('matchmaking', deliveryId) } : {}),
       attempts: 3,
       backoff: { type: 'exponential', delay: 2000 },
       removeOnComplete: 100,
@@ -130,7 +134,7 @@ export class QueueProducerService {
 
   async enqueueScoutAlert(payload: ScoutAlertPayload): Promise<string> {
     const job = await this.scoutAlertQueue.add('hidden-talent', payload, {
-      ...(payload.alertId ? { jobId: `scout-${payload.alertId}` } : {}),
+      ...(payload.alertId ? { jobId: deterministicJobId('scout', payload.alertId) } : {}),
       attempts: 2,
       backoff: { type: 'fixed', delay: 5000 },
       removeOnComplete: 200,

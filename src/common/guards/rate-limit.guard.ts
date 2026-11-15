@@ -10,6 +10,9 @@ import {
 import { Reflector } from '@nestjs/core';
 import { RedisService } from '../../infrastructure/cache/redis.service';
 import { isCacheActive } from '../../infrastructure/cache/cache-helper';
+import { createHash } from 'node:crypto';
+import { isUUID } from 'class-validator';
+import { clientIp } from '../auth/client-ip';
 
 export const RATE_LIMIT_KEY = 'kheleo:rate_limit';
 
@@ -42,7 +45,8 @@ export class RateLimitGuard implements CanActivate {
       this.reflector?.getAllAndOverride<RateLimitRule>(RATE_LIMIT_KEY, [
         context.getHandler(),
         context.getClass(),
-      ]) ?? Reflect.getMetadata(RATE_LIMIT_KEY, context.getHandler()) as RateLimitRule | undefined;
+      ]) ??
+      (Reflect.getMetadata(RATE_LIMIT_KEY, context.getHandler()) as RateLimitRule | undefined);
     if (!rule) return true;
 
     const enabled =
@@ -56,17 +60,46 @@ export class RateLimitGuard implements CanActivate {
       ip?: string;
       headers?: Record<string, string | string[] | undefined>;
       user?: { sub?: string };
+      body?: {
+        athlete_id?: unknown;
+        email?: unknown;
+        phone?: unknown;
+        identifier?: unknown;
+        refreshToken?: unknown;
+      };
+      params?: { athleteId?: unknown };
     }>();
     const reply = http.getResponse<{
       header?: (name: string, value: string | number) => unknown;
     }>();
 
-    const forwarded = request.headers?.['x-forwarded-for'];
-    const clientIp =
-      typeof forwarded === 'string'
-        ? forwarded.split(',')[0]!.trim()
-        : (request.ip ?? 'unknown');
-    const actorKey = request.user?.sub ? `u:${request.user.sub}` : `ip:${clientIp}`;
+    const body = request.body;
+    const athlete = body?.athlete_id ?? request.params?.athleteId;
+    let actorKey: string;
+    if (request.user?.sub) actorKey = `user:${request.user.sub}`;
+    else if (
+      ['safety:telemetry', 'drills:submit'].includes(rule.keyPrefix) &&
+      typeof athlete === 'string' &&
+      isUUID(athlete)
+    ) {
+      // These routes run their HMAC/JWT guards before consuming this identity's bucket.
+      actorKey = `athlete:${athlete.toLowerCase()}`;
+    } else {
+      const target =
+        typeof body?.email === 'string'
+          ? body.email.trim().toLowerCase()
+          : typeof body?.phone === 'string'
+            ? body.phone.replace(/[^\d+]/g, '')
+            : typeof body?.identifier === 'string'
+              ? body.identifier.trim().toLowerCase()
+              : typeof body?.refreshToken === 'string'
+                ? body.refreshToken
+                : '';
+      const targetHash = target
+        ? createHash('sha256').update(target.slice(0, 4096)).digest('hex')
+        : 'anonymous';
+      actorKey = `ip:${clientIp(request)}:target:${targetHash}`;
+    }
     const bucketKey = `ratelimit:v1:${rule.keyPrefix}:${actorKey}`;
 
     const result = await this.consume(bucketKey, rule.limit, rule.windowSeconds);
@@ -95,9 +128,14 @@ export class RateLimitGuard implements CanActivate {
     key: string,
     limit: number,
     windowSeconds: number,
-  ): Promise<{ readonly allowed: boolean; readonly count: number; readonly retryAfterSeconds: number }> {
-    const client = (this.redis as { client?: { eval?: (...args: unknown[]) => Promise<unknown> } } | undefined)
-      ?.client;
+  ): Promise<{
+    readonly allowed: boolean;
+    readonly count: number;
+    readonly retryAfterSeconds: number;
+  }> {
+    const client = (
+      this.redis as { client?: { eval?: (...args: unknown[]) => Promise<unknown> } } | undefined
+    )?.client;
     if (isCacheActive(this.redis) && typeof client?.eval === 'function') {
       try {
         const res = (await Promise.race([
@@ -147,4 +185,3 @@ export class RateLimitGuard implements CanActivate {
     };
   }
 }
-

@@ -134,25 +134,28 @@ export class WsEventGateway implements OnGatewayInit, OnGatewayConnection, OnGat
 
   // ─── Server-side Broadcast Methods ──────────────────
 
-  private emitToRooms(rooms: readonly string[], event: string, payload: unknown): void {
+  private async emitToRooms(
+    rooms: readonly string[],
+    event: string,
+    payload: unknown,
+  ): Promise<boolean> {
     if (this.server) {
       this.server.to([...rooms]).emit(event, payload);
-      return;
+      return true;
     }
     if (this.wsBridge) {
-      this.wsBridge.publishEmit('/ws/events', rooms, event, payload);
-      return;
+      return this.wsBridge.publishEmit('/ws/events', rooms, event, payload);
     }
-    this.logger.warn(`Socket server not ready during ${event}`);
+    throw new Error(`Socket server not ready during ${event}`);
   }
 
-  broadcastAutonomousMatchPause(payload: AutonomousMatchPausePayload): void {
+  broadcastAutonomousMatchPause(payload: AutonomousMatchPausePayload): Promise<boolean> {
     const rooms: string[] = [];
     if (payload.tournament_id) rooms.push(`safety:tournament:${payload.tournament_id}`);
     if (payload.bracket_id) rooms.push(`safety:bracket:${payload.bracket_id}`);
     if (payload.match_id) rooms.push(`safety:match:${payload.match_id}`);
     if (!rooms.length) rooms.push(`athlete:${payload.athlete_id}`);
-    this.emitToRooms(rooms, 'MATCH_PAUSE_ALERT', payload);
+    return this.emitToRooms(rooms, 'MATCH_PAUSE_ALERT', payload);
   }
 
   broadcastVitalsUpdated(payload: {
@@ -167,15 +170,15 @@ export class WsEventGateway implements OnGatewayInit, OnGatewayConnection, OnGat
     readonly baseline_fields: readonly string[];
     readonly match_id?: string;
     readonly bracket_id?: string;
-  }): void {
+  }): Promise<boolean> {
     const rooms = [`safety:tournament:${payload.tournament_id}`];
     if (payload.match_id) rooms.push(`safety:match:${payload.match_id}`);
     if (payload.bracket_id) rooms.push(`safety:bracket:${payload.bracket_id}`);
-    this.emitToRooms(rooms, 'VITALS_UPDATED', payload);
+    return this.emitToRooms(rooms, 'VITALS_UPDATED', payload);
   }
 
-  broadcastScoutTalent(payload: ScoutAlertPayload): void {
-    this.emitToRooms(['scouts'], 'SCOUT_TALENT_ALERT', {
+  broadcastScoutTalent(payload: ScoutAlertPayload): Promise<boolean> {
+    return this.emitToRooms(['scouts'], 'SCOUT_TALENT_ALERT', {
       alertId: payload.alertId,
       athleteId: payload.athleteId,
       gtiScore: payload.newGti,
@@ -186,7 +189,7 @@ export class WsEventGateway implements OnGatewayInit, OnGatewayConnection, OnGat
     });
   }
 
-  broadcastGtiUpdated(payload: GtiUpdatedPayload): void {
-    this.emitToRooms([`athlete:${payload.athleteId}`], 'GTI_UPDATED', payload);
+  broadcastGtiUpdated(payload: GtiUpdatedPayload): Promise<boolean> {
+    return this.emitToRooms([`athlete:${payload.athleteId}`], 'GTI_UPDATED', payload);
   }
 }

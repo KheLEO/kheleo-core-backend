@@ -11,6 +11,11 @@ import { QueueProducerService } from '../../infrastructure/queues/queue-producer
 import { MatchmakingGateway, RosterMemberPayload } from './matchmaking.gateway';
 import { RedisService } from '../../infrastructure/cache/redis.service';
 import { bumpVersion, CACHE_KEYS } from '../../infrastructure/cache/cache-helper';
+import {
+  outboxIdMatches,
+  deliverDirectOutbox,
+  outboxDeliveryId,
+} from '../../infrastructure/outbox/outbox-authority';
 import { JoinFreeAgentDto } from './dto/join-free-agent.dto';
 import {
   FreeAgentStatusResponseDto,
@@ -94,87 +99,92 @@ export class MatchmakingService {
     userId: string,
     dto: JoinFreeAgentDto,
   ): Promise<FreeAgentStatusResponseDto> {
-    const { registration, waitPosition } = await runSerializableTransaction(
-      this.prisma,
-      async (transaction) => {
-        const { bracket } = await readParticipationSnapshot(
-          transaction,
+    const outcome = await runSerializableTransaction(this.prisma, async (transaction) => {
+      const { bracket } = await readParticipationSnapshot(
+        transaction,
+        tournamentId,
+        bracketId,
+        userId,
+      );
+      const requirements = this.getSlotRequirements(
+        bracket.tournament.sport,
+        bracket.tournament.teamSize,
+        bracket.config,
+        bracket.tournament.rulesConfig,
+      );
+      const roles = [dto.primary_role, dto.secondary_role].filter((role): role is string =>
+        Boolean(role),
+      );
+      if (!roles.some((role) => requirements.some((slot) => slot.rolePattern.test(role)))) {
+        throw new BadRequestException('Submitted roles are not valid for this sport.');
+      }
+      const existingQueue = await transaction.freeAgentRegistration.findFirst({
+        where: {
+          userId,
+          tournamentId,
+          status: {
+            in: [FreeAgentStatus.QUEUED, FreeAgentStatus.MATCHING],
+          },
+        },
+        select: { id: true },
+      });
+
+      if (existingQueue) {
+        throw new ConflictException(
+          'Athlete is already queued in a free agent pool for this tournament.',
+        );
+      }
+
+      const existingTeamMember = await transaction.teamMember.findFirst({
+        where: { userId, team: { tournamentId } },
+        select: { id: true },
+      });
+
+      if (existingTeamMember) {
+        throw new ConflictException(
+          'Athlete is already an active member of a registered team in this tournament.',
+        );
+      }
+
+      const created = await transaction.freeAgentRegistration.create({
+        data: {
+          userId,
           tournamentId,
           bracketId,
-          userId,
-        );
-        const requirements = this.getSlotRequirements(
-          bracket.tournament.sport,
-          bracket.tournament.teamSize,
-          bracket.config,
-          bracket.tournament.rulesConfig,
-        );
-        const roles = [dto.primary_role, dto.secondary_role].filter((role): role is string =>
-          Boolean(role),
-        );
-        if (!roles.some((role) => requirements.some((slot) => slot.rolePattern.test(role)))) {
-          throw new BadRequestException('Submitted roles are not valid for this sport.');
-        }
-        const existingQueue = await transaction.freeAgentRegistration.findFirst({
-          where: {
-            userId,
-            tournamentId,
-            status: {
-              in: [FreeAgentStatus.QUEUED, FreeAgentStatus.MATCHING],
-            },
-          },
-          select: { id: true },
-        });
+          sport: bracket.tournament.sport,
+          primaryRole: dto.primary_role.toUpperCase(),
+          secondaryRole: dto.secondary_role ? dto.secondary_role.toUpperCase() : null,
+          status: FreeAgentStatus.QUEUED,
+        },
+      });
 
-        if (existingQueue) {
-          throw new ConflictException(
-            'Athlete is already queued in a free agent pool for this tournament.',
-          );
-        }
+      const position = await transaction.freeAgentRegistration.count({
+        where: {
+          bracketId,
+          status: FreeAgentStatus.QUEUED,
+          joinedAt: { lte: created.joinedAt },
+        },
+      });
 
-        const existingTeamMember = await transaction.teamMember.findFirst({
-          where: { userId, team: { tournamentId } },
-          select: { id: true },
-        });
-
-        if (existingTeamMember) {
-          throw new ConflictException(
-            'Athlete is already an active member of a registered team in this tournament.',
-          );
-        }
-
-        const created = await transaction.freeAgentRegistration.create({
-          data: {
-            userId,
-            tournamentId,
-            bracketId,
-            sport: bracket.tournament.sport,
-            primaryRole: dto.primary_role.toUpperCase(),
-            secondaryRole: dto.secondary_role ? dto.secondary_role.toUpperCase() : null,
-            status: FreeAgentStatus.QUEUED,
-          },
-        });
-
-        const position = await transaction.freeAgentRegistration.count({
-          where: {
-            bracketId,
-            status: FreeAgentStatus.QUEUED,
-            joinedAt: { lte: created.joinedAt },
-          },
-        });
-
-        return { registration: created, waitPosition: position };
-      },
-    ).catch(async (error: unknown) => {
+      return { registration: created, waitPosition: position };
+    }).catch(async (error: unknown) => {
       await recordSandbaggingRejection(this.prisma, error, tournamentId, bracketId, userId);
       throw error;
     });
 
     // 7. Dispatch async matchmaking trigger to BullMQ queue
-    await this.queueProducer.enqueueBracketMatchmaking({
-      tournamentId,
-      bracketId,
-    });
+    const { registration, waitPosition } = outcome;
+    await deliverDirectOutbox(
+      this.prisma,
+      outcome,
+      'MATCHMAKING',
+      (payload) => outboxIdMatches(payload.bracketId, bracketId),
+      (event) =>
+        this.queueProducer.enqueueBracketMatchmaking(
+          { tournamentId, bracketId },
+          event ? outboxDeliveryId(event) : `pool-${registration.id}`,
+        ),
+    );
 
     return {
       registrationId: registration.id,
@@ -350,12 +360,22 @@ export class MatchmakingService {
         await bumpVersion(this.redis, CACHE_KEYS.organizerVersion(created.organizerId));
       }
       await bumpVersion(this.redis, CACHE_KEYS.organizerVersion('GLOBAL'));
-      this.gateway.emitRosterFormed({
-        team_id: created.teamId,
-        team_name: created.teamName,
-        bracket_id: bracketId,
-        roster: created.roster,
-      });
+      await deliverDirectOutbox(
+        this.prisma,
+        created,
+        'ROSTER',
+        (payload) => outboxIdMatches(payload.team_id, created!.teamId),
+        (event) =>
+          this.gateway.emitRosterFormed(
+            {
+              team_id: created.teamId,
+              team_name: created.teamName,
+              bracket_id: bracketId,
+              roster: created.roster,
+            },
+            event?.id,
+          ),
+      );
       formed = true;
     }
   }

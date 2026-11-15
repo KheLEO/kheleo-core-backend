@@ -51,8 +51,7 @@ describe('Phase 2 Task 2: GTI Data-Model Baseline & Main Formula Verification', 
     assert.strictEqual(passport.matchPerfScore, 50);
   });
 
-  it('preserves the main GTI formula with partial telemetry weights', async () => {
-    // Drill-only athlete (80 bio, 0 wearable, 0 match) with main formula gets 37.34 because (0 !== 50) includes match weight
+  it('normalizes partial telemetry weights without activating unplayed matches', async () => {
     const drillOnly = await createSecurityFixture();
     drillOnly.setProfile({
       biomechanicalScore: 80,
@@ -62,20 +61,20 @@ describe('Phase 2 Task 2: GTI Data-Model Baseline & Main Formula Verification', 
     const drillId = randomUUID();
     drillOnly.state.tables.drillSubmission.set(drillId, { id: drillId, athleteId: ATHLETE_ID });
     const drillGti = await drillOnly.services.gti.recalculateAthleteGti(ATHLETE_ID);
-    assert.equal(drillGti.gti, 37.34);
+    assert.equal(drillGti.gti, 80);
     assert.deepEqual(drillGti.evidence, {
       biomechanical: 'VERIFIED',
       wearable: 'NOT_AVAILABLE',
       matchPerformance: 'NOT_AVAILABLE',
     });
-    assert.equal(drillGti.provisional, true);
+    assert.equal(drillGti.provisional, false);
 
-    // Wearable-only athlete (0 bio, 45 wearable, 50 match default)
+    // The actual Float match column defaults to zero in PostgreSQL.
     const wearableOnly = await createSecurityFixture();
     wearableOnly.setProfile({
       biomechanicalScore: 0,
       trainingConsistencyScore: 45,
-      matchPerformanceScore: 50,
+      matchPerformanceScore: 0,
     });
     const sessionId = randomUUID();
     wearableOnly.state.tables.wearableSession.set(sessionId, { id: sessionId, athleteId: ATHLETE_ID });

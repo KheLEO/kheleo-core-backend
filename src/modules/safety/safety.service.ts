@@ -34,6 +34,11 @@ import {
   ResumeSafetyDto,
 } from './dto/telemetry-webhook.dto';
 import { runSerializableTransaction } from '../../common/database/serializable-transaction';
+import {
+  outboxIdMatches,
+  deliverDirectOutbox,
+  outboxDeliveryId,
+} from '../../infrastructure/outbox/outbox-authority';
 import { assertAccountAccess } from '../../common/auth/account-access';
 import { AuthenticatedJwtUser } from '../../common/guards/jwt-auth.guard';
 import {
@@ -133,12 +138,13 @@ export class SafetyService {
               },
             ],
           },
-          include: { bracket: true },
+          include: { bracket: { include: { tournament: { select: { organizerId: true } } } } },
         });
         if (!registration)
           throw new BadRequestException('Athlete is not registered in this context');
         bracketId = registration.bracketId;
         tournamentId = registration.bracket.tournamentId;
+        organizerId = registration.bracket.tournament.organizerId;
       }
       if (tournamentId) {
         const previous = await tx.tournamentVital.findUnique({
@@ -248,7 +254,7 @@ export class SafetyService {
       };
     });
     if (result.tournamentId)
-      this.wsGateway.broadcastVitalsUpdated({
+      await this.wsGateway.broadcastVitalsUpdated({
         tournament_id: result.tournamentId,
         athlete_id: dto.athlete_id,
         heart_rate: dto.heart_rate,
@@ -271,34 +277,48 @@ export class SafetyService {
       await bumpVersion(this.redis, CACHE_KEYS.organizerVersion('GLOBAL'));
     }
     if (critical) {
-      this.wsGateway.broadcastAutonomousMatchPause({
-        event_id: randomUUID(),
-        alert_id: result.alertId,
-        source,
-        baseline_fields: dto.baseline_fields ?? [],
-        event: 'MATCH_PAUSE_ALERT',
-        severity: 'CRITICAL',
-        athlete_id: dto.athlete_id,
-        athlete_name: result.name,
-        vitals: {
-          heart_rate: dto.heart_rate,
-          spo2: dto.spo2,
-          skin_temperature: dto.skin_temperature,
-        },
-        directive:
-          source === TelemetrySource.SIMULATOR
-            ? 'SIMULATOR STRESS TEST: MANDATORY REST'
-            : 'MANDATORY REST: PAUSE ACTIVITY IMMEDIATELY',
-        tournament_id: result.tournamentId,
-        bracket_id: result.bracketId,
-        match_id: dto.match_id,
-      });
+      await deliverDirectOutbox(
+        this.prisma,
+        result,
+        'PAUSE',
+        (payload) => payload.alert_id === result.alertId,
+        (event) =>
+          this.wsGateway.broadcastAutonomousMatchPause({
+            event_id: event?.id ?? randomUUID(),
+            alert_id: result.alertId,
+            source,
+            baseline_fields: dto.baseline_fields ?? [],
+            event: 'MATCH_PAUSE_ALERT',
+            severity: 'CRITICAL',
+            athlete_id: dto.athlete_id,
+            athlete_name: result.name,
+            vitals: {
+              heart_rate: dto.heart_rate,
+              spo2: dto.spo2,
+              skin_temperature: dto.skin_temperature,
+            },
+            directive:
+              source === TelemetrySource.SIMULATOR
+                ? 'SIMULATOR STRESS TEST: MANDATORY REST'
+                : 'MANDATORY REST: PAUSE ACTIVITY IMMEDIATELY',
+            tournament_id: result.tournamentId,
+            bracket_id: result.bracketId,
+            match_id: dto.match_id,
+          }),
+      );
     }
     if (result.shouldRecalculateGti) {
-      await this.queue.enqueueGtiRecalculation({
-        athleteId: dto.athlete_id,
-        trigger: 'WEARABLE_SYNC',
-      });
+      await deliverDirectOutbox(
+        this.prisma,
+        result,
+        'GTI',
+        (payload) => outboxIdMatches(payload.athleteId, dto.athlete_id),
+        (event) =>
+          this.queue.enqueueGtiRecalculation(
+            { athleteId: dto.athlete_id, trigger: 'WEARABLE_SYNC' },
+            event ? outboxDeliveryId(event) : undefined,
+          ),
+      );
     }
     return {
       alert_triggered: critical || warning,

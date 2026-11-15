@@ -16,11 +16,7 @@ import { MatchmakingGateway } from '../../modules/matchmaking/matchmaking.gatewa
 import { LeaderboardsService } from '../../modules/leaderboards/leaderboards.service';
 import { RedisService } from '../cache/redis.service';
 import { OUTBOX_WAKEUP_CHANNEL, outboxWakeupBus } from './outbox-authority';
-import {
-  CACHE_KEYS,
-  invalidateAuthAndPassport,
-  invalidateCacheKeys,
-} from '../cache/cache-helper';
+import { CACHE_KEYS, invalidateAuthAndPassport, invalidateCacheKeys } from '../cache/cache-helper';
 
 type JsonObject = Prisma.JsonObject;
 function object(value: Prisma.JsonValue): JsonObject {
@@ -38,6 +34,10 @@ function num(value: JsonObject, key: string): number {
   if (typeof result !== 'number' || !Number.isFinite(result))
     throw new Error(`Invalid outbox ${key}`);
   return result;
+}
+
+function requireDelivery(delivered: boolean): void {
+  if (delivered === false) throw new Error('Outbox delivery did not reach a transport');
 }
 
 const OUTBOX_BATCH_SIZE = 25;
@@ -84,7 +84,9 @@ export class OutboxDispatcher implements OnApplicationBootstrap, BeforeApplicati
     try {
       const sub = client.duplicate({ lazyConnect: true, enableOfflineQueue: true });
       sub.on('error', (error: unknown) => {
-        this.logger.warn(`Outbox wakeup subscriber error (polling fallback active): ${String(error)}`);
+        this.logger.warn(
+          `Outbox wakeup subscriber error (polling fallback active): ${String(error)}`,
+        );
       });
       sub.on('message', (channel: string) => {
         if (channel === OUTBOX_WAKEUP_CHANNEL) {
@@ -292,52 +294,56 @@ export class OutboxDispatcher implements OnApplicationBootstrap, BeforeApplicati
         return;
       case 'ROSTER': {
         if (!Array.isArray(data.roster)) throw new Error('Invalid roster');
-        this.matchmaking.emitRosterFormed(
-          {
-            team_id: str(data, 'team_id'),
-            team_name: str(data, 'team_name'),
-            bracket_id: str(data, 'bracket_id'),
-            roster: data.roster.map((value) => {
-              const member = object(value);
-              return {
-                user_id: str(member, 'user_id'),
-                name: str(member, 'name'),
-                assigned_role: str(member, 'assigned_role'),
-                gti: num(member, 'gti'),
-              };
-            }),
-          },
-          event.id,
+        requireDelivery(
+          await this.matchmaking.emitRosterFormed(
+            {
+              team_id: str(data, 'team_id'),
+              team_name: str(data, 'team_name'),
+              bracket_id: str(data, 'bracket_id'),
+              roster: data.roster.map((value) => {
+                const member = object(value);
+                return {
+                  user_id: str(member, 'user_id'),
+                  name: str(member, 'name'),
+                  assigned_role: str(member, 'assigned_role'),
+                  gti: num(member, 'gti'),
+                };
+              }),
+            },
+            event.id,
+          ),
         );
         return;
       }
       case 'PAUSE': {
         const vitals = object(data.vitals ?? null);
-        this.ws.broadcastAutonomousMatchPause({
-          event_id: event.id,
-          ...(typeof data.alert_id === 'string' ? { alert_id: data.alert_id } : {}),
-          ...(typeof data.source === 'string' ? { source: data.source } : {}),
-          ...(Array.isArray(data.baseline_fields)
-            ? {
-                baseline_fields: data.baseline_fields.filter(
-                  (field): field is string => typeof field === 'string',
-                ),
-              }
-            : {}),
-          event: 'MATCH_PAUSE_ALERT',
-          severity: 'CRITICAL',
-          athlete_id: str(data, 'athlete_id'),
-          athlete_name: str(data, 'athlete_name'),
-          directive: str(data, 'directive'),
-          match_id: str(data, 'match_id'),
-          bracket_id: str(data, 'bracket_id'),
-          tournament_id: str(data, 'tournament_id'),
-          vitals: {
-            heart_rate: num(vitals, 'heart_rate'),
-            spo2: num(vitals, 'spo2'),
-            skin_temperature: num(vitals, 'skin_temperature'),
-          },
-        });
+        requireDelivery(
+          await this.ws.broadcastAutonomousMatchPause({
+            event_id: event.id,
+            ...(typeof data.alert_id === 'string' ? { alert_id: data.alert_id } : {}),
+            ...(typeof data.source === 'string' ? { source: data.source } : {}),
+            ...(Array.isArray(data.baseline_fields)
+              ? {
+                  baseline_fields: data.baseline_fields.filter(
+                    (field): field is string => typeof field === 'string',
+                  ),
+                }
+              : {}),
+            event: 'MATCH_PAUSE_ALERT',
+            severity: 'CRITICAL',
+            athlete_id: str(data, 'athlete_id'),
+            athlete_name: str(data, 'athlete_name'),
+            directive: str(data, 'directive'),
+            match_id: str(data, 'match_id'),
+            bracket_id: str(data, 'bracket_id'),
+            tournament_id: str(data, 'tournament_id'),
+            vitals: {
+              heart_rate: num(vitals, 'heart_rate'),
+              spo2: num(vitals, 'spo2'),
+              skin_temperature: num(vitals, 'skin_temperature'),
+            },
+          }),
+        );
         return;
       }
       case 'GTI_UPDATED': {
@@ -346,13 +352,15 @@ export class OutboxDispatcher implements OnApplicationBootstrap, BeforeApplicati
           CACHE_KEYS.passport(athleteId),
           CACHE_KEYS.regionalHeatmap(),
         ]);
-        this.ws.broadcastGtiUpdated({
-          eventId: event.id,
-          athleteId,
-          previousGti: num(data, 'previousGti'),
-          newGti: num(data, 'newGti'),
-          eliteBreached: data.eliteBreached === true,
-        });
+        requireDelivery(
+          await this.ws.broadcastGtiUpdated({
+            eventId: event.id,
+            athleteId,
+            previousGti: num(data, 'previousGti'),
+            newGti: num(data, 'newGti'),
+            eliteBreached: data.eliteBreached === true,
+          }),
+        );
         return;
       }
       case 'LEADERBOARD': {
@@ -381,7 +389,7 @@ export class OutboxDispatcher implements OnApplicationBootstrap, BeforeApplicati
       case 'REVOKE_SOCKETS': {
         const athleteId = str(data, 'athleteId');
         await invalidateAuthAndPassport(this.redis, athleteId);
-        this.sockets.disconnectUser(athleteId);
+        requireDelivery(await this.sockets.disconnectUser(athleteId));
         return;
       }
       default:

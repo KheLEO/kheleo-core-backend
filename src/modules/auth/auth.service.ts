@@ -17,6 +17,10 @@ import { GovIdType, Prisma, UserRole, VerificationStatus } from '@prisma/client'
 import * as jwt from 'jsonwebtoken';
 import * as crypto from 'node:crypto';
 import { promisify } from 'node:util';
+import {
+  captureOutboxIntents,
+  signalOutboxWakeup,
+} from '../../infrastructure/outbox/outbox-authority';
 
 const scryptAsync = promisify(crypto.scrypt);
 import { runSerializableTransaction } from '../../common/database/serializable-transaction';
@@ -39,7 +43,8 @@ export interface AuthMeResponse {
   readonly phone: string | null;
   readonly isVerified: boolean;
   readonly isLegit: boolean;
-  readonly identityStatus: VerificationStatus | 'VERIFIED' | 'UNVERIFIED' | 'FLAGGED_DUPLICATE' | 'REVOKED';
+  readonly identityStatus:
+    VerificationStatus | 'VERIFIED' | 'UNVERIFIED' | 'FLAGGED_DUPLICATE' | 'REVOKED';
   readonly athleteProfileId: string | null;
 }
 
@@ -149,15 +154,13 @@ export class AuthService {
 
     const resolvedName =
       dto.name?.trim() ||
-      (dto.email
-        ? dto.email.split('@')[0]
-        : dto.phone
-          ? `User-${dto.phone.slice(-4)}`
-          : 'Athlete');
+      (dto.email ? dto.email.split('@')[0] : dto.phone ? `User-${dto.phone.slice(-4)}` : 'Athlete');
 
     const govId =
       dto.governmentId ??
-      (dto.idNumber ? { idNumber: dto.idNumber, idType: dto.idType ?? GovIdType.AADHAAR } : undefined);
+      (dto.idNumber
+        ? { idNumber: dto.idNumber, idType: dto.idType ?? GovIdType.AADHAAR }
+        : undefined);
     const effectiveGovId = govId
       ? {
           idNumber: govId.idNumber,
@@ -401,10 +404,11 @@ export class AuthService {
         });
       }
 
-      return { ...newUser, athleteProfileId: profileId ?? null };
+      return captureOutboxIntents(tx, { ...newUser, athleteProfileId: profileId ?? null });
     });
 
     const isVerified = Boolean(precomputedIdHash) && !isProduction && !pendingStaff;
+    signalOutboxWakeup();
     const identityStatus = isVerified ? VerificationStatus.VERIFIED : VerificationStatus.UNVERIFIED;
 
     return this.generateAuthResponse(
@@ -428,8 +432,7 @@ export class AuthService {
       dto.email?.trim() ??
       (identifier && identifier.includes('@') ? identifier.toLowerCase() : undefined);
     const rawPhone =
-      dto.phone?.trim() ??
-      (identifier && !identifier.includes('@') ? identifier : undefined);
+      dto.phone?.trim() ?? (identifier && !identifier.includes('@') ? identifier : undefined);
 
     if (!rawPhone && !rawEmail) {
       throw new UnauthorizedException('Either phone or email must be provided to log in.');
@@ -686,7 +689,8 @@ export class AuthService {
     isVerified: boolean,
     athleteProfileId: string | null,
     name?: string | null,
-    identityStatus?: VerificationStatus | 'VERIFIED' | 'UNVERIFIED' | 'FLAGGED_DUPLICATE' | 'REVOKED',
+    identityStatus?:
+      VerificationStatus | 'VERIFIED' | 'UNVERIFIED' | 'FLAGGED_DUPLICATE' | 'REVOKED',
     existingFamily?: string,
     transaction: Prisma.TransactionClient = this.prisma,
   ): Promise<AuthResponseDto> {

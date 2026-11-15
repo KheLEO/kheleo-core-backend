@@ -14,6 +14,11 @@ import { CACHE_KEYS, invalidateCacheKeys } from '../../infrastructure/cache/cach
 import { AuthenticatedJwtUser } from '../../common/guards/jwt-auth.guard';
 import { runSerializableTransaction } from '../../common/database/serializable-transaction';
 import {
+  outboxIdMatches,
+  deliverDirectOutbox,
+  outboxDeliveryId,
+} from '../../infrastructure/outbox/outbox-authority';
+import {
   assertMatchOperator,
   matchContextSelect,
   matchParticipants,
@@ -127,7 +132,10 @@ export class MatchResultsService {
                 team: {
                   members: {
                     some: {
-                      OR: [{ userId: { in: participants } }, { athlete: { userId: { in: participants } } }],
+                      OR: [
+                        { userId: { in: participants } },
+                        { athlete: { userId: { in: participants } } },
+                      ],
                     },
                   },
                 },
@@ -233,7 +241,17 @@ export class MatchResultsService {
     );
     await Promise.all(
       result.participantAthleteIds.map((athleteId) =>
-        this.queue.enqueueGtiRecalculation({ athleteId, trigger: 'MATCH_COMPLETED' }),
+        deliverDirectOutbox(
+          this.prisma,
+          result,
+          'GTI',
+          (payload) => outboxIdMatches(payload.athleteId, athleteId),
+          (event) =>
+            this.queue.enqueueGtiRecalculation(
+              { athleteId, trigger: 'MATCH_COMPLETED' },
+              event ? outboxDeliveryId(event) : `result-${result.id}-${athleteId}`,
+            ),
+        ),
       ),
     );
     return result;

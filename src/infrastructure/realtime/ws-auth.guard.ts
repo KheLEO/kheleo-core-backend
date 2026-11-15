@@ -86,14 +86,19 @@ export class WsAuthGuard implements CanActivate {
   }
 
   disconnectLocalUser(userId: string): void {
-    for (const namespace of this.namespaces) namespace.in(`user:${userId}`).disconnectSockets(true);
+    for (const namespace of this.namespaces)
+      namespace.local.in(`user:${userId}`).disconnectSockets(true);
   }
 
-  disconnectUser(userId: string): void {
+  async disconnectUser(userId: string): Promise<boolean> {
     if (this.namespaces.size > 0) {
       this.disconnectLocalUser(userId);
+      // Socket.IO handles connected local clients; peer actions also revalidate DB access state.
+      if (this.wsBridge) await this.wsBridge.publishDisconnect(userId).catch(() => false);
+      return true;
     }
-    this.wsBridge?.publishDisconnect(userId);
+    if (!this.wsBridge) throw new Error('Socket revocation transport is unavailable');
+    return this.wsBridge.publishDisconnect(userId);
   }
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
@@ -101,6 +106,7 @@ export class WsAuthGuard implements CanActivate {
     try {
       const existing = client.data.user;
       if (existing && existing.exp * 1000 > Date.now()) {
+        client.data.user = await this.jwtStrategy.validate(existing);
         return true;
       }
       await this.authenticate(client);

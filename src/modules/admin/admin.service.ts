@@ -13,6 +13,7 @@ import { AuthenticatedJwtUser } from '../../common/guards/jwt-auth.guard';
 import { runSerializableTransaction } from '../../common/database/serializable-transaction';
 import { LeaderboardsService } from '../leaderboards/leaderboards.service';
 import { WsAuthGuard } from '../../infrastructure/realtime/ws-auth.guard';
+import { outboxIdMatches, deliverDirectOutbox } from '../../infrastructure/outbox/outbox-authority';
 import { RedisService } from '../../infrastructure/cache/redis.service';
 import {
   bumpVersion,
@@ -260,8 +261,20 @@ export class AdminService {
       return user;
     });
     await invalidateAuthAndPassport(this.redis, id);
-    this.sockets.disconnectUser(id);
-    await this.leaderboards.syncAthlete(id);
+    await deliverDirectOutbox(
+      this.prisma,
+      updated,
+      'REVOKE_SOCKETS',
+      (payload) => outboxIdMatches(payload.athleteId, id),
+      () => this.sockets.disconnectUser(id),
+    );
+    await deliverDirectOutbox(
+      this.prisma,
+      updated,
+      'LEADERBOARD',
+      (payload) => outboxIdMatches(payload.athleteId, id),
+      () => this.leaderboards.syncAthlete(id, undefined, true),
+    );
     return updated;
   }
   async tournaments(query: AdminTournamentsQuery): Promise<AdminPage<Tournament>> {

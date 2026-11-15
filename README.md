@@ -111,6 +111,7 @@ The default API base URL is `http://localhost:3000/api/v1`. Interactive OpenAPI 
 | `IDENTITY_SALT_VERSION`         | Government-ID hash domain version                         | `1`                                              |
 | `DRILL_HMAC_SECRET`             | Shared secret for signed drill submissions                | Required in production                           |
 | `TELEMETRY_SERVICE_HMAC_SECRET` | Shared secret for signed telemetry payloads               | Required in production                           |
+| `BFF_PROXY_SECRET`              | Optional shared Next.js/backend key for signed client IPs | Domain-separated telemetry secret by default     |
 
 JWT key files are optional in local development. If either configured key file exists, both must exist; the service then signs and verifies with RS256. Without the pair it uses `IDENTITY_PEPPER` as an HS256 secret. The current token lifetimes are 15 minutes for access tokens and 7 days for refresh tokens.
 

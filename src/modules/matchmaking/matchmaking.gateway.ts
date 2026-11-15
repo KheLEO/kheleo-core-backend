@@ -84,7 +84,7 @@ export class MatchmakingGateway implements OnGatewayInit, OnGatewayConnection {
   /**
    * Broadcasts the ROSTER_FORMED event targeting all matched members and the bracket room.
    */
-  emitRosterFormed(data: RosterFormedEventData, eventId?: string): void {
+  async emitRosterFormed(data: RosterFormedEventData, eventId?: string): Promise<boolean> {
     const payload = {
       event: 'ROSTER_FORMED',
       eventId,
@@ -101,11 +101,12 @@ export class MatchmakingGateway implements OnGatewayInit, OnGatewayConnection {
         .to(data.roster.map((member) => `user:${member.user_id}`))
         .emit('ROSTER_FORMED', payload);
     } else if (this.wsBridge) {
-      this.wsBridge.publishEmit('/ws/matchmaking', rooms, 'ROSTER_FORMED', payload);
-    }
+      return this.wsBridge.publishEmit('/ws/matchmaking', rooms, 'ROSTER_FORMED', payload);
+    } else throw new Error('Roster WebSocket delivery is unavailable');
 
     this.logger.log(
       `Dispatched ROSTER_FORMED for team ${data.team_name} (Bracket: ${data.bracket_id}, ${data.roster.length} members)`,
     );
+    return true;
   }
 }

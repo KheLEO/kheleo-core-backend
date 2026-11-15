@@ -62,7 +62,13 @@ export class BracketsService {
         return {
           createdOrUpdated: false,
           organizerId: bracket.tournament?.organizerId,
-          response: this.mapToResponse(existing, tournamentId, profile.id, bracket.tierName, athleteGti),
+          response: this.mapToResponse(
+            existing,
+            tournamentId,
+            profile.id,
+            bracket.tierName,
+            athleteGti,
+          ),
         };
       }
       const count = await transaction.registration.count({
@@ -250,13 +256,20 @@ export class BracketsService {
     bracketId: string,
     actor: AuthenticatedJwtUser,
   ): Promise<Bracket> {
-    return runSerializableTransaction(this.prisma, async (transaction) => {
-      await this.assertOwnership(transaction, tournamentId, actor);
-      const bracket = await transaction.bracket.findUnique({ where: { id: bracketId } });
-      if (!bracket || bracket.tournamentId !== tournamentId)
-        throw new NotFoundException('Bracket does not exist in this tournament');
-      return transaction.bracket.delete({ where: { id: bracketId } });
-    });
+    const { deleted, organizerId } = await runSerializableTransaction(
+      this.prisma,
+      async (transaction) => {
+        const tournament = await this.assertOwnership(transaction, tournamentId, actor);
+        const bracket = await transaction.bracket.findUnique({ where: { id: bracketId } });
+        if (!bracket || bracket.tournamentId !== tournamentId)
+          throw new NotFoundException('Bracket does not exist in this tournament');
+        const deleted = await transaction.bracket.delete({ where: { id: bracketId } });
+        return { deleted, organizerId: tournament.organizerId };
+      },
+    );
+    await bumpVersion(this.redis, CACHE_KEYS.organizerVersion(organizerId));
+    await bumpVersion(this.redis, CACHE_KEYS.organizerVersion('GLOBAL'));
+    return deleted;
   }
 
   private async assertOwnership(

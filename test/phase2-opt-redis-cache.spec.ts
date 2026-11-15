@@ -20,7 +20,7 @@ import { BracketsService } from '../src/modules/brackets/brackets.service';
 import { HealthService } from '../src/modules/health/health.service';
 import { WsAuthGuard } from '../src/infrastructure/realtime/ws-auth.guard';
 import { createAuthFixture, TEST_SECRET, TEST_USER_ID } from './helpers/auth-passport.fixture';
-import { ATHLETE_ID, createSecurityFixture } from './helpers/security-gti.fixture';
+import { ATHLETE_ID, OPPONENT_ID, createSecurityFixture } from './helpers/security-gti.fixture';
 import {
   BRACKET_ID,
   createCompetitionFixture,
@@ -96,9 +96,9 @@ describe('Phase 2 Task 7: Multi-Layer Redis Caching, Invalidation & Outage Fallb
     assert.strictEqual(userReads, 1);
     assert.strictEqual(redis.ttls.get(CACHE_KEYS.authUser(auth.state.user.id)), 120);
 
-    // Second validation hits Redis (0 DB calls)
+    // Cached contacts are reused, but account access is rechecked in the database.
     await strategy.validate(payload);
-    assert.strictEqual(userReads, 1);
+    assert.strictEqual(userReads, 2);
 
     // Simulate admin revocation invalidating auth cache
     const admin = new AdminService(
@@ -142,14 +142,14 @@ describe('Phase 2 Task 7: Multi-Layer Redis Caching, Invalidation & Outage Fallb
 
     // Next JWT validation fetches fresh deactivated state and rejects
     await assert.rejects(strategy.validate(payload));
-    assert.strictEqual(userReads, 3); // 1 updateUserStatus lookup + 1 JwtStrategy refresh lookup
+    assert.strictEqual(userReads, 4); // Includes moderation lookup and the fresh auth lookup.
 
     // Verify Redis outage fallback cleanly queries DB
     auth.state.user.isActive = true;
     redis.setMode('throw');
     const recovered = await strategy.validate(payload);
     assert.strictEqual(recovered.sub, auth.state.user.id);
-    assert.strictEqual(userReads, 4);
+    assert.strictEqual(userReads, 5);
   });
 
   it('prevents regional heatmap cache stampedes with single-flight loading and degrades gracefully on Redis timeout', async () => {
@@ -254,6 +254,7 @@ describe('Phase 2 Task 7: Multi-Layer Redis Caching, Invalidation & Outage Fallb
 
     f.setProfile({ gti: 92, currentGti: new Prisma.Decimal(92), primarySport: SportType.CRICKET });
     await leaderboards.syncAthlete(ATHLETE_ID);
+    await leaderboards.syncAthlete(OPPONENT_ID);
 
     let findManyCalls = 0;
     const origFindMany = f.prisma.athleteProfile.findMany;

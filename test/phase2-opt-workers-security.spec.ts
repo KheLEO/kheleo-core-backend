@@ -261,6 +261,7 @@ describe('Phase 2 Task 8: Async scrypt, Distributed Rate Limit, WS Bridge & Work
         },
       }),
       local: {
+        in: (room: string) => ({ disconnectSockets: () => { disconnected.push(`${nsName}:${room}`); } }),
         to: (rooms: string[]) => ({
           emit: (event: string, payload: unknown) => {
             emitted.push({ ns: nsName, rooms, event, payload });
@@ -290,14 +291,14 @@ describe('Phase 2 Task 8: Async scrypt, Distributed Rate Limit, WS Bridge & Work
     const workerEventsGateway = new WsEventGateway(workerGuard, dummyAccess, workerBridge);
     const workerMatchmakingGateway = new MatchmakingGateway(workerGuard, dummyAccess, workerBridge);
 
-    workerEventsGateway.broadcastGtiUpdated({
+    await workerEventsGateway.broadcastGtiUpdated({
       eventId: 'evt-gti-1',
       athleteId: 'ath-1',
       previousGti: 65,
       newGti: 88,
       eliteBreached: true,
     });
-    workerEventsGateway.broadcastAutonomousMatchPause({
+    await workerEventsGateway.broadcastAutonomousMatchPause({
       event_id: 'evt-pause-1',
       alert_id: 'alert-1',
       event: 'MATCH_PAUSE_ALERT',
@@ -308,7 +309,7 @@ describe('Phase 2 Task 8: Async scrypt, Distributed Rate Limit, WS Bridge & Work
       directive: 'Pause match immediately',
       tournament_id: 'tour-1',
     });
-    workerEventsGateway.broadcastScoutTalent({
+    await workerEventsGateway.broadcastScoutTalent({
       alertId: 'scout-1',
       athleteId: 'ath-1',
       newGti: 88,
@@ -317,7 +318,7 @@ describe('Phase 2 Task 8: Async scrypt, Distributed Rate Limit, WS Bridge & Work
       state: 'Maharashtra',
       tierClassification: 'TIER_1',
     });
-    workerMatchmakingGateway.emitRosterFormed(
+    await workerMatchmakingGateway.emitRosterFormed(
       {
         team_id: 'team-1',
         team_name: 'Pune Panthers',
@@ -326,7 +327,7 @@ describe('Phase 2 Task 8: Async scrypt, Distributed Rate Limit, WS Bridge & Work
       },
       'evt-roster-1',
     );
-    workerGuard.disconnectUser('ath-1');
+    await workerGuard.disconnectUser('ath-1');
 
     await new Promise((resolve) => setTimeout(resolve, 20));
 

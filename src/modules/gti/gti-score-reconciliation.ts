@@ -35,6 +35,7 @@ export interface GtiBreakdownEvaluation {
   readonly hasRecordedMatchActivity: boolean;
   readonly evidence: GtiEvidenceStatus;
   readonly provisional: boolean;
+  readonly isUnmeasuredOnboarding: boolean;
 }
 
 function toFiniteNumber(value: unknown, fallback = 0): number {
@@ -122,6 +123,7 @@ export function evaluateGtiBreakdown(input: {
   readonly matchesCount: number;
   readonly totalPassportMatches: number;
   readonly legacyMatchActivityCheck?: boolean;
+  readonly onboardingGti?: number;
 }): GtiBreakdownEvaluation {
   const {
     biomechanicalScore,
@@ -133,6 +135,7 @@ export function evaluateGtiBreakdown(input: {
     matchesCount,
     totalPassportMatches,
     legacyMatchActivityCheck = false,
+    onboardingGti = 30,
   } = input;
 
   const hasDrillData = drillsCount > 0 || biomechanicalScore > 0;
@@ -140,7 +143,7 @@ export function evaluateGtiBreakdown(input: {
   const hasVerifiedMatches = matchesCount > 0 || totalPassportMatches > 0;
   const hasRecordedMatchActivity = legacyMatchActivityCheck
     ? hasVerifiedMatches || matchPerformanceScore !== 50
-    : hasVerifiedMatches || matchPerformanceScore > 0;
+    : hasVerifiedMatches || (matchPerformanceScore > 0 && matchPerformanceScore !== 50);
 
   const evidence: GtiEvidenceStatus = {
     biomechanical: drillsCount > 0 ? 'VERIFIED' : 'NOT_AVAILABLE',
@@ -152,7 +155,7 @@ export function evaluateGtiBreakdown(input: {
   let w2 = 0.25;
   let w3 = 0.4;
 
-  if (hasDrillData && hasWearableData) {
+  if (hasDrillData && hasWearableData && (legacyMatchActivityCheck || hasRecordedMatchActivity)) {
     // Case 1: Standard Full-Telemetry Mode
     w1 = 0.35;
     w2 = 0.25;
@@ -175,11 +178,20 @@ export function evaluateGtiBreakdown(input: {
     }
   }
 
-  const gti = computeCompositeGtiScore(biomechanicalScore, wearableScore, matchPerformanceScore, {
-    w1,
-    w2,
-    w3,
-  });
+  const isUnmeasuredOnboarding =
+    !legacyMatchActivityCheck && !hasDrillData && !hasWearableData && !hasRecordedMatchActivity;
+  if (isUnmeasuredOnboarding) {
+    w1 = 0;
+    w2 = 0;
+    w3 = 0;
+  }
+  const gti = isUnmeasuredOnboarding
+    ? onboardingGti
+    : computeCompositeGtiScore(biomechanicalScore, wearableScore, matchPerformanceScore, {
+        w1,
+        w2,
+        w3,
+      });
 
   const activeEvidenceStatuses: Array<'VERIFIED' | 'NOT_AVAILABLE'> = [];
   if (hasDrillData) activeEvidenceStatuses.push(evidence.biomechanical);
@@ -204,5 +216,6 @@ export function evaluateGtiBreakdown(input: {
     hasRecordedMatchActivity,
     evidence,
     provisional,
+    isUnmeasuredOnboarding,
   };
 }
