@@ -1,11 +1,12 @@
 import { Prisma } from '@prisma/client';
+import { setTimeout as delay } from 'node:timers/promises';
 import { PrismaService } from '../../infrastructure/database/prisma.service';
 import {
   captureOutboxIntents,
   signalOutboxWakeup,
 } from '../../infrastructure/outbox/outbox-authority';
 
-const MAX_TRANSACTION_ATTEMPTS = 3;
+const MAX_TRANSACTION_ATTEMPTS = 8;
 
 export async function runSerializableTransaction<TResult>(
   prisma: PrismaService,
@@ -28,6 +29,8 @@ export async function runSerializableTransaction<TResult>(
       if (!isRetryableConflict || attempt === MAX_TRANSACTION_ATTEMPTS) {
         throw error;
       }
+      // Yield to competing GTI workers instead of exhausting retries against the same row lock.
+      await delay(Math.min(250, 20 * 2 ** (attempt - 1)) + Math.floor(Math.random() * 20));
     }
   }
 

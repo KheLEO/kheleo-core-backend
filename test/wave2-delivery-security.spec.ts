@@ -12,6 +12,7 @@ import { clientIp } from '../src/common/auth/client-ip';
 import { RateLimitGuard, RateLimit } from '../src/common/guards/rate-limit.guard';
 import { CACHE_KEYS } from '../src/infrastructure/cache/cache-helper';
 import { RedisService } from '../src/infrastructure/cache/redis.service';
+import { PrismaService } from '../src/infrastructure/database/prisma.service';
 import { OutboxDispatcher } from '../src/infrastructure/outbox/outbox-dispatcher.service';
 import {
   deliverDirectOutbox,
@@ -510,5 +511,67 @@ describe('Wave 2: auth and device identity survive proxy sharing and missed pubs
       if (previous === undefined) delete process.env.BFF_PROXY_SECRET;
       else process.env.BFF_PROXY_SECRET = previous;
     }
+  });
+});
+
+describe('Serializable contention under concurrent GTI work', () => {
+  const conflict = () =>
+    new Prisma.PrismaClientKnownRequestError('Concurrent writer', {
+      code: 'P2034',
+      clientVersion: 'fixture',
+    });
+
+  it('yields so another writer can finish before retrying a contended transaction', async () => {
+    let locked = true;
+    let attempts = 0;
+    let committed = 0;
+    const release = setTimeout(() => {
+      locked = false;
+    }, 10);
+    const prisma = {
+      $transaction: async (operation: (tx: object) => Promise<number>) => {
+        attempts++;
+        if (locked) throw conflict();
+        return operation({});
+      },
+    } as unknown as PrismaService;
+    try {
+      const result = await runSerializableTransaction(prisma, async () => {
+        committed++;
+        return 30;
+      });
+      assert.equal(result, 30);
+      assert.ok(attempts > 1);
+      assert.equal(committed, 1);
+    } finally {
+      clearTimeout(release);
+    }
+  });
+
+  it('bounds persistent conflicts and does not retry unrelated database failures', async () => {
+    let attempts = 0;
+    const error = conflict();
+    const prisma = {
+      $transaction: async () => {
+        attempts++;
+        throw error;
+      },
+    } as unknown as PrismaService;
+    await assert.rejects(
+      runSerializableTransaction(prisma, async () => {}),
+      (caught) => caught === error,
+    );
+    assert.ok(attempts > 3 && attempts <= 10, 'Contention retries remain bounded');
+    attempts = 0;
+    const unrelated = new Error('Not a serialization conflict');
+    prisma.$transaction = (async () => {
+      attempts++;
+      throw unrelated;
+    }) as typeof prisma.$transaction;
+    await assert.rejects(
+      runSerializableTransaction(prisma, async () => {}),
+      (caught) => caught === unrelated,
+    );
+    assert.equal(attempts, 1);
   });
 });
