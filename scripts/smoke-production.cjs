@@ -319,7 +319,7 @@ async function main() {
     assert.equal(capped.biomechanicalScore, 35);
     assert.equal(capped.watchQualified, false);
     const hardware = {
-      ...telemetry,
+      athlete_id: athlete.id,
       heart_rate: 110,
       spo2: 98,
       skin_temperature: 36.8,
