@@ -75,6 +75,27 @@ describe('PostGIS baseline migration', () => {
         "SELECT payload->>'athleteId' AS athlete_id FROM outbox_events WHERE payload->>'deliveryId' LIKE 'watch-policy-v1-%'",
       );
       assert.deepEqual(jobs.rows.map((row) => row.athlete_id).sort(), users.slice(0, 2).sort());
+
+      await legacy.exec(`
+        CREATE ROLE anon;
+        CREATE ROLE authenticated;
+        GRANT SELECT ON public.athlete_score_policy TO PUBLIC, anon, authenticated;
+      `);
+      await legacy.exec(
+        readFileSync(
+          resolve(root, '20261116010000_restrict_athlete_score_view', 'migration.sql'),
+          'utf8',
+        ),
+      );
+      const access = await legacy.query<{ anon: boolean; authenticated: boolean }>(`
+        SELECT has_table_privilege('anon', 'public.athlete_score_policy', 'SELECT') AS anon,
+          has_table_privilege('authenticated', 'public.athlete_score_policy', 'SELECT') AS authenticated
+      `);
+      assert.deepEqual(access.rows[0], { anon: false, authenticated: false });
+      assert.equal(
+        (await legacy.query('SELECT user_id FROM public.athlete_score_policy')).rows.length,
+        4,
+      );
     } finally {
       await legacy.close();
     }
